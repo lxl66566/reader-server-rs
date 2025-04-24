@@ -28,7 +28,7 @@ CREATE TABLE
 CREATE TABLE
   settings (
     id INTEGER PRIMARY KEY,
-    invite_code_required BOOLEAN NOT NULL DEFAULT 1
+    invite_code_required BOOLEAN NOT NULL DEFAULT 0
   );
 
 -- 邀请码表

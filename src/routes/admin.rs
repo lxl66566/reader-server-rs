@@ -9,7 +9,7 @@ use crate::{
     auth::AuthAdmin,
     error::{ApiResponse, AppError},
     models::{
-        AdminUserListItem, CreateInviteCodeRequest, InviteCode, ResetPasswordRequest, Settings,
+        AdminUserListItem, CreateInviteCodeRequest, InviteCode, ResetUserPasswordRequest, Settings,
         UpdateSettingsRequest, User,
     },
     utils::{generate_invite_code, hash_password},
@@ -175,7 +175,7 @@ async fn reset_password(
     _: AuthAdmin,
     State(pool): State<Pool<Sqlite>>,
     Path(user_id): Path<i64>,
-    Json(req): Json<ResetPasswordRequest>,
+    Json(req): Json<ResetUserPasswordRequest>,
 ) -> Result<Json<ApiResponse<()>>, AppError> {
     // 检查用户是否存在
     let user_exists =

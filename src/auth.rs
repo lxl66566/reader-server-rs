@@ -52,7 +52,7 @@ impl Claims {
 // 创建JWT令牌
 pub fn create_token(claims: &Claims, config: &Config) -> Result<String, AppError> {
     let encoding_key = EncodingKey::from_secret(config.jwt.secret.as_bytes());
-    encode(&Header::default(), claims, &encoding_key).map_err(|e| AppError::Jwt(e))
+    encode(&Header::default(), claims, &encoding_key).map_err(AppError::Jwt)
 }
 
 // 验证JWT令牌
@@ -62,7 +62,7 @@ pub fn verify_token(token: &str, config: &Config) -> Result<Claims, AppError> {
 
     decode::<Claims>(token, &decoding_key, &validation)
         .map(|data| data.claims)
-        .map_err(|e| AppError::Jwt(e))
+        .map_err(AppError::Jwt)
 }
 
 // 提取用户的认证中间件

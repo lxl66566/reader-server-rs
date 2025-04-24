@@ -2,38 +2,59 @@ use anyhow::Result;
 use axum::{
     body::Body,
     http::{Method, StatusCode},
+    response::Response,
+    Router,
 };
 use bytes::Bytes;
 use http_body_util::BodyExt;
 use serial_test::serial;
 
 use super::{make_request, setup_test_app};
-use crate::{
-    models::{ChangePasswordRequest, CreateUserRequest, LoginRequest},
-    utils::hash_password,
-};
-#[tokio::test]
-#[serial]
-async fn test_user_registration_and_login() -> Result<()> {
-    let (app, _pool) = setup_test_app().await?;
+use crate::models::{ChangePasswordRequest, CreateUserRequest, LoginRequest};
 
-    // 注册新用户
+/// 创建测试用户
+/// 用户名：testuser
+/// 密码：password123
+#[allow(unused)]
+pub async fn register_test_user(app: &Router) -> Result<Response<Body>> {
     let register_body = serde_json::to_string(&CreateUserRequest {
         username: "testuser".to_string(),
         password: "password123".to_string(),
         invite_code: None,
     })?;
+    let response = make_request(app, Method::POST, "/api/auth/register", register_body, None).await;
+    assert!(response.status().is_success());
+    Ok(response)
+}
 
-    let response = make_request(
-        &app,
-        Method::POST,
-        "/api/auth/register",
-        register_body,
-        None,
-    )
-    .await;
+/// 创建测试用户并登录，返回 token
+#[allow(unused)]
+pub async fn register_test_user_and_login(app: &Router) -> Result<String> {
+    register_test_user(app).await?;
 
-    assert_eq!(response.status(), StatusCode::OK);
+    // 获取认证令牌
+    let login_body = serde_json::to_string(&LoginRequest {
+        username: "testuser".to_string(),
+        password: "password123".to_string(),
+        device_id: "test_device".to_string(),
+    })?;
+
+    let response = make_request(app, Method::POST, "/api/auth/login", login_body, None).await;
+
+    assert!(response.status().is_success());
+    let body = response.into_body().collect().await?.to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body)?;
+    let token = json["data"]["token"].as_str().unwrap().to_string();
+
+    Ok(token)
+}
+
+#[tokio::test]
+#[serial]
+async fn test_user_registration_and_login() -> Result<()> {
+    let (app, _pool) = setup_test_app().await?;
+
+    let response = register_test_user(&app).await?;
 
     let body = response.into_body().collect().await?.to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body)?;
@@ -76,33 +97,9 @@ async fn test_user_registration_and_login() -> Result<()> {
 #[tokio::test]
 #[serial]
 async fn test_user_info_and_password_change() -> Result<()> {
-    let (app, pool) = setup_test_app().await?;
+    let (app, _pool) = setup_test_app().await?;
 
-    // 创建测试用户
-    let user_id = 1;
-    let password_hash = hash_password("password123")?;
-
-    sqlx::query!(
-        "INSERT INTO users (id, username, password_hash) VALUES (?, ?, ?)",
-        user_id,
-        "testuser",
-        password_hash
-    )
-    .execute(&pool)
-    .await?;
-
-    // 获取认证令牌
-    let login_body = serde_json::to_string(&LoginRequest {
-        username: "testuser".to_string(),
-        password: "password123".to_string(),
-        device_id: "test_device".to_string(),
-    })?;
-
-    let response = make_request(&app, Method::POST, "/api/auth/login", login_body, None).await;
-
-    let body = response.into_body().collect().await?.to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body)?;
-    let token = json["data"]["token"].as_str().unwrap().to_string();
+    let token = register_test_user_and_login(&app).await?;
 
     // 测试获取用户信息
     let response = make_request(

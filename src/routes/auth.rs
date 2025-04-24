@@ -13,7 +13,7 @@ use crate::{
         Admin, AdminSetupRequest, ChangePasswordRequest, CreateUserRequest, LoginRequest, User,
         UserInfoResponse,
     },
-    utils::{generate_invite_code, hash_password, verify_password},
+    utils::{hash_password, verify_password},
 };
 
 // 认证路由
@@ -265,16 +265,16 @@ async fn admin_setup(
         .execute(&pool)
         .await?;
 
-    // 创建初始邀请码
-    let invite_code = generate_invite_code();
-    sqlx::query!(
-        "INSERT INTO invite_codes (code, limit_times, description) VALUES (?, ?, ?)",
-        invite_code,
-        10,
-        "初始邀请码"
-    )
-    .execute(&pool)
-    .await?;
+    // 不创建初始邀请码
+    // let invite_code = generate_invite_code();
+    // sqlx::query!(
+    //     "INSERT INTO invite_codes (code, limit_times, description) VALUES (?, ?,
+    // ?)",     invite_code,
+    //     10,
+    //     "初始邀请码"
+    // )
+    // .execute(&pool)
+    // .await?;
 
     // 生成JWT令牌
     let claims = Claims::new_admin(admin_id, &config);

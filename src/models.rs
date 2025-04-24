@@ -78,7 +78,7 @@ pub struct InviteCode {
 }
 
 // 创建邀请码请求
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct CreateInviteCodeRequest {
     pub limit_times: i64,
     pub description: Option<String>,
@@ -249,7 +249,7 @@ pub struct AdminUserListItem {
 }
 
 // 重置用户密码请求
-#[derive(Debug, Deserialize)]
-pub struct ResetPasswordRequest {
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ResetUserPasswordRequest {
     pub new_password: String,
 }
