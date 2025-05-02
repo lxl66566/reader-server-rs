@@ -40,7 +40,7 @@ async fn get_reading_settings(
     } else {
         // 创建默认设置
         let id = sqlx::query!(
-            "INSERT INTO reading_settings (user_id) VALUES (?)",
+            "INSERT OR IGNORE INTO reading_settings (user_id) VALUES (?)",
             auth.user_id
         )
         .execute(&pool)

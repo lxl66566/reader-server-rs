@@ -104,3 +104,6 @@ CREATE TABLE
     simplified_chinese BOOLEAN NOT NULL DEFAULT 1,
     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
   );
+
+-- 为 user_id 创建索引
+CREATE INDEX idx_reading_settings_user_id ON reading_settings (user_id);

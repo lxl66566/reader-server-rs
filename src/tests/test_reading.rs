@@ -6,42 +6,15 @@ use axum::{
 use http_body_util::BodyExt;
 use serial_test::serial;
 
-use super::{make_request, setup_test_app};
-use crate::{
-    models::{LoginRequest, UpdateReadingSettingsRequest},
-    utils::hash_password,
-};
+use super::{make_request, setup_test_app, test_user::register_test_user_and_login};
+use crate::models::UpdateReadingSettingsRequest;
 
 #[tokio::test]
 #[serial]
 async fn test_reading_settings() -> Result<()> {
-    let (app, pool) = setup_test_app().await?;
+    let (app, _pool) = setup_test_app().await?;
 
-    // 创建测试用户
-    let user_id = 1;
-    let password_hash = hash_password("password123")?;
-
-    sqlx::query!(
-        "INSERT INTO users (id, username, password_hash) VALUES (?, ?, ?)",
-        user_id,
-        "testuser",
-        password_hash
-    )
-    .execute(&pool)
-    .await?;
-
-    // 获取认证令牌
-    let login_body = serde_json::to_string(&LoginRequest {
-        username: "testuser".to_string(),
-        password: "password123".to_string(),
-        device_id: "test_device".to_string(),
-    })?;
-
-    let response = make_request(&app, Method::POST, "/api/auth/login", login_body, None).await;
-
-    let body = response.into_body().collect().await?.to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body)?;
-    let token = json["data"]["token"].as_str().unwrap().to_string();
+    let token = register_test_user_and_login(&app).await?;
 
     // 测试获取阅读设置 (应该创建默认设置)
     let response = make_request(
@@ -96,6 +69,7 @@ async fn test_reading_settings() -> Result<()> {
     )
     .await;
 
+    assert_eq!(response.status(), StatusCode::OK);
     let body = response.into_body().collect().await?.to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body)?;
 
