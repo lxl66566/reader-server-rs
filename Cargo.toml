@@ -39,7 +39,7 @@ chrono      = { version = "0.4", features = ["serde"] }
 rand        = "0.9"
 regex       = "1.9"
 regex-macro = "0.3.0"
-uuid        = { version = "1.16", features = ["v4"] }
+uuid        = { version = "1.17", features = ["v4"] }
 
 [dev-dependencies]
 serial_test = "3.2.0"
