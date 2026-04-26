@@ -1,5 +1,7 @@
-use axum::body::Body;
-use axum::http::{Method, StatusCode};
+use axum::{
+    body::Body,
+    http::{Method, StatusCode},
+};
 
 use super::*;
 
@@ -19,7 +21,14 @@ async fn test_full_integration() {
     section!("A. Admin & Setup");
 
     // A1: check_setup 未初始化
-    let resp = make_request(&app, Method::GET, "/api/admin/check_setup", Body::empty(), None).await;
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/admin/check_setup",
+        Body::empty(),
+        None,
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
     let json = response_json(resp).await;
     assert_eq!(json["code"], 0);
@@ -29,7 +38,14 @@ async fn test_full_integration() {
     let (admin_token, _) = setup_admin(&app).await;
 
     // A3: check_setup 已初始化
-    let resp = make_request(&app, Method::GET, "/api/admin/check_setup", Body::empty(), None).await;
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/admin/check_setup",
+        Body::empty(),
+        None,
+    )
+    .await;
     let json = response_json(resp).await;
     assert_eq!(json["data"]["is_setup"], true);
 
@@ -44,7 +60,12 @@ async fn test_full_integration() {
     .await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let json = response_json(resp).await;
-    assert_eq!(json["code"], 1006);
+    assert!(
+        json["message"]
+            .as_str()
+            .unwrap()
+            .contains("Admin already set up")
+    );
 
     // A5: admin login
     let resp = login_as_admin(&app).await;
@@ -62,7 +83,14 @@ async fn test_full_integration() {
     assert_eq!(resp.status(), StatusCode::OK);
 
     // A7: get settings
-    let resp = make_request(&app, Method::GET, "/api/admin/settings", Body::empty(), Some(&admin_token)).await;
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/admin/settings",
+        Body::empty(),
+        Some(&admin_token),
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
     let json = response_json(resp).await;
     assert_eq!(json["data"]["invite_code_required"], false);
@@ -82,7 +110,14 @@ async fn test_full_integration() {
     let invite_code = json["data"]["invite_code"].as_str().unwrap().to_string();
 
     // A9: list invite codes
-    let resp = make_request(&app, Method::GET, "/api/admin/invite_codes", Body::empty(), Some(&admin_token)).await;
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/admin/invite_codes",
+        Body::empty(),
+        Some(&admin_token),
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
     let json = response_json(resp).await;
     assert!(json["data"]["invite_codes"].is_array());
@@ -108,10 +143,22 @@ async fn test_full_integration() {
     let resp = login(&app, "user1", "wrongpassword", "device1").await;
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     let json = response_json(resp).await;
-    assert_eq!(json["code"], 1001);
+    assert!(
+        json["message"]
+            .as_str()
+            .unwrap()
+            .contains("Invalid credentials")
+    );
 
     // B5: get user_info
-    let resp = make_request(&app, Method::GET, "/api/auth/user_info", Body::empty(), Some(&token1)).await;
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/auth/user_info",
+        Body::empty(),
+        Some(&token1),
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
     let json = response_json(resp).await;
     assert_eq!(json["data"]["username"], "user1");
@@ -121,7 +168,12 @@ async fn test_full_integration() {
     let resp = register_user(&app, "user1", "password1", None).await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let json = response_json(resp).await;
-    assert_eq!(json["code"], 1003);
+    assert!(
+        json["message"]
+            .as_str()
+            .unwrap()
+            .contains("Username already exists")
+    );
 
     // B7: change password
     let resp = super::make_json_request(
@@ -168,13 +220,13 @@ async fn test_full_integration() {
     let resp = register_user(&app, "user4", "password4", Some(&invite_code)).await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let json = response_json(resp).await;
-    assert_eq!(json["code"], 1002);
+    assert!(json["message"].as_str().unwrap().contains("Invite code"));
 
     // C4: register without invite code (required)
     let resp = register_user(&app, "user5", "password5", None).await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let json = response_json(resp).await;
-    assert_eq!(json["code"], 1002);
+    assert!(json["message"].as_str().unwrap().contains("Invite code"));
 
     // C5: disable invite_code_required
     let _resp = super::make_json_request(
@@ -200,7 +252,14 @@ async fn test_full_integration() {
     let book2_id = book2["book_id"].as_i64().unwrap();
 
     // D3: list books (user1 should have 2)
-    let resp = make_request(&app, Method::GET, "/api/books", Body::empty(), Some(&token1)).await;
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/books",
+        Body::empty(),
+        Some(&token1),
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
     let json = response_json(resp).await;
     assert_eq!(json["data"]["total"], 2);
@@ -293,7 +352,14 @@ async fn test_full_integration() {
     assert_eq!(resp.status(), StatusCode::OK);
 
     // D11: user1 lists books (should have 1)
-    let resp = make_request(&app, Method::GET, "/api/books", Body::empty(), Some(&token1)).await;
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/books",
+        Body::empty(),
+        Some(&token1),
+    )
+    .await;
     let json = response_json(resp).await;
     assert_eq!(json["data"]["total"], 1);
 
@@ -307,7 +373,14 @@ async fn test_full_integration() {
     let _book3_id = book3["book_id"].as_i64().unwrap();
 
     // E1: list public books
-    let resp = make_request(&app, Method::GET, "/api/books/public", Body::empty(), Some(&token2)).await;
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/books/public",
+        Body::empty(),
+        Some(&token2),
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
     let json = response_json(resp).await;
     assert!(json["data"]["total"].as_i64().unwrap() >= 1);
@@ -331,7 +404,14 @@ async fn test_full_integration() {
     section!("F. Reading Settings");
 
     // F1: get default settings
-    let resp = make_request(&app, Method::GET, "/api/reading/settings", Body::empty(), Some(&token1)).await;
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/reading/settings",
+        Body::empty(),
+        Some(&token1),
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
     let json = response_json(resp).await;
     assert_eq!(json["data"]["font_size"], 18);
@@ -360,7 +440,14 @@ async fn test_full_integration() {
     assert_eq!(resp.status(), StatusCode::OK);
 
     // F3: verify all updates
-    let resp = make_request(&app, Method::GET, "/api/reading/settings", Body::empty(), Some(&token1)).await;
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/reading/settings",
+        Body::empty(),
+        Some(&token1),
+    )
+    .await;
     let json = response_json(resp).await;
     assert_eq!(json["data"]["font_size"], 22);
     assert_eq!(json["data"]["background_color"], "#FFFFFF");
@@ -379,7 +466,14 @@ async fn test_full_integration() {
     assert_eq!(resp.status(), StatusCode::OK);
 
     // F5: verify only font_size changed
-    let resp = make_request(&app, Method::GET, "/api/reading/settings", Body::empty(), Some(&token1)).await;
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/reading/settings",
+        Body::empty(),
+        Some(&token1),
+    )
+    .await;
     let json = response_json(resp).await;
     assert_eq!(json["data"]["font_size"], 24);
     assert_eq!(json["data"]["background_color"], "#FFFFFF"); // unchanged
@@ -453,7 +547,10 @@ async fn test_full_integration() {
         let resp = make_request(
             &app,
             Method::GET,
-            &format!("/api/books/{}/jump_to_chapter?chapter_id={}", public_book_id, chapter_id),
+            &format!(
+                "/api/books/{}/jump_to_chapter?chapter_id={}",
+                public_book_id, chapter_id
+            ),
             Body::empty(),
             Some(&token2),
         )
@@ -470,14 +567,23 @@ async fn test_full_integration() {
     section!("H. Admin User Management");
 
     // H1: list users
-    let resp = make_request(&app, Method::GET, "/api/admin/users", Body::empty(), Some(&admin_token)).await;
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/admin/users",
+        Body::empty(),
+        Some(&admin_token),
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
     let json = response_json(resp).await;
     let users = json["data"]["users"].as_array().unwrap();
     assert!(users.len() >= 2);
 
     // H2: reset user2's password
-    let user2_id = users.iter().find(|u| u["username"] == "user2").unwrap()["user_id"].as_i64().unwrap();
+    let user2_id = users.iter().find(|u| u["username"] == "user2").unwrap()["user_id"]
+        .as_i64()
+        .unwrap();
 
     let resp = super::make_json_request(
         &app,
@@ -503,7 +609,14 @@ async fn test_full_integration() {
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 
     // I2: non-existent book
-    let resp = make_request(&app, Method::GET, "/api/books/99999", Body::empty(), Some(&token1)).await;
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/books/99999",
+        Body::empty(),
+        Some(&token1),
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
     // I3: content with invalid position
@@ -518,7 +631,14 @@ async fn test_full_integration() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
     // I4: user token for admin endpoint
-    let resp = make_request(&app, Method::GET, "/api/admin/users", Body::empty(), Some(&token1)).await;
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/admin/users",
+        Body::empty(),
+        Some(&token1),
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 
     // I5: invalid file format
@@ -543,7 +663,12 @@ async fn test_full_integration() {
     .await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let json = response_json(resp).await;
-    assert_eq!(json["code"], 1007);
+    assert!(
+        json["message"]
+            .as_str()
+            .unwrap()
+            .contains("Incorrect old password")
+    );
 
     println!("\n===== All integration tests passed! =====");
 }

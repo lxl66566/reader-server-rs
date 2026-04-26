@@ -35,14 +35,12 @@ async fn register(
 ) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
     // 验证用户名格式
     if req.username.len() < 2 || req.username.len() > 20 {
-        return Err(AppError::Validation(
-            "用户名长度必须在 2-20 个字符之间".to_string(),
-        ));
+        return Err(AppError::UsernameLengthInvalid);
     }
 
     // 验证密码格式
     if req.password.is_empty() {
-        return Err(AppError::Validation("密码不能为空".to_string()));
+        return Err(AppError::PasswordEmpty);
     }
 
     // 检查系统设置
@@ -54,7 +52,7 @@ async fn register(
 
     // 如果系统需要邀请码，但用户未提供
     if invite_code_required && req.invite_code.is_none() {
-        return Err(AppError::Validation("注册需要邀请码".to_string()));
+        return Err(AppError::InviteCodeRequired);
     }
 
     // 验证邀请码
@@ -68,10 +66,10 @@ async fn register(
 
         match invite {
             Some(invite) if invite.limit_times >= 0 && invite.used_times >= invite.limit_times => {
-                return Err(AppError::Validation("邀请码已用完".to_string()));
+                return Err(AppError::InviteCodeExhausted);
             }
             None => {
-                return Err(AppError::Validation("邀请码无效".to_string()));
+                return Err(AppError::InviteCodeInvalid);
             }
             _ => {
                 // 邀请码有效
@@ -87,7 +85,7 @@ async fn register(
             .await?;
 
     if exists {
-        return Err(AppError::Validation("用户名已存在".to_string()));
+        return Err(AppError::UsernameAlreadyExists);
     }
 
     // 哈希密码
@@ -141,11 +139,11 @@ async fn login(
         .bind(&req.username)
         .fetch_optional(&pool)
         .await?
-        .ok_or_else(|| AppError::Auth("用户名或密码错误".to_string()))?;
+        .ok_or_else(|| AppError::InvalidCredentials)?;
 
     // 验证密码
     if !verify_password(&req.password, &user.password_hash)? {
-        return Err(AppError::Auth("用户名或密码错误".to_string()));
+        return Err(AppError::InvalidCredentials);
     }
 
     // 生成JWT令牌
@@ -200,14 +198,12 @@ async fn change_password(
 
     // 验证旧密码
     if !verify_password(&req.old_password, &user.password_hash)? {
-        return Err(AppError::Validation("旧密码不正确".to_string()));
+        return Err(AppError::IncorrectOldPassword);
     }
 
     // 验证新密码
     if req.new_password.len() < 6 {
-        return Err(AppError::Validation(
-            "新密码长度必须大于6个字符".to_string(),
-        ));
+        return Err(AppError::PasswordTooShort);
     }
 
     // 哈希新密码
@@ -234,7 +230,7 @@ async fn admin_setup(
 ) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
     // 验证密码格式
     if req.password.len() < 6 {
-        return Err(AppError::Validation("密码长度必须大于6个字符".to_string()));
+        return Err(AppError::PasswordTooShort);
     }
 
     // 检查是否已有管理员
@@ -243,9 +239,7 @@ async fn admin_setup(
         .await?;
 
     if admin_exists {
-        return Err(AppError::Validation(
-            "管理员已设置，无法重复设置".to_string(),
-        ));
+        return Err(AppError::AdminAlreadySetup);
     }
 
     // 哈希密码
@@ -296,11 +290,11 @@ async fn admin_login(
     let admin = sqlx::query_as::<_, Admin>("SELECT * FROM admin LIMIT 1")
         .fetch_optional(&pool)
         .await?
-        .ok_or_else(|| AppError::Auth("管理员未设置".to_string()))?;
+        .ok_or_else(|| AppError::AdminNotSetup)?;
 
     // 验证密码
     if !verify_password(&req.password, &admin.password_hash)? {
-        return Err(AppError::Auth("管理员密码错误".to_string()));
+        return Err(AppError::IncorrectAdminPassword);
     }
 
     // 生成JWT令牌

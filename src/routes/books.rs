@@ -79,64 +79,54 @@ async fn upload_book(
     while let Some(field) = multipart
         .next_field()
         .await
-        .map_err(|e| AppError::BadRequest(format!("解析表单数据失败: {}", e)))?
+        .map_err(|e| AppError::FormParseError(e.to_string()))?
     {
         let name = field.name().unwrap_or("").to_string();
 
         match name.as_str() {
             "title" => {
-                title = Some(
-                    field
-                        .text()
-                        .await
-                        .map_err(|e| AppError::BadRequest(format!("读取标题失败: {}", e)))?,
-                );
+                title =
+                    Some(field.text().await.map_err(|e| {
+                        AppError::FieldReadError("title".to_string(), e.to_string())
+                    })?);
             }
             "author" => {
-                author = Some(
-                    field
-                        .text()
-                        .await
-                        .map_err(|e| AppError::BadRequest(format!("读取作者失败: {}", e)))?,
-                );
+                author =
+                    Some(field.text().await.map_err(|e| {
+                        AppError::FieldReadError("author".to_string(), e.to_string())
+                    })?);
             }
             "is_public" => {
-                let value = field
-                    .text()
-                    .await
-                    .map_err(|e| AppError::BadRequest(format!("读取公开状态失败: {}", e)))?;
+                let value = field.text().await.map_err(|e| {
+                    AppError::FieldReadError("is_public".to_string(), e.to_string())
+                })?;
                 is_public = value == "true" || value == "1";
             }
             "file" => {
                 file_name = field.file_name().map(|s| s.to_string());
-                file_content = Some(
-                    field
-                        .bytes()
-                        .await
-                        .map_err(|e| AppError::BadRequest(format!("读取文件内容失败: {}", e)))?,
-                );
+                file_content =
+                    Some(field.bytes().await.map_err(|e| {
+                        AppError::FieldReadError("file".to_string(), e.to_string())
+                    })?);
             }
             _ => {}
         }
     }
 
     // 验证必要字段
-    let title = title.ok_or_else(|| AppError::Validation("标题不能为空".to_string()))?;
-    let file_content =
-        file_content.ok_or_else(|| AppError::Validation("文件不能为空".to_string()))?;
+    let title = title.ok_or_else(|| AppError::TitleEmpty)?;
+    let file_content = file_content.ok_or_else(|| AppError::FileEmpty)?;
 
     // 验证文件大小
     if file_content.len() > 10 * 1024 * 1024 {
-        return Err(AppError::Validation("文件大小不能超过10MB".to_string()));
+        return Err(AppError::FileTooLarge);
     }
 
-    let file_ext = file_name
-        .unwrap_or_default()
-        .to_lowercase();
+    let file_ext = file_name.unwrap_or_default().to_lowercase();
 
     let (content, chapters, file_ext_str) = if file_ext.ends_with(".txt") {
-        let text = String::from_utf8(file_content.to_vec())
-            .map_err(|_| AppError::Validation("文件编码不是有效的UTF-8".to_string()))?;
+        let text =
+            String::from_utf8(file_content.to_vec()).map_err(|_| AppError::FileInvalidUtf8)?;
         let chs = extract_chapters(&text);
         (text, chs, "txt")
     } else if file_ext.ends_with(".epub") {
@@ -144,14 +134,13 @@ async fn upload_book(
         let ext = "txt";
         (result.text_content, result.chapters, ext)
     } else {
-        return Err(AppError::Validation(
-            "只支持 TXT 和 EPUB 格式的书籍".to_string(),
-        ));
+        return Err(AppError::UnsupportedFileFormat);
     };
 
     // 生成唯一文件名
     let file_id = generate_uuid();
-    let file_path = PathBuf::from(&config.storage.book_dir).join(format!("{}.{}", file_id, file_ext_str));
+    let file_path =
+        PathBuf::from(&config.storage.book_dir).join(format!("{}.{}", file_id, file_ext_str));
     let file_path_string = file_path.to_string_lossy();
 
     // 保存文件
@@ -282,13 +271,13 @@ async fn get_book_detail(
         .bind(book_id)
         .fetch_optional(&pool)
         .await?
-        .ok_or_else(|| AppError::NotFound("书籍不存在".to_string()))?;
+        .ok_or_else(|| AppError::BookNotFound)?;
 
     // 检查权限
     if book.user_id != auth.user_id {
         // 如果不是书籍所有者，检查书籍是否公开
         if !book.is_public {
-            return Err(AppError::Forbidden("无权访问该书籍".to_string()));
+            return Err(AppError::BookAccessDenied);
         }
     }
 
@@ -364,11 +353,11 @@ async fn update_book(
     let book = sqlx::query!("SELECT user_id FROM books WHERE id = ?", book_id)
         .fetch_optional(&pool)
         .await?
-        .ok_or_else(|| AppError::NotFound("书籍不存在".to_string()))?;
+        .ok_or_else(|| AppError::BookNotFound)?;
 
     // 验证权限
     if book.user_id != auth.user_id {
-        return Err(AppError::Forbidden("无权修改该书籍".to_string()));
+        return Err(AppError::BookModifyDenied);
     }
 
     // 构建更新SQL
@@ -396,9 +385,7 @@ async fn update_book(
         if !first {
             query_builder.push(", ");
         }
-        query_builder
-            .push("is_public = ")
-            .push_bind(is_public);
+        query_builder.push("is_public = ").push_bind(is_public);
         first = false;
     }
 
@@ -426,11 +413,11 @@ async fn delete_book(
     let book = sqlx::query!("SELECT user_id, file_path FROM books WHERE id = ?", book_id)
         .fetch_optional(&mut *tx)
         .await?
-        .ok_or_else(|| AppError::NotFound("书籍不存在".to_string()))?;
+        .ok_or_else(|| AppError::BookNotFound)?;
 
     // 验证权限
     if book.user_id != auth.user_id {
-        return Err(AppError::Forbidden("无权删除该书籍".to_string()));
+        return Err(AppError::BookDeleteDenied);
     }
 
     // 删除书籍文件
@@ -465,11 +452,11 @@ async fn get_book_content(
     )
     .fetch_optional(&pool)
     .await?
-    .ok_or_else(|| AppError::NotFound("书籍不存在".to_string()))?;
+    .ok_or_else(|| AppError::BookNotFound)?;
 
     // 检查权限
     if book.user_id != auth.user_id && !book.is_public {
-        return Err(AppError::Forbidden("无权访问该书籍".to_string()));
+        return Err(AppError::BookAccessDenied);
     }
 
     // 获取文件内容
@@ -483,7 +470,7 @@ async fn get_book_content(
     // 确保位置有效
     let position = params.position.max(0) as usize;
     if position >= content_length {
-        return Err(AppError::BadRequest("位置超出内容范围".to_string()));
+        return Err(AppError::PositionExceedsRange);
     }
 
     // 计算要返回的内容长度
@@ -517,11 +504,11 @@ async fn jump_to_chapter(
     let book = sqlx::query!("SELECT user_id, is_public FROM books WHERE id = ?", book_id)
         .fetch_optional(&pool)
         .await?
-        .ok_or_else(|| AppError::NotFound("书籍不存在".to_string()))?;
+        .ok_or_else(|| AppError::BookNotFound)?;
 
     // 检查权限
     if book.user_id != auth.user_id && !book.is_public {
-        return Err(AppError::Forbidden("无权访问该书籍".to_string()));
+        return Err(AppError::BookAccessDenied);
     }
 
     // 查询章节信息
@@ -532,7 +519,7 @@ async fn jump_to_chapter(
     )
     .fetch_optional(&pool)
     .await?
-    .ok_or_else(|| AppError::NotFound("章节不存在".to_string()))?;
+    .ok_or_else(|| AppError::ChapterNotFound)?;
 
     // 返回章节位置
     Ok(Json(ApiResponse::success(serde_json::json!({

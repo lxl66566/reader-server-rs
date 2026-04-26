@@ -102,27 +102,6 @@ pub struct Book {
     pub created_at: String,
 }
 
-// 章节模型
-#[derive(Debug, Serialize, Deserialize, FromRow)]
-pub struct Chapter {
-    pub id: i64,
-    pub book_id: i64,
-    pub title: String,
-    pub position: i64,
-}
-
-// 阅读进度模型
-#[derive(Debug, Serialize, Deserialize, FromRow)]
-pub struct ReadingProgress {
-    pub id: i64,
-    pub user_id: i64,
-    pub book_id: i64,
-    pub position: i64,
-    pub reading_time: i64,
-    pub last_read_at: Option<String>,
-    pub last_device_id: Option<String>,
-}
-
 // 阅读设置模型
 #[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct ReadingSettings {

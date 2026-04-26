@@ -201,11 +201,11 @@ async fn process_heartbeat(
     )
     .fetch_optional(&pool)
     .await?
-    .ok_or_else(|| AppError::NotFound("书籍不存在".to_string()))?;
+    .ok_or_else(|| AppError::BookNotFound)?;
 
     // 检查权限
     if book.user_id != auth.user_id && !book.is_public {
-        return Err(AppError::Forbidden("无权访问该书籍".to_string()));
+        return Err(AppError::BookAccessDenied);
     }
 
     // 获取当前进度

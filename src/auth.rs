@@ -87,21 +87,18 @@ where
         let TypedHeader(Authorization(bearer)) =
             TypedHeader::<Authorization<Bearer>>::from_request_parts(parts, state)
                 .await
-                .map_err(|_| AppError::Auth("未提供授权令牌".to_string()))?;
+                .map_err(|_| AppError::TokenNotProvided)?;
 
         // 验证令牌
         let claims = verify_token(bearer.token(), &config)?;
 
         // 验证角色
         if claims.role != "user" {
-            return Err(AppError::Auth("令牌角色无效".to_string()));
+            return Err(AppError::InvalidTokenRole);
         }
 
         // 获取用户ID
-        let user_id: i64 = claims
-            .sub
-            .parse()
-            .map_err(|_| AppError::Auth("无效的用户ID".to_string()))?;
+        let user_id: i64 = claims.sub.parse().map_err(|_| AppError::InvalidUserId)?;
 
         // 获取数据库连接
         let pool = Pool::<Sqlite>::from_ref(state);
@@ -112,7 +109,7 @@ where
             .fetch_optional(&pool)
             .await
             .map_err(AppError::Database)?
-            .ok_or_else(|| AppError::NotFound("用户不存在".to_string()))?;
+            .ok_or_else(|| AppError::UserNotFound)?;
 
         Ok(AuthUser {
             user_id,
@@ -144,21 +141,18 @@ where
         let TypedHeader(Authorization(bearer)) =
             TypedHeader::<Authorization<Bearer>>::from_request_parts(parts, state)
                 .await
-                .map_err(|_| AppError::Auth("未提供管理员授权令牌".to_string()))?;
+                .map_err(|_| AppError::AdminTokenNotProvided)?;
 
         // 验证令牌
         let claims = verify_token(bearer.token(), &config)?;
 
         // 验证角色
         if claims.role != "admin" {
-            return Err(AppError::Forbidden("需要管理员权限".to_string()));
+            return Err(AppError::AdminPermissionRequired);
         }
 
         // 获取管理员ID
-        let admin_id: i64 = claims
-            .sub
-            .parse()
-            .map_err(|_| AppError::Auth("无效的管理员ID".to_string()))?;
+        let admin_id: i64 = claims.sub.parse().map_err(|_| AppError::InvalidAdminId)?;
 
         Ok(AuthAdmin { admin_id })
     }

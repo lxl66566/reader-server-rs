@@ -3,107 +3,184 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum AppError {
-    #[error("数据库错误: {0}")]
+    #[error("Invalid credentials")]
+    InvalidCredentials,
+
+    #[error("Authorization token not provided")]
+    TokenNotProvided,
+
+    #[error("Invalid token role")]
+    InvalidTokenRole,
+
+    #[error("Invalid user ID in token")]
+    InvalidUserId,
+
+    #[error("Admin authorization token not provided")]
+    AdminTokenNotProvided,
+
+    #[error("Invalid admin ID in token")]
+    InvalidAdminId,
+
+    #[error("Token expired or invalid")]
+    TokenExpiredOrInvalid,
+
+    #[error("Admin not set up")]
+    AdminNotSetup,
+
+    #[error("Incorrect admin password")]
+    IncorrectAdminPassword,
+
+    #[error("Access denied to this book")]
+    BookAccessDenied,
+
+    #[error("Cannot modify this book")]
+    BookModifyDenied,
+
+    #[error("Cannot delete this book")]
+    BookDeleteDenied,
+
+    #[error("Admin permission required")]
+    AdminPermissionRequired,
+
+    #[error("Book not found")]
+    BookNotFound,
+
+    #[error("User not found")]
+    UserNotFound,
+
+    #[error("Chapter not found")]
+    ChapterNotFound,
+
+    #[error("Username must be between 2 and 20 characters")]
+    UsernameLengthInvalid,
+
+    #[error("Password cannot be empty")]
+    PasswordEmpty,
+
+    #[error("Password must be at least 6 characters")]
+    PasswordTooShort,
+
+    #[error("Incorrect old password")]
+    IncorrectOldPassword,
+
+    #[error("Invite code required for registration")]
+    InviteCodeRequired,
+
+    #[error("Invite code has been exhausted")]
+    InviteCodeExhausted,
+
+    #[error("Invalid invite code")]
+    InviteCodeInvalid,
+
+    #[error("Username already exists")]
+    UsernameAlreadyExists,
+
+    #[error("Admin already set up")]
+    AdminAlreadySetup,
+
+    #[error("Title cannot be empty")]
+    TitleEmpty,
+
+    #[error("File cannot be empty")]
+    FileEmpty,
+
+    #[error("File size must not exceed 10MB")]
+    FileTooLarge,
+
+    #[error("File encoding is not valid UTF-8")]
+    FileInvalidUtf8,
+
+    #[error("Only TXT and EPUB formats are supported")]
+    UnsupportedFileFormat,
+
+    #[error("Position exceeds content range")]
+    PositionExceedsRange,
+
+    #[error("Failed to parse form data: {0}")]
+    FormParseError(String),
+
+    #[error("Failed to read field '{0}': {1}")]
+    FieldReadError(String, String),
+
+    #[error(transparent)]
     Database(#[from] sqlx::Error),
 
-    #[error("身份验证错误: {0}")]
-    Auth(String),
-
-    #[error("JWT错误: {0}")]
+    #[error(transparent)]
     Jwt(#[from] jsonwebtoken::errors::Error),
 
-    #[error("参数验证失败: {0}")]
-    Validation(String),
-
-    #[error("资源不存在: {0}")]
-    NotFound(String),
-
-    #[error("权限不足: {0}")]
-    Forbidden(String),
-
-    #[error("IO错误: {0}")]
+    #[error(transparent)]
     Io(#[from] std::io::Error),
 
-    #[error("内部服务器错误: {0}")]
+    #[error("Internal server error: {0}")]
     Internal(String),
-
-    #[error("请求处理错误: {0}")]
-    BadRequest(String),
-
-    #[error("内容解析错误: {0}")]
-    ParseError(String),
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 pub struct ErrorResponse {
-    pub code: i32,
     pub message: String,
 }
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let (status, error_code, message) = match &self {
-            AppError::Auth(_) => (StatusCode::UNAUTHORIZED, 1001, self.to_string()),
-            AppError::Validation(msg) if msg.contains("邀请码") => {
-                (StatusCode::BAD_REQUEST, 1002, self.to_string())
+        let status = match &self {
+            AppError::InvalidCredentials
+            | AppError::TokenNotProvided
+            | AppError::InvalidTokenRole
+            | AppError::InvalidUserId
+            | AppError::AdminTokenNotProvided
+            | AppError::InvalidAdminId
+            | AppError::TokenExpiredOrInvalid
+            | AppError::AdminNotSetup
+            | AppError::IncorrectAdminPassword => StatusCode::UNAUTHORIZED,
+
+            AppError::BookAccessDenied
+            | AppError::BookModifyDenied
+            | AppError::BookDeleteDenied
+            | AppError::AdminPermissionRequired => StatusCode::FORBIDDEN,
+
+            AppError::BookNotFound | AppError::UserNotFound | AppError::ChapterNotFound => {
+                StatusCode::NOT_FOUND
             }
-            AppError::Validation(msg) if msg.contains("用户名已存在") => {
-                (StatusCode::BAD_REQUEST, 1003, self.to_string())
-            }
-            AppError::Jwt(_) => (
-                StatusCode::UNAUTHORIZED,
-                1004,
-                "未登录或登录已过期".to_string(),
-            ),
-            AppError::Forbidden(msg) if msg.contains("管理员") => {
-                (StatusCode::FORBIDDEN, 1005, self.to_string())
-            }
-            AppError::Validation(msg) if msg.contains("管理员已设置") => {
-                (StatusCode::BAD_REQUEST, 1006, self.to_string())
-            }
-            AppError::Validation(msg) if msg.contains("旧密码") => {
-                (StatusCode::BAD_REQUEST, 1007, self.to_string())
-            }
-            AppError::NotFound(msg) if msg.contains("书籍") => {
-                (StatusCode::NOT_FOUND, 2001, self.to_string())
-            }
-            AppError::Forbidden(msg) if msg.contains("书籍") => {
-                (StatusCode::FORBIDDEN, 2002, self.to_string())
-            }
-            AppError::Validation(msg) if msg.contains("格式") => {
-                (StatusCode::BAD_REQUEST, 2003, self.to_string())
-            }
-            AppError::Validation(msg) if msg.contains("过大") => {
-                (StatusCode::BAD_REQUEST, 2004, self.to_string())
-            }
-            AppError::NotFound(msg) if msg.contains("用户") => {
-                (StatusCode::NOT_FOUND, 3001, self.to_string())
-            }
-            AppError::Validation(_) => (StatusCode::BAD_REQUEST, 400, self.to_string()),
-            AppError::NotFound(_) => (StatusCode::NOT_FOUND, 404, self.to_string()),
-            AppError::Forbidden(_) => (StatusCode::FORBIDDEN, 403, self.to_string()),
-            AppError::BadRequest(_) => (StatusCode::BAD_REQUEST, 400, self.to_string()),
-            _ => {
-                tracing::error!("内部服务器错误: {:?}", self);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    9999,
-                    "服务器内部错误".to_string(),
-                )
+
+            AppError::UsernameLengthInvalid
+            | AppError::PasswordEmpty
+            | AppError::PasswordTooShort
+            | AppError::IncorrectOldPassword
+            | AppError::InviteCodeRequired
+            | AppError::InviteCodeExhausted
+            | AppError::InviteCodeInvalid
+            | AppError::UsernameAlreadyExists
+            | AppError::AdminAlreadySetup
+            | AppError::TitleEmpty
+            | AppError::FileEmpty
+            | AppError::FileTooLarge
+            | AppError::FileInvalidUtf8
+            | AppError::UnsupportedFileFormat
+            | AppError::PositionExceedsRange
+            | AppError::FormParseError(_)
+            | AppError::FieldReadError(_, _) => StatusCode::BAD_REQUEST,
+
+            AppError::Database(_) | AppError::Jwt(_) | AppError::Io(_) | AppError::Internal(_) => {
+                StatusCode::INTERNAL_SERVER_ERROR
             }
         };
 
-        let body = Json(ErrorResponse {
-            code: error_code,
-            message,
-        });
+        if matches!(status, StatusCode::INTERNAL_SERVER_ERROR) {
+            tracing::error!("Internal server error: {:?}", self);
+        }
 
-        (status, body).into_response()
+        (
+            status,
+            Json(ErrorResponse {
+                message: self.to_string(),
+            }),
+        )
+            .into_response()
     }
 }
 
@@ -113,7 +190,6 @@ impl From<anyhow::Error> for AppError {
     }
 }
 
-// 定义API统一返回格式
 #[derive(Serialize)]
 pub struct ApiResponse<T: Serialize> {
     pub code: i32,

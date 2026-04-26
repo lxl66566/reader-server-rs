@@ -185,14 +185,12 @@ async fn reset_password(
             .await?;
 
     if !user_exists {
-        return Err(AppError::NotFound("用户不存在".to_string()));
+        return Err(AppError::UserNotFound);
     }
 
     // 验证新密码
     if req.new_password.len() < 6 {
-        return Err(AppError::Validation(
-            "新密码长度必须大于6个字符".to_string(),
-        ));
+        return Err(AppError::PasswordTooShort);
     }
 
     // 哈希新密码

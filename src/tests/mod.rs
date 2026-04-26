@@ -54,7 +54,13 @@ pub async fn setup_test_app() -> Result<(Router, Pool<Sqlite>)> {
     Ok((app, pool))
 }
 
-pub async fn make_request<B>(app: &Router, method: Method, uri: &str, body: B, auth_token: Option<&str>) -> Response
+pub async fn make_request<B>(
+    app: &Router,
+    method: Method,
+    uri: &str,
+    body: B,
+    auth_token: Option<&str>,
+) -> Response
 where
     B: Into<Body>,
 {
@@ -119,10 +125,10 @@ pub async fn make_multipart_request(
 
     body.extend_from_slice(format!("--{}--\r\n", boundary).as_bytes());
 
-    let mut req_builder = Request::builder()
-        .method(Method::POST)
-        .uri(uri)
-        .header("Content-Type", format!("multipart/form-data; boundary={}", boundary));
+    let mut req_builder = Request::builder().method(Method::POST).uri(uri).header(
+        "Content-Type",
+        format!("multipart/form-data; boundary={}", boundary),
+    );
     if let Some(token) = auth_token {
         req_builder = req_builder.header("Authorization", format!("Bearer {}", token));
     }
@@ -151,7 +157,12 @@ pub async fn setup_admin(app: &Router) -> (String, serde_json::Value) {
     (token, json)
 }
 
-pub async fn register_user(app: &Router, username: &str, password: &str, invite_code: Option<&str>) -> Response {
+pub async fn register_user(
+    app: &Router,
+    username: &str,
+    password: &str,
+    invite_code: Option<&str>,
+) -> Response {
     make_json_request(
         app,
         Method::POST,
@@ -199,7 +210,10 @@ pub async fn upload_test_book(
     let resp = make_multipart_request(
         app,
         "/api/books/upload",
-        vec![("title", title), ("is_public", if is_public { "true" } else { "false" })],
+        vec![
+            ("title", title),
+            ("is_public", if is_public { "true" } else { "false" }),
+        ],
         Some(("file", "test.txt", content.as_bytes())),
         Some(token),
     )
