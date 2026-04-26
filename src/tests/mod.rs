@@ -4,19 +4,15 @@ pub mod test_user;
 
 use anyhow::Result;
 use axum::{
+    Router,
     body::Body,
     http::{Method, Request},
     response::Response,
-    Router,
 };
 use sqlx::{Pool, Sqlite};
 use tower::ServiceExt;
 
-use crate::{
-    app::create_app,
-    config::Config,
-    db::create_test_pool,
-};
+use crate::{app::create_app, config::Config, db::create_test_pool};
 
 // 测试工具函数
 async fn setup_test_app() -> Result<(axum::Router, Pool<Sqlite>)> {

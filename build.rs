@@ -89,7 +89,7 @@ async fn setup_schema_db() -> Result<(), Box<dyn std::error::Error>> {
                 println!(
                     "cargo:warning=Failed to execute schema SQL. Attempting to remove partially created DB file: {}",
                     db_path.display()
-                 );
+                );
                 let _ = fs::remove_file(&db_path); // Ignore error on removal
                 panic!(
                     "Failed to execute schema SQL from {}: {}\nSQL:\n{}",

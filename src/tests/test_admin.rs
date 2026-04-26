@@ -1,8 +1,8 @@
 use anyhow::Result;
 use axum::{
+    Router,
     body::Body,
     http::{Method, StatusCode},
-    Router,
 };
 use http_body_util::BodyExt;
 use serial_test::serial;

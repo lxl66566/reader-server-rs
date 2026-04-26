@@ -1,5 +1,5 @@
 use anyhow::Result;
-use axum::{extract::FromRef, Router};
+use axum::{Router, extract::FromRef};
 use sqlx::{Pool, Sqlite};
 use tower::ServiceBuilder;
 use tower_http::{

@@ -1,12 +1,12 @@
 use axum::{
+    Json, Router,
     extract::State,
     routing::{get, post},
-    Json, Router,
 };
 use sqlx::{Pool, Sqlite};
 
 use crate::{
-    auth::{create_token, AuthUser, Claims},
+    auth::{AuthUser, Claims, create_token},
     config::Config,
     error::{ApiResponse, AppError},
     models::{

@@ -1,9 +1,9 @@
 use anyhow::Result;
 use axum::{
+    Router,
     body::Body,
     http::{Method, StatusCode},
     response::Response,
-    Router,
 };
 use bytes::Bytes;
 use http_body_util::BodyExt;

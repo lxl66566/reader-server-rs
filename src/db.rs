@@ -1,17 +1,17 @@
 use std::path::Path;
 
 use anyhow::Result;
-use sqlx::{sqlite::SqliteConnectOptions, Executor, Pool, Sqlite, SqlitePool};
+use sqlx::{Executor, Pool, Sqlite, SqlitePool, sqlite::SqliteConnectOptions};
 use tokio::fs;
 
 use crate::config::Config;
 
 pub async fn init_db_pool(config: &Config) -> Result<Pool<Sqlite>> {
     // 确保数据库文件的目录存在
-    if let Some(db_path) = Path::new(&config.db.url).parent() {
-        if !db_path.exists() {
-            fs::create_dir_all(db_path).await?;
-        }
+    if let Some(db_path) = Path::new(&config.db.url).parent()
+        && !db_path.exists()
+    {
+        fs::create_dir_all(db_path).await?;
     }
 
     let options = SqliteConnectOptions::new()

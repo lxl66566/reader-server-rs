@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
 use axum::{
-    extract::{multipart::Multipart, Path, Query, State},
-    routing::{get, post},
     Json, Router,
+    extract::{Path, Query, State, multipart::Multipart},
+    routing::{get, post},
 };
 use rand::prelude::IndexedRandom;
 use serde::Deserialize;

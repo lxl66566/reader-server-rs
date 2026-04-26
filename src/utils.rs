@@ -1,6 +1,8 @@
 use std::str::FromStr;
 
 use anyhow::Result;
+use argon2::{Argon2, PasswordHasher as _, password_hash::SaltString};
+use rand::RngExt;
 use regex::Regex;
 use regex_macro::regex;
 use uuid::Uuid;
@@ -46,7 +48,6 @@ pub fn generate_uuid() -> String {
 
 // 生成随机邀请码
 pub fn generate_invite_code() -> String {
-    use rand::Rng;
     const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     const CODE_LEN: usize = 8;
 
@@ -63,13 +64,16 @@ pub fn generate_invite_code() -> String {
 
 // 哈希密码
 pub fn hash_password(password: &str) -> Result<String, AppError> {
-    use argon2::{
-        password_hash::{PasswordHasher, SaltString},
-        Argon2,
-    };
-    use password_hash::rand_core::OsRng;
+    // 1. 使用 rand 0.10 的 API 独立生成 16 字节的随机数组。
+    // rand::random() 会隐式调用底层的加密安全的随机数生成器（在 0.10 中为
+    // thread-local ChaCha12）
+    let salt_bytes: [u8; 16] = rand::random();
 
-    let salt = SaltString::generate(OsRng);
+    // 2. 将随机字节数组手动编码为 Base64 格式的 SaltString，完美绕过 Trait 冲突
+    let salt = SaltString::encode_b64(&salt_bytes)
+        .map_err(|e| AppError::Internal(format!("Salt 编码失败: {}", e)))?;
+
+    // 3. 执行 Argon2 哈希（默认使用推荐的 Argon2id 变体）
     let argon2 = Argon2::default();
 
     argon2
@@ -81,8 +85,8 @@ pub fn hash_password(password: &str) -> Result<String, AppError> {
 // 验证密码
 pub fn verify_password(password: &str, hash: &str) -> Result<bool, AppError> {
     use argon2::{
-        password_hash::{PasswordHash, PasswordVerifier},
         Argon2,
+        password_hash::{PasswordHash, PasswordVerifier},
     };
 
     let parsed_hash =
@@ -142,10 +146,9 @@ pub fn extract_chapter_number(title: &str) -> Option<i64> {
     if let Some(capture) = Regex::new(r"第\s*(\d+)\s*[章节卷集部篇]")
         .ok()?
         .captures(title)
+        && let Some(num_str) = capture.get(1)
     {
-        if let Some(num_str) = capture.get(1) {
-            return i64::from_str(num_str.as_str()).ok();
-        }
+        return i64::from_str(num_str.as_str()).ok();
     }
 
     // 再查找中文数字形式（如"第一章"）
@@ -154,10 +157,9 @@ pub fn extract_chapter_number(title: &str) -> Option<i64> {
     )
     .ok()?
     .captures(title)
+        && let Some(num_str) = capture.get(1)
     {
-        if let Some(num_str) = capture.get(1) {
-            return parse_chinese_chapter_number(num_str.as_str());
-        }
+        return parse_chinese_chapter_number(num_str.as_str());
     }
 
     None
