@@ -90,79 +90,100 @@ async fn update_reading_settings(
     }
 
     // 构建更新SQL
-    let mut sql_parts = Vec::new();
-    let mut params: Vec<(String, _)> = Vec::new();
+    let mut query_builder: sqlx::QueryBuilder<'_, sqlx::Sqlite> =
+        sqlx::QueryBuilder::new("UPDATE reading_settings SET ");
+    let mut first = true;
 
     if let Some(font_size) = req.font_size {
-        sql_parts.push("font_size = ?".to_string());
-        params.push(("font_size".to_string(), font_size.to_string()));
+        if !first {
+            query_builder.push(", ");
+        }
+        query_builder.push("font_size = ").push_bind(font_size);
+        first = false;
     }
 
     if let Some(background_color) = req.background_color {
-        sql_parts.push("background_color = ?".to_string());
-        params.push(("background_color".to_string(), background_color.to_string()));
+        if !first {
+            query_builder.push(", ");
+        }
+        query_builder
+            .push("background_color = ")
+            .push_bind(background_color);
+        first = false;
     }
 
     if let Some(text_color) = req.text_color {
-        sql_parts.push("text_color = ?".to_string());
-        params.push(("text_color".to_string(), text_color.to_string()));
+        if !first {
+            query_builder.push(", ");
+        }
+        query_builder.push("text_color = ").push_bind(text_color);
+        first = false;
     }
 
     if let Some(line_height) = req.line_height {
-        sql_parts.push("line_height = ?".to_string());
-        params.push(("line_height".to_string(), line_height.to_string()));
+        if !first {
+            query_builder.push(", ");
+        }
+        query_builder.push("line_height = ").push_bind(line_height);
+        first = false;
     }
 
     if let Some(letter_spacing) = req.letter_spacing {
-        sql_parts.push("letter_spacing = ?".to_string());
-        params.push(("letter_spacing".to_string(), letter_spacing.to_string()));
+        if !first {
+            query_builder.push(", ");
+        }
+        query_builder
+            .push("letter_spacing = ")
+            .push_bind(letter_spacing);
+        first = false;
     }
 
     if let Some(paragraph_spacing) = req.paragraph_spacing {
-        sql_parts.push("paragraph_spacing = ?".to_string());
-        params.push((
-            "paragraph_spacing".to_string(),
-            paragraph_spacing.to_string(),
-        ));
+        if !first {
+            query_builder.push(", ");
+        }
+        query_builder
+            .push("paragraph_spacing = ")
+            .push_bind(paragraph_spacing);
+        first = false;
     }
 
     if let Some(reading_width) = req.reading_width {
-        sql_parts.push("reading_width = ?".to_string());
-        params.push(("reading_width".to_string(), reading_width.to_string()));
+        if !first {
+            query_builder.push(", ");
+        }
+        query_builder
+            .push("reading_width = ")
+            .push_bind(reading_width);
+        first = false;
     }
 
     if let Some(text_indent) = req.text_indent {
-        sql_parts.push("text_indent = ?".to_string());
-        params.push(("text_indent".to_string(), text_indent.to_string()));
+        if !first {
+            query_builder.push(", ");
+        }
+        query_builder.push("text_indent = ").push_bind(text_indent);
+        first = false;
     }
 
     if let Some(simplified_chinese) = req.simplified_chinese {
-        sql_parts.push("simplified_chinese = ?".to_string());
-        params.push((
-            "simplified_chinese".to_string(),
-            simplified_chinese.to_string(),
-        ));
+        if !first {
+            query_builder.push(", ");
+        }
+        query_builder
+            .push("simplified_chinese = ")
+            .push_bind(simplified_chinese);
+        first = false;
     }
 
-    // 如果没有需要更新的字段，直接返回成功
-    if sql_parts.is_empty() {
+    if first {
         return Ok(Json(ApiResponse::<()>::message("无更新内容")));
     }
 
-    // 构建SQL语句
-    let sql = format!(
-        "UPDATE reading_settings SET {} WHERE user_id = ?",
-        sql_parts.join(", ")
-    );
-
-    // 执行更新
-    let mut query = sqlx::query(&sql);
-    for (_, value) in params {
-        query = query.bind(value);
-    }
-    query = query.bind(auth.user_id);
-
-    query.execute(&pool).await?;
+    query_builder
+        .push(" WHERE user_id = ")
+        .push_bind(auth.user_id);
+    query_builder.build().execute(&pool).await?;
 
     Ok(Json(ApiResponse::<()>::message("更新成功")))
 }
@@ -229,7 +250,9 @@ async fn process_heartbeat(
     let last_read_at = progress.last_read_at;
 
     // 检查设备ID是否相同
-    let is_same_device = last_device_id.as_deref() == Some(current_device_id.as_str());
+    let is_same_device = last_device_id
+        .as_deref()
+        .is_none_or(|id| id == current_device_id);
 
     // 如果设备不同，返回服务器保存的进度
     if !is_same_device {

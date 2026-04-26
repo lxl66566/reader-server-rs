@@ -16,9 +16,10 @@ pub async fn init_db_pool(config: &Config) -> Result<Pool<Sqlite>> {
 
     let options = SqliteConnectOptions::new()
         .filename(&config.db.url)
-        .create_if_missing(true);
+        .create_if_missing(true)
+        .foreign_keys(true)
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal);
 
-    // 创建连接池
     let pool = SqlitePool::connect_with(options).await?;
     pool.execute("PRAGMA time_zone = 'UTC';").await?;
 
@@ -41,7 +42,14 @@ pub async fn run_migrations(pool: &Pool<Sqlite>) -> Result<()> {
 // 为测试创建内存数据库连接池
 #[cfg(test)]
 pub async fn create_test_pool() -> Result<Pool<Sqlite>> {
-    let pool = SqlitePool::connect("sqlite::memory:").await?;
+    let options = SqliteConnectOptions::new()
+        .filename("file::memory:?cache=shared")
+        .foreign_keys(true);
+
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await?;
 
     // 使用 schema 模块中定义的 SQL 语句创建表
     let sql = include_str!("../schema.sql");

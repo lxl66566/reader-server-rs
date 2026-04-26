@@ -1,6 +1,6 @@
 -- 用户表
 CREATE TABLE
-  users (
+  IF NOT EXISTS users (
     id INTEGER PRIMARY KEY,
     username TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
@@ -14,7 +14,7 @@ CREATE TABLE
 
 -- 管理员表
 CREATE TABLE
-  admin (
+  IF NOT EXISTS admin (
     id INTEGER PRIMARY KEY,
     password_hash TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (
@@ -26,14 +26,14 @@ CREATE TABLE
 
 -- 系统设置表
 CREATE TABLE
-  settings (
+  IF NOT EXISTS settings (
     id INTEGER PRIMARY KEY,
     invite_code_required BOOLEAN NOT NULL DEFAULT 0
   );
 
 -- 邀请码表
 CREATE TABLE
-  invite_codes (
+  IF NOT EXISTS invite_codes (
     id INTEGER PRIMARY KEY,
     code TEXT NOT NULL UNIQUE,
     limit_times INTEGER NOT NULL DEFAULT 1,
@@ -48,7 +48,7 @@ CREATE TABLE
 
 -- 书籍表
 CREATE TABLE
-  books (
+  IF NOT EXISTS books (
     id INTEGER PRIMARY KEY,
     user_id INTEGER NOT NULL,
     title TEXT NOT NULL,
@@ -65,7 +65,7 @@ CREATE TABLE
 
 -- 章节表
 CREATE TABLE
-  chapters (
+  IF NOT EXISTS chapters (
     id INTEGER PRIMARY KEY,
     book_id INTEGER NOT NULL,
     title TEXT NOT NULL,
@@ -75,7 +75,7 @@ CREATE TABLE
 
 -- 阅读进度表
 CREATE TABLE
-  reading_progress (
+  IF NOT EXISTS reading_progress (
     id INTEGER PRIMARY KEY,
     user_id INTEGER NOT NULL,
     book_id INTEGER NOT NULL,
@@ -90,7 +90,7 @@ CREATE TABLE
 
 -- 阅读设置表
 CREATE TABLE
-  reading_settings (
+  IF NOT EXISTS reading_settings (
     id INTEGER PRIMARY KEY,
     user_id INTEGER NOT NULL UNIQUE,
     font_size INTEGER NOT NULL DEFAULT 18,
@@ -106,4 +106,4 @@ CREATE TABLE
   );
 
 -- 为 user_id 创建索引
-CREATE INDEX idx_reading_settings_user_id ON reading_settings (user_id);
+CREATE INDEX IF NOT EXISTS idx_reading_settings_user_id ON reading_settings (user_id);

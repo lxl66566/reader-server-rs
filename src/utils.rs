@@ -1,13 +1,19 @@
 use std::str::FromStr;
+use std::sync::LazyLock;
 
 use anyhow::Result;
 use argon2::{Argon2, PasswordHasher as _, password_hash::SaltString};
+use fancy_regex::Regex;
 use rand::RngExt;
-use regex::Regex;
-use regex_macro::regex;
 use uuid::Uuid;
 
 use crate::error::AppError;
+
+static CHAPTER_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^[　\s](序章|序言|卷首语|扉页|楔子|正文(?!完|结)|终章|后记|尾声|番外|第?\s{0,4}[\d〇零一二两三四五六七八九十百千万壹贰叁肆伍陆柒捌玖拾佰仟]+?\s{0,4}(?:章|节(?!课)|卷|集(?![合和])|部(?![分赛游])|篇(?!张))).{0,30}$"
+    ).expect("invalid chapter regex")
+});
 
 // 中文数字映射
 const CN_NUMS: [(&str, i64); 20] = [
@@ -142,21 +148,21 @@ pub fn parse_chinese_chapter_number(text: &str) -> Option<i64> {
 
 // 从章节标题中提取章节号
 pub fn extract_chapter_number(title: &str) -> Option<i64> {
-    // 先查找数字形式（如"第1章"）
     if let Some(capture) = Regex::new(r"第\s*(\d+)\s*[章节卷集部篇]")
         .ok()?
         .captures(title)
+        .ok()?
         && let Some(num_str) = capture.get(1)
     {
         return i64::from_str(num_str.as_str()).ok();
     }
 
-    // 再查找中文数字形式（如"第一章"）
     if let Some(capture) = Regex::new(
         r"第\s*([零〇一二两三四五六七八九十百千万壹贰叁肆伍陆柒捌玖拾佰仟]+)\s*[章节卷集部篇]",
     )
     .ok()?
     .captures(title)
+    .ok()?
         && let Some(num_str) = capture.get(1)
     {
         return parse_chinese_chapter_number(num_str.as_str());
@@ -170,7 +176,6 @@ pub fn extract_chapters(content: &str) -> Vec<(String, usize)> {
     let mut chapters = Vec::new();
     let mut lines = content.lines().enumerate();
 
-    // 提取首行可能的标题
     if let Some((pos, first_line)) = lines.next() {
         let first_line = first_line.trim();
         if !first_line.is_empty() {
@@ -178,18 +183,84 @@ pub fn extract_chapters(content: &str) -> Vec<(String, usize)> {
         }
     }
 
-    // 使用正则匹配章节标题
     for (line_num, line) in lines {
         let line = line.trim();
-        // Regex::new(r"(?<=[
-        // \s])(?:序章|序言|卷首语|扉页|楔子|正文(?!完|结)|终章|后记|尾声|番外|第?\s{0,
-        // 4}[\d〇零一二两三四五六七八九十百千万壹贰叁肆伍陆柒捌玖拾佰仟]+?\s{0,4}(?:
-        // 章|节(?!课)|卷|集(?![合和])|部(?![分赛游])|篇(?!张))).{0,30}$").expect("
-        // 无效的章节正则表达式")
-        if regex!(r#"^[　\s]((?:序章|序言|卷首语|扉页|楔子|正文(完|结)|终章|后记|尾声|番外|第?\s{0,4}[\d〇零一二两三四五六七八九十百千万壹贰叁肆伍陆柒捌玖拾佰仟]+?\s{0,4}(?:章|节(课)|卷|集([合和])|部([分赛游])|篇(张))).{0,30})$"#).is_match(line) {
+        if CHAPTER_RE.is_match(line).unwrap_or(false) {
             chapters.push((line.to_string(), line_num));
         }
     }
 
     chapters
+}
+
+/// EPUB 书籍解析结果
+pub struct EpubParseResult {
+    pub text_content: String,
+    pub chapters: Vec<(String, usize)>,
+}
+
+/// 从 EPUB 字节数据中提取纯文本和章节信息
+pub fn parse_epub(data: &[u8]) -> Result<EpubParseResult, AppError> {
+    use epub::doc::EpubDoc;
+    use scraper::{Html, Selector};
+
+    let mut doc = EpubDoc::from_reader(std::io::Cursor::new(data))
+        .map_err(|e| AppError::ParseError(format!("EPUB 解析失败: {}", e)))?;
+
+    let p_selector =
+        Selector::parse("p").map_err(|e| AppError::Internal(format!("CSS 选择器错误: {:?}", e)))?;
+    let heading_selector = Selector::parse("h1, h2, h3, h4, h5, h6")
+        .map_err(|e| AppError::Internal(format!("CSS 选择器错误: {:?}", e)))?;
+
+    let num_chapters = doc.get_num_chapters();
+    let mut full_text = String::new();
+    let mut chapters: Vec<(String, usize)> = Vec::new();
+
+    for i in 0..num_chapters {
+        doc.set_current_chapter(i);
+        let content = match doc.get_current_str() {
+            Some((_mime, s)) => s,
+            None => continue,
+        };
+
+        let html = Html::parse_document(&content);
+
+        // 提取标题作为章节名
+        let chapter_title = html
+            .select(&heading_selector)
+            .next()
+            .map(|el| el.text().collect::<String>().trim().to_string())
+            .filter(|t| !t.is_empty());
+
+        if let Some(title) = chapter_title {
+            let pos = full_text.chars().count();
+            chapters.push((title, pos));
+        }
+
+        // 提取段落文本
+        let mut chapter_parts: Vec<String> = Vec::new();
+        for p in html.select(&p_selector) {
+            let text: String = p.text().collect::<Vec<_>>().join("").trim().to_string();
+            if !text.is_empty() {
+                chapter_parts.push(text);
+            }
+        }
+
+        if !chapter_parts.is_empty() {
+            if !full_text.is_empty() {
+                full_text.push('\n');
+            }
+            full_text.push_str(&chapter_parts.join("\n"));
+        }
+    }
+
+    // 如果 EPUB 的 TOC 没有提供章节，尝试用正则从文本中提取
+    if chapters.is_empty() {
+        chapters = extract_chapters(&full_text);
+    }
+
+    Ok(EpubParseResult {
+        text_content: full_text,
+        chapters,
+    })
 }

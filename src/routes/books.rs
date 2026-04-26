@@ -18,7 +18,7 @@ use crate::{
         Book, BookContentResponse, BookDetailResponse, BookListItem, ChapterResponse,
         PublicBookListItem, UpdateBookRequest, UploadBookResponse,
     },
-    utils::{extract_chapters, generate_uuid},
+    utils::{extract_chapters, generate_uuid, parse_epub},
 };
 
 // 分页查询参数
@@ -130,25 +130,28 @@ async fn upload_book(
         return Err(AppError::Validation("文件大小不能超过10MB".to_string()));
     }
 
-    // 验证文件格式
-    if !file_name
+    let file_ext = file_name
         .unwrap_or_default()
-        .to_lowercase()
-        .ends_with(".txt")
-    {
-        return Err(AppError::Validation("只支持TXT格式的书籍".to_string()));
-    }
+        .to_lowercase();
 
-    // 将文件内容转换为UTF-8文本
-    let content = String::from_utf8(file_content.to_vec())
-        .map_err(|_| AppError::Validation("文件编码不是有效的UTF-8".to_string()))?;
-
-    // 提取章节
-    let chapters = extract_chapters(&content);
+    let (content, chapters, file_ext_str) = if file_ext.ends_with(".txt") {
+        let text = String::from_utf8(file_content.to_vec())
+            .map_err(|_| AppError::Validation("文件编码不是有效的UTF-8".to_string()))?;
+        let chs = extract_chapters(&text);
+        (text, chs, "txt")
+    } else if file_ext.ends_with(".epub") {
+        let result = parse_epub(&file_content)?;
+        let ext = "txt";
+        (result.text_content, result.chapters, ext)
+    } else {
+        return Err(AppError::Validation(
+            "只支持 TXT 和 EPUB 格式的书籍".to_string(),
+        ));
+    };
 
     // 生成唯一文件名
     let file_id = generate_uuid();
-    let file_path = PathBuf::from(&config.storage.book_dir).join(format!("{}.txt", file_id));
+    let file_path = PathBuf::from(&config.storage.book_dir).join(format!("{}.{}", file_id, file_ext_str));
     let file_path_string = file_path.to_string_lossy();
 
     // 保存文件
@@ -369,40 +372,42 @@ async fn update_book(
     }
 
     // 构建更新SQL
-    let mut updates = Vec::new();
-    let mut params = Vec::new();
+    let mut query_builder: sqlx::QueryBuilder<'_, sqlx::Sqlite> =
+        sqlx::QueryBuilder::new("UPDATE books SET ");
+    let mut first = true;
 
     if let Some(title) = &req.title {
-        updates.push("title = ?");
-        params.push(title.as_str());
+        if !first {
+            query_builder.push(", ");
+        }
+        query_builder.push("title = ").push_bind(title.clone());
+        first = false;
     }
 
     if let Some(author) = &req.author {
-        updates.push("author = ?");
-        params.push(author.as_str());
+        if !first {
+            query_builder.push(", ");
+        }
+        query_builder.push("author = ").push_bind(author.clone());
+        first = false;
     }
 
-    if let Some(is_public) = &req.is_public {
-        updates.push("is_public = ?");
-        params.push(if *is_public { "true" } else { "false" });
+    if let Some(is_public) = req.is_public {
+        if !first {
+            query_builder.push(", ");
+        }
+        query_builder
+            .push("is_public = ")
+            .push_bind(is_public);
+        first = false;
     }
 
-    // 如果没有需要更新的字段，直接返回成功
-    if updates.is_empty() {
+    if first {
         return Ok(Json(ApiResponse::<()>::message("无更新内容")));
     }
 
-    // 构建SQL语句
-    let sql = format!("UPDATE books SET {} WHERE id = ?", updates.join(", "));
-
-    // 执行更新
-    let mut query = sqlx::query(&sql);
-    for param in params {
-        query = query.bind(param);
-    }
-    query = query.bind(book_id);
-
-    query.execute(&pool).await?;
+    query_builder.push(" WHERE id = ").push_bind(book_id);
+    query_builder.build().execute(&pool).await?;
 
     Ok(Json(ApiResponse::<()>::message("更新成功")))
 }
@@ -609,7 +614,7 @@ async fn get_random_public_books(
     // 随机选择书籍
     let mut rng = rand::rng();
     let selected_books: Vec<_> = books
-        .choose_multiple(&mut rng, count as usize)
+        .sample(&mut rng, count as usize)
         .map(|book| PublicBookListItem {
             book_id: book.id,
             title: book.title.clone(),
