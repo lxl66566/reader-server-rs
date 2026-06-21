@@ -13,8 +13,8 @@ static CHAPTER_RE: LazyLock<Regex> = LazyLock::new(|| {
     ).expect("invalid chapter regex")
 });
 
-/// 简易 ETag 哈希：用 FNV-1a 64bit，足够短、足够快、无外部依赖
-/// 返回带双引号的 ETag 字符串（符合 RFC 7232）
+/// 简易 `ETag` 哈希：用 FNV-1a 64bit，足够短、足够快、无外部依赖
+/// 返回带双引号的 `ETag` 字符串（符合 RFC 7232）
 pub fn make_etag(input: &str) -> String {
     const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const FNV_PRIME: u64 = 0x100_0000_01b3;

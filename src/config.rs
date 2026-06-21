@@ -50,7 +50,7 @@ pub struct LogConfig {
 }
 
 /// 全局 IP 限流配置
-/// per_second + burst_size 共同决定 token bucket；按客户端 IP 维度计数
+/// `per_second` + `burst_size` 共同决定 token bucket；按客户端 IP 维度计数
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RateLimitConfig {
     pub per_second: u64,

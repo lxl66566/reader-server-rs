@@ -11,12 +11,15 @@ use sqlx::{Pool, Sqlite};
 use crate::{
     auth::AuthUser,
     error::{ApiResponse, AppError},
-    models::{HeartbeatRequest, HeartbeatResponse, ReadingSettings, UpdateReadingSettingsRequest},
+    models::{
+        DailyReadingStat, HeartbeatRequest, HeartbeatResponse, ReadingSettings,
+        ReadingStatsResponse, UpdateReadingSettingsRequest,
+    },
     utils::make_etag,
 };
 
-/// 检查请求头 If-None-Match 是否命中给定 ETag
-/// 处理 `*` 通配、`W/` 前缀、以及逗号分隔的多个 ETag
+/// 检查请求头 If-None-Match 是否命中给定 `ETag`
+/// 处理 `*` 通配、`W/` 前缀、以及逗号分隔的多个 `ETag`
 pub fn etag_matches(if_none_match: &str, etag: &str) -> bool {
     /// 去掉 weak 前缀 W/ 或 w/，便于比较
     fn strip_weak(s: &str) -> &str {
@@ -43,6 +46,7 @@ pub fn routes() -> Router<crate::app::AppState> {
             get(get_reading_settings).put(update_reading_settings),
         )
         .route("/heartbeat", post(process_heartbeat))
+        .route("/stats", get(get_reading_stats))
 }
 
 // 获取阅读设置
@@ -87,11 +91,12 @@ async fn get_reading_settings(
     };
 
     // 序列化 payload，基于其内容生成 ETag；客户端 If-None-Match 命中则返回 304
-    let body =
-        serde_json::to_string(&settings).map_err(|e| AppError::Internal(e.to_string()))?;
+    let body = serde_json::to_string(&settings).map_err(|e| AppError::Internal(e.to_string()))?;
     let etag = make_etag(&body);
 
-    if let Some(if_none) = headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok())
+    if let Some(if_none) = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
         && etag_matches(if_none, &etag)
     {
         return Ok(axum::http::StatusCode::NOT_MODIFIED.into_response());
@@ -332,6 +337,18 @@ async fn process_heartbeat(
         )
         .execute(&pool)
         .await?;
+
+        // 同步累加当日阅读统计；INSERT ON CONFLICT 处理 upsert
+        let today = now.format("%Y-%m-%d").to_string();
+        sqlx::query!(
+            "INSERT INTO daily_reading_stats (user_id, date, reading_seconds) VALUES (?, ?, ?) \
+             ON CONFLICT (user_id, date) DO UPDATE SET reading_seconds = reading_seconds + excluded.reading_seconds",
+            auth.user_id,
+            today,
+            reading_time_increment,
+        )
+        .execute(&pool)
+        .await?;
     }
 
     let new_reading_time = progress.reading_time + reading_time_increment;
@@ -342,4 +359,105 @@ async fn process_heartbeat(
         position: req.position,
         reading_time: new_reading_time,
     })))
+}
+
+/// 计算两个日期字符串（YYYY-MM-DD）之间相隔的天数（later - earlier）
+/// 解析失败时返回 None；用于连续阅读天数判断
+fn days_between(later: &str, earlier: &str) -> Option<i64> {
+    use chrono::NaiveDate;
+    let l = NaiveDate::parse_from_str(later, "%Y-%m-%d").ok()?;
+    let e = NaiveDate::parse_from_str(earlier, "%Y-%m-%d").ok()?;
+    Some((l - e).num_days())
+}
+
+// 阅读统计：总时长、连续天数、最近 30 天每日时长
+async fn get_reading_stats(
+    auth: AuthUser,
+    State(pool): State<Pool<Sqlite>>,
+) -> Result<Json<ApiResponse<ReadingStatsResponse>>, AppError> {
+    // 总时长
+    let total: i64 =
+        sqlx::query_scalar("SELECT COALESCE(total_reading_time, 0) FROM users WHERE id = ?")
+            .bind(auth.user_id)
+            .fetch_one(&pool)
+            .await?;
+
+    // 最近 30 天的每日时长（按日期升序）
+    let recent_days: Vec<DailyReadingStat> = sqlx::query_as::<_, DailyReadingStat>(
+        "SELECT date, reading_seconds FROM daily_reading_stats \
+         WHERE user_id = ? AND date >= date('now', '-29 days') \
+         ORDER BY date ASC",
+    )
+    .bind(auth.user_id)
+    .fetch_all(&pool)
+    .await?;
+
+    // 取所有日期用于计算连续天数
+    let all_dates: Vec<String> = sqlx::query_scalar(
+        "SELECT date FROM daily_reading_stats WHERE user_id = ? ORDER BY date DESC",
+    )
+    .bind(auth.user_id)
+    .fetch_all(&pool)
+    .await?;
+
+    let today = Utc::now().format("%Y-%m-%d").to_string();
+    let yesterday = (Utc::now() - chrono::Duration::days(1))
+        .format("%Y-%m-%d")
+        .to_string();
+
+    // 当前连续天数：从今天或昨天开始往前数
+    // longest_streak：扫描整个日期序列找最长连续段
+    let (current_streak, longest_streak) = compute_streaks(&all_dates, &today, &yesterday);
+
+    Ok(Json(ApiResponse::success(ReadingStatsResponse {
+        total_reading_seconds: total,
+        current_streak_days: current_streak,
+        longest_streak_days: longest_streak,
+        recent_days,
+    })))
+}
+
+/// 给定按日期降序排列的日期列表，计算 `current_streak（从今天/昨天起向前数`）
+/// 与 `longest_streak（历史最长连续段`）
+fn compute_streaks(sorted_desc_dates: &[String], today: &str, yesterday: &str) -> (i64, i64) {
+    if sorted_desc_dates.is_empty() {
+        return (0, 0);
+    }
+
+    // 当前连续：要求第一个日期是今天或昨天，否则视为中断
+    let first = sorted_desc_dates[0].as_str();
+    let started_today = first == today;
+    let started_yesterday = first == yesterday;
+
+    let mut current_streak: i64 = 0;
+    if started_today || started_yesterday {
+        // 从 first（today/yesterday）向前数连续天数
+        let mut prev = first.to_string();
+        current_streak = 1;
+        for d in &sorted_desc_dates[1..] {
+            if days_between(&prev, d) == Some(1) {
+                current_streak += 1;
+                prev = d.clone();
+            } else {
+                break;
+            }
+        }
+    }
+
+    // 最长连续：扫描整个序列（按 desc 排序），相邻 diff==1 视为连续
+    let mut longest: i64 = 0;
+    let mut run: i64 = 0;
+    let mut prev: Option<String> = None;
+    for d in sorted_desc_dates {
+        match &prev {
+            Some(p) if days_between(p, d) == Some(1) => {
+                run += 1;
+            }
+            _ => run = 1,
+        }
+        longest = longest.max(run);
+        prev = Some(d.clone());
+    }
+
+    (current_streak, longest)
 }

@@ -80,12 +80,30 @@ CREATE TABLE
     author TEXT,
     file_path TEXT NOT NULL,
     is_public BOOLEAN NOT NULL DEFAULT 0,
+    cover_path TEXT,
     created_at TEXT NOT NULL DEFAULT (
       strftime (
         '%Y-%m-%dT%H:%M:%S.' || substr (strftime ('%f'), 4, 6) || 'Z'
       )
     ),
     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+  );
+
+-- 标签字典：全局共享，避免每用户重复存储同名标签
+CREATE TABLE
+  IF NOT EXISTS tags (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE
+  );
+
+-- 书籍 ↔ 标签 多对多
+CREATE TABLE
+  IF NOT EXISTS book_tags (
+    book_id INTEGER NOT NULL,
+    tag_id INTEGER NOT NULL,
+    PRIMARY KEY (book_id, tag_id),
+    FOREIGN KEY (book_id) REFERENCES books (id) ON DELETE CASCADE,
+    FOREIGN KEY (tag_id) REFERENCES tags (id) ON DELETE CASCADE
   );
 
 -- 章节表
@@ -156,6 +174,18 @@ CREATE TABLE
     UNIQUE (user_id, book_id)
   );
 
+-- 每日阅读统计：用户每天的累计阅读时长（秒）
+-- 由心跳累加生成；用于前端连续阅读天数、每日时长图等可视化
+CREATE TABLE
+  IF NOT EXISTS daily_reading_stats (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    date TEXT NOT NULL,
+    reading_seconds INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (user_id, date),
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+  );
+
 -- 阅读设置表
 CREATE TABLE
   IF NOT EXISTS reading_settings (
@@ -183,3 +213,5 @@ CREATE INDEX IF NOT EXISTS idx_chapters_book_id ON chapters (book_id);
 CREATE INDEX IF NOT EXISTS idx_reading_progress_user_book ON reading_progress (user_id, book_id);
 CREATE INDEX IF NOT EXISTS idx_bookmarks_user_book ON bookmarks (user_id, book_id);
 CREATE INDEX IF NOT EXISTS idx_annotations_user_book ON annotations (user_id, book_id);
+CREATE INDEX IF NOT EXISTS idx_daily_reading_user_date ON daily_reading_stats (user_id, date);
+CREATE INDEX IF NOT EXISTS idx_book_tags_tag_id ON book_tags (tag_id);

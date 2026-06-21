@@ -163,6 +163,7 @@ pub struct Book {
     pub author: Option<String>,
     pub file_path: String,
     pub is_public: bool,
+    pub cover_path: Option<String>,
     pub created_at: String,
 }
 
@@ -192,7 +193,7 @@ pub struct UploadBookResponse {
 }
 
 // 章节响应
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct ChapterResponse {
     pub chapter_id: i64,
     pub title: String,
@@ -249,6 +250,19 @@ pub struct UpdateBookRequest {
     pub title: Option<String>,
     pub author: Option<String>,
     pub is_public: Option<bool>,
+    pub cover_path: Option<String>,
+}
+
+// 设置书籍标签请求
+#[derive(Debug, Deserialize)]
+pub struct SetBookTagsRequest {
+    pub tags: Vec<String>,
+}
+
+// 标签响应
+#[derive(Debug, Serialize)]
+pub struct BookTagsResponse {
+    pub tags: Vec<String>,
 }
 
 // 心跳包请求
@@ -333,6 +347,28 @@ pub struct CreateInviteCodeResponse {
 #[derive(Debug, Serialize)]
 pub struct ListInviteCodesResponse {
     pub invite_codes: Vec<InviteCode>,
+}
+
+// ============ 阅读统计 ============
+
+// 单日阅读统计
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct DailyReadingStat {
+    pub date: String,
+    pub reading_seconds: i64,
+}
+
+// 阅读统计响应
+#[derive(Debug, Serialize)]
+pub struct ReadingStatsResponse {
+    /// 总阅读时长（秒），与 `users.total_reading_time` 一致
+    pub total_reading_seconds: i64,
+    /// 连续阅读天数（含今天或昨天，按最近一次阅读计算）
+    pub current_streak_days: i64,
+    /// 历史最长连续阅读天数
+    pub longest_streak_days: i64,
+    /// 最近 N 天（默认 30）的每日时长，按日期升序
+    pub recent_days: Vec<DailyReadingStat>,
 }
 
 // 用户列表响应

@@ -14,7 +14,7 @@ use crate::{
     },
 };
 
-/// 检查用户对书籍的访问权限（所有者或公开书），失败返回对应 AppError
+/// 检查用户对书籍的访问权限（所有者或公开书），失败返回对应 `AppError`
 async fn check_book_access(
     pool: &Pool<Sqlite>,
     auth: &AuthUser,

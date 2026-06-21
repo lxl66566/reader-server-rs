@@ -837,22 +837,8 @@ async fn test_book_search() {
     let token = register_and_login(&app, "searcher", "password1").await;
 
     upload_test_book(&app, &token, "三体", "刘慈欣\n第一章 科学边界\n...", false).await;
-    upload_test_book(
-        &app,
-        &token,
-        "球状闪电",
-        "刘慈欣\n序章\n...",
-        false,
-    )
-    .await;
-    upload_test_book(
-        &app,
-        &token,
-        "小王子",
-        "圣埃克苏佩里\n...",
-        false,
-    )
-    .await;
+    upload_test_book(&app, &token, "球状闪电", "刘慈欣\n序章\n...", false).await;
+    upload_test_book(&app, &token, "小王子", "圣埃克苏佩里\n...", false).await;
 
     // 按 title 搜
     let resp = make_request(

@@ -36,8 +36,12 @@ pub async fn run_migrations(pool: &Pool<Sqlite>) -> Result<()> {
 // 为测试创建内存数据库连接池
 #[cfg(test)]
 pub async fn create_test_pool() -> Result<Pool<Sqlite>> {
+    use uuid::Uuid;
+
+    // 每个测试使用独立的内存数据库，避免并行测试互相干扰
+    let db_name = format!("file:test_{}?mode=memory&cache=private", Uuid::new_v4());
     let options = SqliteConnectOptions::new()
-        .filename("file::memory:?cache=shared")
+        .filename(&db_name)
         .foreign_keys(true);
 
     let pool = sqlx::sqlite::SqlitePoolOptions::new()

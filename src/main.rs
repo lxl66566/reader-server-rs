@@ -60,8 +60,10 @@ async fn main() -> Result<()> {
 }
 
 /// 初始化 tracing：根据配置选择滚动策略，同时输出到文件和 stderr
-/// 返回的 WorkerGuard 必须由调用方持有到程序退出，确保异步 writer 刷盘
-fn init_tracing(config: &config::Config) -> Result<Option<tracing_appender::non_blocking::WorkerGuard>> {
+/// 返回的 `WorkerGuard` 必须由调用方持有到程序退出，确保异步 writer 刷盘
+fn init_tracing(
+    config: &config::Config,
+) -> Result<Option<tracing_appender::non_blocking::WorkerGuard>> {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| "reader_server_rs=debug,tower_http=debug,axum=debug".into());
 

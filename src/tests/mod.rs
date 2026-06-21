@@ -143,7 +143,10 @@ pub async fn make_multipart_request(
     let mut req_builder = Request::builder()
         .method(Method::POST)
         .uri(uri)
-        .header("Content-Type", format!("multipart/form-data; boundary={boundary}"))
+        .header(
+            "Content-Type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
         .header("X-Forwarded-For", "127.0.0.1");
     if let Some(token) = auth_token {
         req_builder = req_builder.header("Authorization", format!("Bearer {token}"));

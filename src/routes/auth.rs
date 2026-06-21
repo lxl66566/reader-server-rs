@@ -1,6 +1,9 @@
 use axum::{
     Json, Router,
+    body::Body,
     extract::State,
+    http::header,
+    response::Response,
     routing::{delete, get, post},
 };
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
@@ -11,9 +14,9 @@ use crate::{
     config::Config,
     error::{ApiResponse, AppError},
     models::{
-        Admin, AdminAuthResponse, AdminLoginRequest, AdminSetupRequest, AuthResponse,
-        ChangePasswordRequest, CreateUserRequest, DeleteAccountRequest, LoginRequest, User,
-        UserInfoResponse,
+        Admin, AdminAuthResponse, AdminLoginRequest, AdminSetupRequest, Annotation, AuthResponse,
+        Book, Bookmark, ChangePasswordRequest, CreateUserRequest, DeleteAccountRequest,
+        LoginRequest, User, UserInfoResponse,
     },
     utils::{hash_password, verify_password},
 };
@@ -25,10 +28,8 @@ pub fn routes() -> Router<crate::app::AppState> {
         .route("/login", post(login))
         .route("/user_info", get(user_info))
         .route("/change_password", post(change_password))
-        .route(
-            "/account",
-            delete(delete_account),
-        )
+        .route("/account", delete(delete_account))
+        .route("/export", get(export_data))
         .route("/admin/setup", post(admin_setup))
         .route("/admin/login", post(admin_login))
 }
@@ -299,13 +300,13 @@ async fn delete_account(
         return Err(AppError::IncorrectOldPassword);
     }
 
-    // 删除前先取出用户的所有书籍文件路径；外键级联会删 DB 记录，但文件系统需手动清理
-    let book_paths = sqlx::query_scalar::<_, String>(
-        "SELECT file_path FROM books WHERE user_id = ?",
-    )
-    .bind(auth.user_id)
-    .fetch_all(&pool)
-    .await?;
+    // 删除前先取出用户的所有书籍文件路径；外键级联会删 DB
+    // 记录，但文件系统需手动清理
+    let book_paths =
+        sqlx::query_scalar::<_, String>("SELECT file_path FROM books WHERE user_id = ?")
+            .bind(auth.user_id)
+            .fetch_all(&pool)
+            .await?;
 
     // 删除用户记录（books / chapters / reading_progress / bookmarks / annotations
     // / reading_settings 都有 ON DELETE CASCADE，会一并被删）
@@ -325,6 +326,164 @@ async fn delete_account(
     Ok(Json(ApiResponse::<()>::message(
         "Account deleted successfully",
     )))
+}
+
+// 导出当前用户的数据：所有书（原 txt 文件）+ JSON 元数据（书 / 章节 / 进度 /
+// 设置 / 书签 / 批注）。返回 application/zip 流，文件名包含用户名与时间戳。
+async fn export_data(
+    auth: AuthUser,
+    State(pool): State<Pool<Sqlite>>,
+) -> Result<Response, AppError> {
+    use std::io::Write;
+
+    let user: User = sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = ?")
+        .bind(auth.user_id)
+        .fetch_one(&pool)
+        .await?;
+
+    // 拉取所有结构化数据
+    let books: Vec<Book> = sqlx::query_as::<_, Book>("SELECT * FROM books WHERE user_id = ?")
+        .bind(auth.user_id)
+        .fetch_all(&pool)
+        .await?;
+    let book_ids: Vec<i64> = books.iter().map(|b| b.id).collect();
+
+    let settings: Vec<crate::models::ReadingSettings> =
+        sqlx::query_as::<_, crate::models::ReadingSettings>(
+            "SELECT * FROM reading_settings WHERE user_id = ?",
+        )
+        .bind(auth.user_id)
+        .fetch_all(&pool)
+        .await?;
+
+    // 章节按书分组
+    let chapters: Vec<crate::models::ChapterResponse> = if book_ids.is_empty() {
+        Vec::new()
+    } else {
+        // 用动态 IN 查询
+        let mut qb = sqlx::QueryBuilder::new(
+            "SELECT id AS chapter_id, book_id, title, position FROM chapters WHERE book_id IN (",
+        );
+        let mut sep = qb.separated(", ");
+        for id in &book_ids {
+            sep.push_bind(id);
+        }
+        qb.push(")");
+        qb.build_query_as::<crate::models::ChapterResponse>()
+            .fetch_all(&pool)
+            .await?
+    };
+
+    // 书签
+    let bookmarks: Vec<Bookmark> =
+        sqlx::query_as::<_, Bookmark>("SELECT * FROM bookmarks WHERE user_id = ?")
+            .bind(auth.user_id)
+            .fetch_all(&pool)
+            .await?;
+
+    // 批注
+    let annotations: Vec<Annotation> =
+        sqlx::query_as::<_, Annotation>("SELECT * FROM annotations WHERE user_id = ?")
+            .bind(auth.user_id)
+            .fetch_all(&pool)
+            .await?;
+
+    // 进度
+    let progress_rows = sqlx::query!(
+        "SELECT book_id, position, reading_time, last_read_at FROM reading_progress WHERE user_id = ?",
+        auth.user_id
+    )
+    .fetch_all(&pool)
+    .await?;
+    let progress_json: Vec<serde_json::Value> = progress_rows
+        .into_iter()
+        .map(|p| {
+            serde_json::json!({
+                "book_id": p.book_id,
+                "position": p.position,
+                "reading_time": p.reading_time,
+                "last_read_at": p.last_read_at,
+            })
+        })
+        .collect();
+
+    // 元数据 JSON
+    let metadata = serde_json::json!({
+        "user": {
+            "id": user.id,
+            "username": user.username,
+            "created_at": user.created_at,
+            "total_reading_time": user.total_reading_time,
+        },
+        "books": books,
+        "chapters": chapters,
+        "reading_progress": progress_json,
+        "reading_settings": settings,
+        "bookmarks": bookmarks,
+        "annotations": annotations,
+        "exported_at": Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+    });
+    let metadata_bytes =
+        serde_json::to_vec_pretty(&metadata).map_err(|e| AppError::Internal(e.to_string()))?;
+
+    // 在内存里构建 zip：用户的书通常不多，单用户全量导出可控
+    let mut zip_buf: Vec<u8> = Vec::with_capacity(8 * 1024);
+    {
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut zip_buf));
+        let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+
+        zip.start_file("metadata.json", opts)
+            .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
+        zip.write_all(&metadata_bytes)
+            .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
+
+        // 把每本书的源文件加入 zip；文件名加序号前缀防止重名
+        for (idx, b) in books.iter().enumerate() {
+            let path = std::path::Path::new(&b.file_path);
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("txt");
+            // 文件名做基础净化（去掉路径分隔符）
+            let safe_title: String = b
+                .title
+                .chars()
+                .map(|c| match c {
+                    '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+                    other => other,
+                })
+                .collect();
+            let entry = format!("{idx:03}_{safe_title}.{ext}");
+            zip.start_file(entry, opts)
+                .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
+            match tokio::fs::read(&b.file_path).await {
+                Ok(bytes) => {
+                    zip.write_all(&bytes)
+                        .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, file_path = %b.file_path, "skip book file in export");
+                    // 写入一个 README 说明
+                    let note = format!("# 文件读取失败：{e}\n原路径：{}\n", b.file_path);
+                    zip.write_all(note.as_bytes())
+                        .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
+                }
+            }
+        }
+
+        zip.finish()
+            .map_err(|e| AppError::Internal(format!("zip finalize: {e}")))?;
+    }
+
+    let timestamp = Utc::now().format("%Y%m%d_%H%M%S");
+    let filename = format!("{}_{timestamp}.zip", user.username);
+
+    Ok(Response::builder()
+        .header(header::CONTENT_TYPE, "application/zip")
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{filename}\""),
+        )
+        .body(Body::from(zip_buf))
+        .unwrap())
 }
 
 // 管理员首次设置

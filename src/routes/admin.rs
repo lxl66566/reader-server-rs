@@ -1,6 +1,9 @@
 use axum::{
     Json, Router,
+    body::Body,
     extract::{Path, Query, State},
+    http::header,
+    response::Response,
     routing::{get, post},
 };
 use chrono::{SecondsFormat, Utc};
@@ -8,6 +11,7 @@ use sqlx::{Pool, Sqlite};
 
 use crate::{
     auth::AuthAdmin,
+    config::Config,
     error::{ApiResponse, AppError},
     models::{
         AdminListItem, AdminUserListItem, AuditLog, CheckSetupResponse, CreateAdminRequest,
@@ -33,6 +37,7 @@ pub fn routes() -> Router<crate::app::AppState> {
         .route("/users/{user_id}/unban", post(unban_user))
         .route("/admins", get(list_admins).post(create_admin))
         .route("/audit_logs", get(list_audit_logs))
+        .route("/backup", get(backup_global))
 }
 
 /// 记录审计日志
@@ -350,7 +355,15 @@ async fn unban_user(
         // 非封禁状态，幂等返回成功
     }
 
-    log_audit(&pool, &admin, "unban_user", Some("user"), Some(user_id), None).await?;
+    log_audit(
+        &pool,
+        &admin,
+        "unban_user",
+        Some("user"),
+        Some(user_id),
+        None,
+    )
+    .await?;
 
     Ok(Json(ApiResponse::<()>::message("User unbanned")))
 }
@@ -458,4 +471,91 @@ async fn list_audit_logs(
         total,
         logs,
     })))
+}
+
+// 全局备份：把 db 文件 + 全部书籍文件打包成 zip 供下载
+async fn backup_global(
+    admin: AuthAdmin,
+    State(pool): State<Pool<Sqlite>>,
+    State(config): State<Config>,
+) -> Result<Response, AppError> {
+    use std::io::Write;
+
+    // 强制 WAL 落盘，保证备份一致性
+    let _ = sqlx::query("PRAGMA wal_checkpoint(FULL)")
+        .execute(&pool)
+        .await;
+
+    log_audit(&pool, &admin, "backup_global", None, None, None).await?;
+
+    let mut zip_buf: Vec<u8> = Vec::new();
+    {
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut zip_buf));
+        let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+
+        // 写入数据库文件（从配置的 url 解析路径；支持 sqlite: 前缀）
+        let db_url = &config.db.url;
+        let db_path = db_url
+            .trim_start_matches("sqlite:")
+            .trim_start_matches("sqlite://");
+        match tokio::fs::read(db_path).await {
+            Ok(bytes) => {
+                zip.start_file("reader.db", opts)
+                    .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
+                zip.write_all(&bytes)
+                    .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, db = %db_path, "skip db file in global backup");
+            }
+        }
+
+        // 写入 books 目录所有文件
+        let book_dir = &config.storage.book_dir;
+        let mut entries = match tokio::fs::read_dir(book_dir).await {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::warn!(error = %e, dir = %book_dir.display(), "skip book_dir in backup");
+                zip.finish()
+                    .map_err(|e| AppError::Internal(format!("zip finalize: {e}")))?;
+                return finalize_backup(zip_buf);
+            }
+        };
+
+        while let Some(entry) = entries.next_entry().await.map_err(AppError::Io)? {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            let entry_name = format!("books/{name}");
+            if zip.start_file(&entry_name, opts).is_err() {
+                continue;
+            }
+            if let Ok(bytes) = tokio::fs::read(&path).await {
+                let _ = zip.write_all(&bytes);
+            }
+        }
+
+        zip.finish()
+            .map_err(|e| AppError::Internal(format!("zip finalize: {e}")))?;
+    }
+
+    finalize_backup(zip_buf)
+}
+
+fn finalize_backup(zip_buf: Vec<u8>) -> Result<Response, AppError> {
+    let timestamp = Utc::now().format("%Y%m%d_%H%M%S");
+    let filename = format!("reader-backup-{timestamp}.zip");
+    Ok(Response::builder()
+        .header(header::CONTENT_TYPE, "application/zip")
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{filename}\""),
+        )
+        .body(Body::from(zip_buf))
+        .unwrap())
 }

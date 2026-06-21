@@ -2,9 +2,7 @@ use axum::{Router, extract::FromRef, routing::get};
 use sqlx::{Pool, Sqlite};
 use tower::ServiceBuilder;
 use tower_governor::{
-    GovernorLayer,
-    governor::GovernorConfigBuilder,
-    key_extractor::SmartIpKeyExtractor,
+    GovernorLayer, governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor,
 };
 use tower_http::{
     compression::CompressionLayer,
@@ -48,8 +46,8 @@ pub fn create_app(db: Pool<Sqlite>, config: Config) -> Router {
         .allow_methods(Any)
         .allow_headers(Any);
 
-    // 创建限流配置：用 SmartIpKeyExtractor 支持 X-Forwarded-For / x-real-ip / forwarded
-    // 部署时务必保证反代正确设置这些 header（否则会被伪造绕过）
+    // 创建限流配置：用 SmartIpKeyExtractor 支持 X-Forwarded-For / x-real-ip /
+    // forwarded 部署时务必保证反代正确设置这些 header（否则会被伪造绕过）
     let governor_config = GovernorConfigBuilder::default()
         .key_extractor(SmartIpKeyExtractor)
         .per_second(state.config.rate_limit.per_second)
