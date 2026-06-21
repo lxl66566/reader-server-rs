@@ -177,7 +177,7 @@ async fn update_reading_settings(
     }
 
     if first {
-        return Ok(Json(ApiResponse::<()>::message("无更新内容")));
+        return Ok(Json(ApiResponse::<()>::message("No updates")));
     }
 
     query_builder
@@ -185,7 +185,7 @@ async fn update_reading_settings(
         .push_bind(auth.user_id);
     query_builder.build().execute(&pool).await?;
 
-    Ok(Json(ApiResponse::<()>::message("更新成功")))
+    Ok(Json(ApiResponse::<()>::message("Settings updated")))
 }
 
 // 处理心跳包
@@ -194,6 +194,11 @@ async fn process_heartbeat(
     State(pool): State<Pool<Sqlite>>,
     Json(req): Json<HeartbeatRequest>,
 ) -> Result<Json<ApiResponse<HeartbeatResponse>>, AppError> {
+    // 校验 position 非负
+    if req.position < 0 {
+        return Err(AppError::InvalidPosition);
+    }
+
     // 检查书籍是否存在
     let book = sqlx::query!(
         "SELECT user_id, is_public FROM books WHERE id = ?",
@@ -263,35 +268,62 @@ async fn process_heartbeat(
         })));
     }
 
-    // 计算阅读时间增量
+    // 计算阅读时间增量；解析失败时跳过（不累加），避免 panic
     let mut reading_time_increment = 0;
-
-    if let Some(last_time) = last_read_at {
-        let duration = now.signed_duration_since(last_time.parse::<DateTime<Utc>>().unwrap());
-        let seconds = duration.num_seconds();
-
-        // 如果时间间隔在合理范围内（例如，少于30秒），计为阅读时间
-        if seconds > 0 && seconds < 30 {
-            reading_time_increment = seconds;
+    if let Some(last_time) = last_read_at.as_deref() {
+        if let Ok(last_dt) = last_time.parse::<DateTime<Utc>>() {
+            let seconds = now.signed_duration_since(last_dt).num_seconds();
+            // 时间间隔在合理范围内（少于 30 秒），计为阅读时间
+            if seconds > 0 && seconds < 30 {
+                reading_time_increment = seconds;
+            }
         }
     }
 
-    // 更新阅读进度
-    let new_reading_time = progress.reading_time + reading_time_increment;
+    // 使用乐观锁更新阅读进度：WHERE 条件包含 last_read_at 原始值，
+    // 若在此期间被其他并发心跳修改，rows_affected == 0。
+    // 使用 reading_time = reading_time + ? 确保原子累加。
+    let mut qb = sqlx::QueryBuilder::new("UPDATE reading_progress SET position = ");
+    qb.push_bind(req.position);
+    qb.push(", reading_time = reading_time + ");
+    qb.push_bind(reading_time_increment);
+    qb.push(", last_read_at = ");
+    qb.push_bind(&now_str);
+    qb.push(", last_device_id = ");
+    qb.push_bind(&current_device_id);
+    qb.push(" WHERE user_id = ");
+    qb.push_bind(auth.user_id);
+    qb.push(" AND book_id = ");
+    qb.push_bind(req.book_id);
+    qb.push(" AND ");
+    match &last_read_at {
+        Some(t) => {
+            qb.push("last_read_at = ");
+            qb.push_bind(t);
+        }
+        None => {
+            qb.push("last_read_at IS NULL");
+        }
+    }
 
-    sqlx::query!(
-        "UPDATE reading_progress 
-         SET position = ?, reading_time = ?, last_read_at = ?, last_device_id = ? 
-         WHERE user_id = ? AND book_id = ?",
-        req.position,
-        new_reading_time,
-        now,
-        current_device_id,
-        auth.user_id,
-        req.book_id
-    )
-    .execute(&pool)
-    .await?;
+    let result = qb.build().execute(&pool).await?;
+
+    // 乐观锁竞争失败：并发请求已抢先更新，返回当前最新进度（设备相同 → synced=true）
+    if result.rows_affected() == 0 {
+        let current = sqlx::query!(
+            "SELECT position, reading_time FROM reading_progress WHERE user_id = ? AND book_id = ?",
+            auth.user_id,
+            req.book_id
+        )
+        .fetch_one(&pool)
+        .await?;
+
+        return Ok(Json(ApiResponse::success(HeartbeatResponse {
+            synced: true,
+            position: current.position,
+            reading_time: current.reading_time,
+        })));
+    }
 
     // 更新用户总阅读时间
     if reading_time_increment > 0 {
@@ -305,6 +337,8 @@ async fn process_heartbeat(
         .execute(&pool)
         .await?;
     }
+
+    let new_reading_time = progress.reading_time + reading_time_increment;
 
     // 返回同步状态和最新阅读时间
     Ok(Json(ApiResponse::success(HeartbeatResponse {

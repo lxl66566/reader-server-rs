@@ -9,19 +9,41 @@ CREATE TABLE
         '%Y-%m-%dT%H:%M:%S.' || substr (strftime ('%f'), 4, 6) || 'Z'
       )
     ),
-    total_reading_time INTEGER NOT NULL DEFAULT 0
+    total_reading_time INTEGER NOT NULL DEFAULT 0,
+    token_version INTEGER NOT NULL DEFAULT 0,
+    failed_login_attempts INTEGER NOT NULL DEFAULT 0,
+    locked_until TEXT
   );
 
 -- 管理员表
 CREATE TABLE
   IF NOT EXISTS admin (
     id INTEGER PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (
       strftime (
         '%Y-%m-%dT%H:%M:%S.' || substr (strftime ('%f'), 4, 6) || 'Z'
       )
     )
+  );
+
+-- 审计日志表
+CREATE TABLE
+  IF NOT EXISTS audit_logs (
+    id INTEGER PRIMARY KEY,
+    admin_id INTEGER NOT NULL,
+    admin_username TEXT NOT NULL,
+    action TEXT NOT NULL,
+    target_type TEXT,
+    target_id INTEGER,
+    detail TEXT,
+    created_at TEXT NOT NULL DEFAULT (
+      strftime (
+        '%Y-%m-%dT%H:%M:%S.' || substr (strftime ('%f'), 4, 6) || 'Z'
+      )
+    ),
+    FOREIGN KEY (admin_id) REFERENCES admin (id) ON DELETE CASCADE
   );
 
 -- 系统设置表

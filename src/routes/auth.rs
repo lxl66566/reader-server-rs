@@ -3,6 +3,7 @@ use axum::{
     extract::State,
     routing::{get, post},
 };
+use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use sqlx::{Pool, Sqlite};
 
 use crate::{
@@ -10,8 +11,8 @@ use crate::{
     config::Config,
     error::{ApiResponse, AppError},
     models::{
-        Admin, AdminSetupRequest, ChangePasswordRequest, CreateUserRequest, LoginRequest, User,
-        UserInfoResponse,
+        Admin, AdminLoginRequest, AdminSetupRequest, ChangePasswordRequest, CreateUserRequest,
+        LoginRequest, User, UserInfoResponse,
     },
     utils::{hash_password, verify_password},
 };
@@ -33,8 +34,9 @@ async fn register(
     State(config): State<Config>,
     Json(req): Json<CreateUserRequest>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
-    // 验证用户名格式
-    if req.username.len() < 2 || req.username.len() > 20 {
+    // 验证用户名格式（按字符数计，支持中英文混排）
+    let username_len = req.username.chars().count();
+    if !(2..=20).contains(&username_len) {
         return Err(AppError::UsernameLengthInvalid);
     }
 
@@ -116,8 +118,8 @@ async fn register(
         .execute(&pool)
         .await?;
 
-    // 生成JWT令牌
-    let claims = Claims::new_user(user_id, &config);
+    // 生成JWT令牌（新用户 token_version 默认为 0）
+    let claims = Claims::new_user(user_id, 0, &config);
     let token = create_token(&claims, &config)?;
 
     // 返回用户信息和令牌
@@ -127,6 +129,11 @@ async fn register(
         "token": token
     }))))
 }
+
+// 最大登录失败次数，超过后锁定账户
+const MAX_FAILED_ATTEMPTS: i64 = 5;
+// 锁定时长（秒）
+const LOCK_DURATION_SECS: i64 = 15 * 60;
 
 // 用户登录
 async fn login(
@@ -141,13 +148,53 @@ async fn login(
         .await?
         .ok_or_else(|| AppError::InvalidCredentials)?;
 
+    // 检查账户是否被锁定
+    if let Some(ref locked_until) = user.locked_until
+        && let Ok(dt) = locked_until.parse::<DateTime<Utc>>()
+        && dt > Utc::now()
+    {
+        return Err(AppError::UserLockedOut);
+    }
+
     // 验证密码
     if !verify_password(&req.password, &user.password_hash)? {
+        // 登录失败：增加失败计数，达到阈值时锁定
+        let new_attempts = user.failed_login_attempts + 1;
+        if new_attempts >= MAX_FAILED_ATTEMPTS {
+            let locked_until = Utc::now() + Duration::seconds(LOCK_DURATION_SECS);
+            let locked_until_str = locked_until.to_rfc3339_opts(SecondsFormat::Millis, true);
+            sqlx::query!(
+                "UPDATE users SET failed_login_attempts = ?, locked_until = ? WHERE id = ?",
+                new_attempts,
+                locked_until_str,
+                user.id
+            )
+            .execute(&pool)
+            .await?;
+        } else {
+            sqlx::query!(
+                "UPDATE users SET failed_login_attempts = ? WHERE id = ?",
+                new_attempts,
+                user.id
+            )
+            .execute(&pool)
+            .await?;
+        }
         return Err(AppError::InvalidCredentials);
     }
 
+    // 登录成功：重置失败计数
+    if user.failed_login_attempts > 0 || user.locked_until.is_some() {
+        sqlx::query!(
+            "UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?",
+            user.id
+        )
+        .execute(&pool)
+        .await?;
+    }
+
     // 生成JWT令牌
-    let claims = Claims::new_user(user.id, &config);
+    let claims = Claims::new_user(user.id, user.token_version, &config);
     let token = create_token(&claims, &config)?;
 
     // 返回用户信息和令牌
@@ -202,7 +249,7 @@ async fn change_password(
     }
 
     // 验证新密码
-    if req.new_password.len() < 6 {
+    if req.new_password.chars().count() < 6 {
         return Err(AppError::PasswordTooShort);
     }
 
@@ -219,21 +266,27 @@ async fn change_password(
     .await?;
 
     // 返回成功信息
-    Ok(Json(ApiResponse::<()>::message("密码修改成功")))
+    Ok(Json(ApiResponse::<()>::message("Password changed successfully")))
 }
 
-// 管理员首次设置密码
+// 管理员首次设置
 async fn admin_setup(
     State(pool): State<Pool<Sqlite>>,
     State(config): State<Config>,
     Json(req): Json<AdminSetupRequest>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+    // 验证用户名格式
+    let username_len = req.username.chars().count();
+    if !(2..=20).contains(&username_len) {
+        return Err(AppError::UsernameLengthInvalid);
+    }
+
     // 验证密码格式
-    if req.password.len() < 6 {
+    if req.password.chars().count() < 6 {
         return Err(AppError::PasswordTooShort);
     }
 
-    // 检查是否已有管理员
+    // 检查是否已有管理员（初始管理员只能设置一次）
     let admin_exists = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM admin)")
         .fetch_one(&pool)
         .await?;
@@ -242,12 +295,23 @@ async fn admin_setup(
         return Err(AppError::AdminAlreadySetup);
     }
 
+    // 检查用户名唯一
+    let username_exists =
+        sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM admin WHERE username = ?)")
+            .bind(&req.username)
+            .fetch_one(&pool)
+            .await?;
+    if username_exists {
+        return Err(AppError::AdminUsernameAlreadyExists);
+    }
+
     // 哈希密码
     let password_hash = hash_password(&req.password)?;
 
     // 创建管理员
     let admin_id = sqlx::query!(
-        "INSERT INTO admin (password_hash) VALUES (?)",
+        "INSERT INTO admin (username, password_hash) VALUES (?, ?)",
+        req.username,
         password_hash
     )
     .execute(&pool)
@@ -258,17 +322,6 @@ async fn admin_setup(
     sqlx::query!("INSERT OR IGNORE INTO settings (id, invite_code_required) VALUES (1, 1)")
         .execute(&pool)
         .await?;
-
-    // 不创建初始邀请码
-    // let invite_code = generate_invite_code();
-    // sqlx::query!(
-    //     "INSERT INTO invite_codes (code, limit_times, description) VALUES (?, ?,
-    // ?)",     invite_code,
-    //     10,
-    //     "初始邀请码"
-    // )
-    // .execute(&pool)
-    // .await?;
 
     // 生成JWT令牌
     let claims = Claims::new_admin(admin_id, &config);
@@ -284,13 +337,14 @@ async fn admin_setup(
 async fn admin_login(
     State(pool): State<Pool<Sqlite>>,
     State(config): State<Config>,
-    Json(req): Json<AdminSetupRequest>,
+    Json(req): Json<AdminLoginRequest>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
     // 查找管理员
-    let admin = sqlx::query_as::<_, Admin>("SELECT * FROM admin LIMIT 1")
+    let admin = sqlx::query_as::<_, Admin>("SELECT * FROM admin WHERE username = ?")
+        .bind(&req.username)
         .fetch_optional(&pool)
         .await?
-        .ok_or_else(|| AppError::AdminNotSetup)?;
+        .ok_or_else(|| AppError::InvalidCredentials)?;
 
     // 验证密码
     if !verify_password(&req.password, &admin.password_hash)? {

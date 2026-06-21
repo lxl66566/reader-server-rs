@@ -74,7 +74,6 @@ async fn upload_book(
     let mut author = None;
     let mut is_public = false;
     let mut file_content = None;
-    let mut file_name = None;
 
     while let Some(field) = multipart
         .next_field()
@@ -103,7 +102,6 @@ async fn upload_book(
                 is_public = value == "true" || value == "1";
             }
             "file" => {
-                file_name = field.file_name().map(std::string::ToString::to_string);
                 file_content =
                     Some(field.bytes().await.map_err(|e| {
                         AppError::FieldReadError("file".to_string(), e.to_string())
@@ -117,84 +115,101 @@ async fn upload_book(
     let title = title.ok_or_else(|| AppError::TitleEmpty)?;
     let file_content = file_content.ok_or_else(|| AppError::FileEmpty)?;
 
-    // 验证文件大小
-    if file_content.len() > 10 * 1024 * 1024 {
+    // 验证文件大小（从配置读取上限）
+    if file_content.len() > config.storage.max_file_size {
         return Err(AppError::FileTooLarge);
     }
 
-    let file_ext = file_name.and_then(|n| {
-        std::path::Path::new(&n)
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(str::to_lowercase)
-    });
-
-    let (content, chapters, file_ext_str) = if file_ext.as_deref() == Some("txt") {
-        let text =
-            String::from_utf8(file_content.to_vec()).map_err(|_| AppError::FileInvalidUtf8)?;
-        let chs = extract_chapters(&text);
-        (text, chs, "txt")
-    } else if file_ext.as_deref() == Some("epub") {
-        let result = parse_epub(&file_content)?;
-        let ext = "txt";
-        (result.text_content, result.chapters, ext)
+    // 基于文件内容（magic bytes）检测类型，不依赖客户端扩展名
+    let (content, chapters, file_ext_str) = if let Some(kind) = infer::get(&file_content) {
+        match kind.mime_type() {
+            "application/epub+zip" => {
+                let result = parse_epub(&file_content)?;
+                (result.text_content, result.chapters, "txt")
+            }
+            // 其他已知二进制格式（exe、pdf 等）一律拒绝
+            _ => return Err(AppError::UnsupportedFileFormat),
+        }
     } else {
-        return Err(AppError::UnsupportedFileFormat);
+        // infer 无法识别（通常是纯文本）：尝试 UTF-8 解码
+        match std::str::from_utf8(&file_content) {
+            Ok(s) => {
+                let text = s.to_string();
+                let chs = extract_chapters(&text);
+                (text, chs, "txt")
+            }
+            Err(_) => return Err(AppError::FileInvalidUtf8),
+        }
     };
 
     // 生成唯一文件名
     let file_id = generate_uuid();
     let file_path =
         PathBuf::from(&config.storage.book_dir).join(format!("{file_id}.{file_ext_str}"));
-    let file_path_string = file_path.to_string_lossy();
+    let file_path_string = file_path.to_string_lossy().into_owned();
 
-    // 保存文件
+    // 先写入文件
     let mut file = fs::File::create(&file_path).await.map_err(AppError::Io)?;
     file.write_all(content.as_bytes())
         .await
         .map_err(AppError::Io)?;
+    drop(file); // 确保文件句柄关闭
 
-    // 将书籍信息保存到数据库
-    let book_id = sqlx::query!(
-        "INSERT INTO books (user_id, title, author, file_path, is_public) VALUES (?, ?, ?, ?, ?)",
-        auth.user_id,
-        title,
-        author,
-        file_path_string,
-        is_public
-    )
-    .execute(&pool)
-    .await?
-    .last_insert_rowid();
-
-    // 保存章节信息
-    let mut chapter_responses = Vec::new();
-    for (chapter_title, position) in chapters {
-        let chapter_id = sqlx::query!(
-            "INSERT INTO chapters (book_id, title, position) VALUES (?, ?, ?)",
-            book_id,
-            chapter_title,
-            position
+    // 将书籍信息和章节写入数据库；失败时清理已写入的文件，避免孤儿文件
+    let db_result: Result<(i64, Vec<ChapterResponse>), AppError> = async {
+        let book_id = sqlx::query!(
+            "INSERT INTO books (user_id, title, author, file_path, is_public) VALUES (?, ?, ?, ?, ?)",
+            auth.user_id,
+            title,
+            author,
+            file_path_string,
+            is_public
         )
         .execute(&pool)
         .await?
         .last_insert_rowid();
 
-        chapter_responses.push(ChapterResponse {
-            chapter_id,
-            title: chapter_title,
-            position,
-        });
-    }
+        // 保存章节信息
+        let mut chapter_responses = Vec::with_capacity(chapters.len());
+        for (chapter_title, position) in chapters {
+            let chapter_id = sqlx::query!(
+                "INSERT INTO chapters (book_id, title, position) VALUES (?, ?, ?)",
+                book_id,
+                chapter_title,
+                position
+            )
+            .execute(&pool)
+            .await?
+            .last_insert_rowid();
 
-    // 创建初始阅读进度
-    sqlx::query!(
-        "INSERT INTO reading_progress (user_id, book_id) VALUES (?, ?)",
-        auth.user_id,
-        book_id
-    )
-    .execute(&pool)
-    .await?;
+            chapter_responses.push(ChapterResponse {
+                chapter_id,
+                title: chapter_title,
+                position,
+            });
+        }
+
+        // 创建初始阅读进度
+        sqlx::query!(
+            "INSERT INTO reading_progress (user_id, book_id) VALUES (?, ?)",
+            auth.user_id,
+            book_id
+        )
+        .execute(&pool)
+        .await?;
+
+        Ok((book_id, chapter_responses))
+    }
+    .await;
+
+    let (book_id, chapter_responses) = match db_result {
+        Ok(v) => v,
+        Err(e) => {
+            // 清理已写入的文件
+            let _ = fs::remove_file(&file_path).await;
+            return Err(e);
+        }
+    };
 
     // 返回响应
     let response = UploadBookResponse {
@@ -394,13 +409,13 @@ async fn update_book(
     }
 
     if first {
-        return Ok(Json(ApiResponse::<()>::message("无更新内容")));
+        return Ok(Json(ApiResponse::<()>::message("No updates")));
     }
 
     query_builder.push(" WHERE id = ").push_bind(book_id);
     query_builder.build().execute(&pool).await?;
 
-    Ok(Json(ApiResponse::<()>::message("更新成功")))
+    Ok(Json(ApiResponse::<()>::message("Update successful")))
 }
 
 // 删除书籍
@@ -410,10 +425,8 @@ async fn delete_book(
     State(_config): State<Config>,
     Path(book_id): Path<i64>,
 ) -> Result<Json<ApiResponse<()>>, AppError> {
-    // 开始事务
+    // 在事务内查询书籍信息并验证权限
     let mut tx = pool.begin().await?;
-
-    // 检查书籍是否存在并属于当前用户
     let book = sqlx::query!("SELECT user_id, file_path FROM books WHERE id = ?", book_id)
         .fetch_optional(&mut *tx)
         .await?
@@ -424,22 +437,23 @@ async fn delete_book(
         return Err(AppError::BookDeleteDenied);
     }
 
-    // 删除书籍文件
     let file_path = book.file_path;
-    if PathBuf::from(&file_path).exists() {
-        fs::remove_file(&file_path).await.map_err(AppError::Io)?;
-    }
 
-    // 删除数据库中的书籍记录
-    // 注意：由于设置了外键约束，章节和阅读进度会自动删除
+    // 先删除数据库记录（外键约束会级联删除章节和阅读进度）
     sqlx::query!("DELETE FROM books WHERE id = ?", book_id)
         .execute(&mut *tx)
         .await?;
-
-    // 提交事务
     tx.commit().await?;
 
-    Ok(Json(ApiResponse::<()>::message("删除成功")))
+    // DB 删除成功后再删文件；文件删除失败只记日志，不影响响应。
+    // 孤儿文件比"DB 记录存在但文件丢失"更安全。
+    if PathBuf::from(&file_path).exists() {
+        if let Err(e) = fs::remove_file(&file_path).await {
+            tracing::warn!(error = %e, file_path = %file_path, "Failed to delete book file");
+        }
+    }
+
+    Ok(Json(ApiResponse::<()>::message("Deleted successfully")))
 }
 
 // 获取书籍内容
@@ -507,6 +521,11 @@ async fn jump_to_chapter(
     Path(book_id): Path<i64>,
     Query(params): Query<JumpToChapterParams>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+    // 校验 chapter_id 有效
+    if params.chapter_id <= 0 {
+        return Err(AppError::ChapterNotFound);
+    }
+
     // 查询书籍信息
     let book = sqlx::query!("SELECT user_id, is_public FROM books WHERE id = ?", book_id)
         .fetch_optional(&pool)

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use tokio::fs;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -27,6 +28,8 @@ pub struct DbConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageConfig {
     pub book_dir: PathBuf,
+    /// 上传文件大小上限（字节）
+    pub max_file_size: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,9 +52,10 @@ impl Default for Config {
             },
             storage: StorageConfig {
                 book_dir: PathBuf::from("books"),
+                max_file_size: 10 * 1024 * 1024, // 10MB
             },
             jwt: JwtConfig {
-                secret: "super_secret_key_change_me_in_production".to_string(),
+                secret: String::new(), // load_config 首次运行时会生成随机值
                 expiration: 60 * 60 * 24 * 30,      // 30天
                 admin_expiration: 60 * 60 * 24 * 7, // 7天
             },
@@ -59,20 +63,34 @@ impl Default for Config {
     }
 }
 
+/// 旧版硬编码的默认 secret，用于检测未修改的配置
+const LEGACY_DEFAULT_SECRET: &str = "super_secret_key_change_me_in_production";
+
 pub async fn load_config() -> Result<Config> {
-    // 配置文件路径
     let config_path = PathBuf::from("config.json");
 
-    // 如果配置文件存在，从文件加载配置
     if config_path.exists() {
-        let config_str = fs::read_to_string(config_path).await?;
+        let config_str = fs::read_to_string(&config_path).await?;
         let config: Config = serde_json::from_str(&config_str)?;
+
+        // 强制要求用户设置非空、非默认值的 JWT secret
+        if config.jwt.secret.is_empty() || config.jwt.secret == LEGACY_DEFAULT_SECRET {
+            anyhow::bail!(
+                "JWT secret in config.json must be a non-empty, non-default value. \
+                 Please generate a random secret and update config.json."
+            );
+        }
+
         Ok(config)
     } else {
-        // 否则使用默认配置，并写入配置文件
-        let config = Config::default();
+        // 首次运行：生成随机 secret 并写入 config.json
+        let mut config = Config::default();
+        config.jwt.secret = Uuid::new_v4().to_string();
+
         let config_str = serde_json::to_string_pretty(&config)?;
-        fs::write(config_path, config_str).await?;
+        fs::write(&config_path, config_str).await?;
+
+        tracing::info!("Generated config.json with a random JWT secret");
         Ok(config)
     }
 }

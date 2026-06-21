@@ -41,7 +41,10 @@ pub async fn setup_test_app() -> Result<(Router, Pool<Sqlite>)> {
             url: "sqlite::memory:".to_string(),
             max_connections: 5,
         },
-        storage: crate::config::StorageConfig { book_dir },
+        storage: crate::config::StorageConfig {
+            book_dir,
+            max_file_size: 10 * 1024 * 1024,
+        },
         jwt: crate::config::JwtConfig {
             secret: "test_secret_key".to_string(),
             expiration: 3600,
@@ -144,7 +147,7 @@ pub async fn setup_admin(app: &Router) -> (String, serde_json::Value) {
         app,
         Method::POST,
         "/api/auth/admin/setup",
-        &serde_json::json!({"password": "admin123"}),
+        &serde_json::json!({"username": "admin", "password": "admin123"}),
         None,
     )
     .await;

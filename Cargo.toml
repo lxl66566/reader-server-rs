@@ -1,7 +1,8 @@
 [package]
-edition = "2024"
-name    = "reader-server-rs"
-version = "0.1.0"
+edition      = "2024"
+name         = "reader-server-rs"
+rust-version = "1.85"
+version      = "0.1.0"
 
 [dependencies]
 anyhow             = "1.0"
@@ -14,6 +15,7 @@ color-eyre         = "0.6"
 epub               = "2.0"
 fancy-regex        = "0.18"
 http-body-util     = "0.1.3"
+infer              = "0.16"
 jsonwebtoken       = { version = "10.3", features = ["rust_crypto"] }
 rand               = "0.10"
 regex              = "1.12"

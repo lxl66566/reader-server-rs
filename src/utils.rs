@@ -1,6 +1,5 @@
 use std::sync::LazyLock;
 
-use anyhow::Result;
 use argon2::{Argon2, PasswordHasher as _, password_hash::SaltString};
 use fancy_regex::Regex;
 use rand::RngExt;
@@ -24,28 +23,25 @@ pub fn generate_invite_code() -> String {
     const CODE_LEN: usize = 8;
 
     let mut rng = rand::rng();
-    let code: String = (0..CODE_LEN)
+    (0..CODE_LEN)
         .map(|_| {
             let idx = rng.random_range(0..CHARSET.len());
             CHARSET[idx] as char
         })
-        .collect();
-
-    code
+        .collect()
 }
 
 // 哈希密码
 pub fn hash_password(password: &str) -> Result<String, AppError> {
-    // 1. 使用 rand 0.10 的 API 独立生成 16 字节的随机数组。
-    // rand::random() 会隐式调用底层的加密安全的随机数生成器（在 0.10 中为
-    // thread-local ChaCha12）
-    let salt_bytes: [u8; 16] = rand::random();
+    let mut rng = rand::rng();
+    // 生成 16 字节的随机 salt（使用 thread-local ChaCha12 RNG）
+    let salt_bytes: [u8; 16] = rng.random();
 
-    // 2. 将随机字节数组手动编码为 Base64 格式的 SaltString，完美绕过 Trait 冲突
+    // 将随机字节数组编码为 Base64 格式的 SaltString
     let salt = SaltString::encode_b64(&salt_bytes)
         .map_err(|e| AppError::Internal(format!("Salt encoding failed: {e}")))?;
 
-    // 3. 执行 Argon2 哈希（默认使用推荐的 Argon2id 变体）
+    // 执行 Argon2 哈希（默认使用推荐的 Argon2id 变体）
     let argon2 = Argon2::default();
 
     argon2

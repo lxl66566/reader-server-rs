@@ -29,6 +29,25 @@ pub async fn init_db_pool(config: &Config) -> Result<Pool<Sqlite>> {
 pub async fn run_migrations(pool: &Pool<Sqlite>) -> Result<()> {
     let sql = include_str!("../schema.sql");
     sqlx::raw_sql(sql).execute(pool).await?;
+    run_compat_migrations(pool).await?;
+    Ok(())
+}
+
+/// 兼容性迁移：为旧版数据库（schema.sql 变更前创建）补充新增列。
+/// 新建数据库的 CREATE TABLE 已包含这些列，ALTER TABLE 会失败（duplicate column），忽略即可。
+async fn run_compat_migrations(pool: &Pool<Sqlite>) -> Result<()> {
+    for stmt in [
+        "ALTER TABLE admin ADD COLUMN username TEXT",
+        "ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN failed_login_attempts INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN locked_until TEXT",
+    ] {
+        let _ = sqlx::query(stmt).execute(pool).await;
+    }
+    // 旧 admin 表没有 username，设默认值
+    let _ = sqlx::query("UPDATE admin SET username = 'admin' WHERE username IS NULL")
+        .execute(pool)
+        .await;
     Ok(())
 }
 

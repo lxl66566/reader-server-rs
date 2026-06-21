@@ -54,7 +54,7 @@ async fn test_full_integration() {
         &app,
         Method::POST,
         "/api/auth/admin/setup",
-        &serde_json::json!({"password": "another"}),
+        &serde_json::json!({"username": "another", "password": "another"}),
         None,
     )
     .await;
@@ -638,12 +638,13 @@ async fn test_full_integration() {
     .await;
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 
-    // I5: invalid file format
+    // I5: invalid file format (上传真正的二进制文件，非 txt/epub)
+    let exe_bytes: &[u8] = &[0x4D, 0x5A, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00]; // MZ = Windows EXE
     let resp = make_multipart_request(
         &app,
         "/api/books/upload",
         vec![("title", "bad file"), ("is_public", "true")],
-        Some(("file", "test.pdf", b"not a real pdf".as_slice())),
+        Some(("file", "test.exe", exe_bytes)),
         Some(&token1),
     )
     .await;
@@ -675,7 +676,7 @@ async fn login_as_admin(app: &axum::Router) -> axum::response::Response {
         app,
         Method::POST,
         "/api/auth/admin/login",
-        &serde_json::json!({"password": "admin123"}),
+        &serde_json::json!({"username": "admin", "password": "admin123"}),
         None,
     )
     .await

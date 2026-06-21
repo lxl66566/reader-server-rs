@@ -30,11 +30,17 @@ pub enum AppError {
     #[allow(dead_code)]
     TokenExpiredOrInvalid,
 
-    #[error("Admin not set up")]
-    AdminNotSetup,
-
     #[error("Incorrect admin password")]
     IncorrectAdminPassword,
+
+    #[error("Account temporarily locked due to too many failed login attempts")]
+    UserLockedOut,
+
+    #[error("Admin not found")]
+    AdminNotFound,
+
+    #[error("Admin username already exists")]
+    AdminUsernameAlreadyExists,
 
     #[error("Access denied to this book")]
     BookAccessDenied,
@@ -78,6 +84,9 @@ pub enum AppError {
     #[error("Invalid invite code")]
     InviteCodeInvalid,
 
+    #[error("Invite code limit must be greater than 0")]
+    InviteCodeLimitInvalid,
+
     #[error("Username already exists")]
     UsernameAlreadyExists,
 
@@ -101,6 +110,9 @@ pub enum AppError {
 
     #[error("Position exceeds content range")]
     PositionExceedsRange,
+
+    #[error("Position must not be negative")]
+    InvalidPosition,
 
     #[error("Failed to parse form data: {0}")]
     FormParseError(String),
@@ -136,17 +148,18 @@ impl IntoResponse for AppError {
             | AppError::AdminTokenNotProvided
             | AppError::InvalidAdminId
             | AppError::TokenExpiredOrInvalid
-            | AppError::AdminNotSetup
-            | AppError::IncorrectAdminPassword => StatusCode::UNAUTHORIZED,
+            | AppError::IncorrectAdminPassword
+            | AppError::UserLockedOut => StatusCode::UNAUTHORIZED,
 
             AppError::BookAccessDenied
             | AppError::BookModifyDenied
             | AppError::BookDeleteDenied
             | AppError::AdminPermissionRequired => StatusCode::FORBIDDEN,
 
-            AppError::BookNotFound | AppError::UserNotFound | AppError::ChapterNotFound => {
-                StatusCode::NOT_FOUND
-            }
+            AppError::BookNotFound
+            | AppError::UserNotFound
+            | AppError::ChapterNotFound
+            | AppError::AdminNotFound => StatusCode::NOT_FOUND,
 
             AppError::UsernameLengthInvalid
             | AppError::PasswordEmpty
@@ -155,7 +168,9 @@ impl IntoResponse for AppError {
             | AppError::InviteCodeRequired
             | AppError::InviteCodeExhausted
             | AppError::InviteCodeInvalid
+            | AppError::InviteCodeLimitInvalid
             | AppError::UsernameAlreadyExists
+            | AppError::AdminUsernameAlreadyExists
             | AppError::AdminAlreadySetup
             | AppError::TitleEmpty
             | AppError::FileEmpty
@@ -163,6 +178,7 @@ impl IntoResponse for AppError {
             | AppError::FileInvalidUtf8
             | AppError::UnsupportedFileFormat
             | AppError::PositionExceedsRange
+            | AppError::InvalidPosition
             | AppError::FormParseError(_)
             | AppError::FieldReadError(_, _) => StatusCode::BAD_REQUEST,
 
@@ -171,15 +187,22 @@ impl IntoResponse for AppError {
             }
         };
 
-        if matches!(status, StatusCode::INTERNAL_SERVER_ERROR) {
-            tracing::error!("Internal server error: {:?}", self);
-        }
+        // 对内部错误（数据库/JWT/IO/Internal）记录详细日志，但只向客户端返回固定文案，
+        // 避免泄露 SQL 错误、文件路径等敏感信息。
+        let message = if let AppError::Database(_)
+        | AppError::Jwt(_)
+        | AppError::Io(_)
+        | AppError::Internal(_) = &self
+        {
+            tracing::error!(error = ?self, "Internal server error");
+            "Internal server error".to_string()
+        } else {
+            self.to_string()
+        };
 
         (
             status,
-            Json(ErrorResponse {
-                message: self.to_string(),
-            }),
+            Json(ErrorResponse { message }),
         )
             .into_response()
     }
@@ -203,7 +226,7 @@ impl<T: Serialize> ApiResponse<T> {
     pub fn success(data: T) -> Self {
         Self {
             code: 0,
-            message: "成功".to_string(),
+            message: "success".to_string(),
             data: Some(data),
         }
     }
