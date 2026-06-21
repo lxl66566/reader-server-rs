@@ -3,7 +3,12 @@
 use std::process; // For panic
 use std::{env, fs, path::PathBuf};
 
-// build.rs runs in a sync context, so we need a runtime to run sqlx async functions
+/// 编译期嵌入 schema.sql 获得 &'static str，以满足 sqlx Execute trait 的
+/// 'static 约束
+const SCHEMA_SQL: &str = include_str!("schema.sql");
+
+// build.rs runs in a sync context, so we need a runtime to run sqlx async
+// functions
 use fuck_backslash::FuckBackslash;
 use path_absolutize::Absolutize;
 // We need the execute trait from sqlx prelude
@@ -55,14 +60,6 @@ async fn setup_schema_db() -> Result<(), Box<dyn std::error::Error>> {
             schema_path.display()
         );
 
-        if !schema_path.exists() {
-            // Use panic! in build scripts for fatal errors that should stop the build
-            panic!("schema.sql not found at {}", schema_path.display());
-        }
-
-        // Read schema.sql
-        let schema_sql = fs::read_to_string(&schema_path)?;
-
         // Connect using sqlx (this will create the file due to mode=rwc)
         let mut conn = match SqliteConnection::connect(&db_url_for_creation).await {
             Ok(c) => c,
@@ -75,9 +72,9 @@ async fn setup_schema_db() -> Result<(), Box<dyn std::error::Error>> {
             }
         };
 
-        // Execute the schema script
-        match conn.execute(&*schema_sql).await {
-            // Pass schema_sql as &str
+        // Execute the schema script (SCHEMA_SQL is &'static str from include_str!,
+        // satisfying sqlx's 'static bound)
+        match conn.execute(SCHEMA_SQL).await {
             Ok(_) => {
                 println!(
                     "cargo:warning=Successfully created and initialized schema DB: {}",
@@ -95,7 +92,7 @@ async fn setup_schema_db() -> Result<(), Box<dyn std::error::Error>> {
                     "Failed to execute schema SQL from {}: {}\nSQL:\n{}",
                     schema_path.display(),
                     e,
-                    schema_sql
+                    SCHEMA_SQL
                 );
             }
         };

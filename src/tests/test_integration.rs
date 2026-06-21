@@ -270,7 +270,7 @@ async fn test_full_integration() {
     let resp = make_request(
         &app,
         Method::GET,
-        &format!("/api/books/{}", book1_id),
+        &format!("/api/books/{book1_id}"),
         Body::empty(),
         Some(&token1),
     )
@@ -284,7 +284,7 @@ async fn test_full_integration() {
     let resp = make_request(
         &app,
         Method::GET,
-        &format!("/api/books/{}/content?position=0&length=100", book1_id),
+        &format!("/api/books/{book1_id}/content?position=0&length=100"),
         Body::empty(),
         Some(&token1),
     )
@@ -298,7 +298,7 @@ async fn test_full_integration() {
     let resp = super::make_json_request(
         &app,
         Method::PUT,
-        &format!("/api/books/{}", book1_id),
+        &format!("/api/books/{book1_id}"),
         &serde_json::json!({"title": "修改后的标题", "is_public": false}),
         Some(&token1),
     )
@@ -309,7 +309,7 @@ async fn test_full_integration() {
     let resp = make_request(
         &app,
         Method::GET,
-        &format!("/api/books/{}", book1_id),
+        &format!("/api/books/{book1_id}"),
         Body::empty(),
         Some(&token1),
     )
@@ -322,7 +322,7 @@ async fn test_full_integration() {
     let resp = make_request(
         &app,
         Method::GET,
-        &format!("/api/books/{}", book1_id),
+        &format!("/api/books/{book1_id}"),
         Body::empty(),
         Some(&token2),
     )
@@ -333,7 +333,7 @@ async fn test_full_integration() {
     let resp = make_request(
         &app,
         Method::DELETE,
-        &format!("/api/books/{}", book1_id),
+        &format!("/api/books/{book1_id}"),
         Body::empty(),
         Some(&token2),
     )
@@ -344,7 +344,7 @@ async fn test_full_integration() {
     let resp = make_request(
         &app,
         Method::DELETE,
-        &format!("/api/books/{}", book2_id),
+        &format!("/api/books/{book2_id}"),
         Body::empty(),
         Some(&token1),
     )
@@ -532,7 +532,7 @@ async fn test_full_integration() {
     let resp = make_request(
         &app,
         Method::GET,
-        &format!("/api/books/{}", public_book_id),
+        &format!("/api/books/{public_book_id}"),
         Body::empty(),
         Some(&token2),
     )
@@ -547,10 +547,7 @@ async fn test_full_integration() {
         let resp = make_request(
             &app,
             Method::GET,
-            &format!(
-                "/api/books/{}/jump_to_chapter?chapter_id={}",
-                public_book_id, chapter_id
-            ),
+            &format!("/api/books/{public_book_id}/jump_to_chapter?chapter_id={chapter_id}"),
             Body::empty(),
             Some(&token2),
         )
@@ -588,7 +585,7 @@ async fn test_full_integration() {
     let resp = super::make_json_request(
         &app,
         Method::POST,
-        &format!("/api/admin/users/{}/reset_password", user2_id),
+        &format!("/api/admin/users/{user2_id}/reset_password"),
         &serde_json::json!({"new_password": "resetpwd123"}),
         Some(&admin_token),
     )
@@ -623,7 +620,7 @@ async fn test_full_integration() {
     let resp = make_request(
         &app,
         Method::GET,
-        &format!("/api/books/{}/content?position=999999", book1_id),
+        &format!("/api/books/{book1_id}/content?position=999999"),
         Body::empty(),
         Some(&token1),
     )

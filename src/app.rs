@@ -1,4 +1,3 @@
-use anyhow::Result;
 use axum::{Router, extract::FromRef};
 use sqlx::{Pool, Sqlite};
 use tower::ServiceBuilder;
@@ -33,7 +32,7 @@ impl FromRef<AppState> for Config {
 }
 
 // 创建应用实例
-pub async fn create_app(db: Pool<Sqlite>, config: Config) -> Result<Router> {
+pub fn create_app(db: Pool<Sqlite>, config: Config) -> Router {
     // 创建共享状态
     let state = AppState { db, config };
 
@@ -44,7 +43,7 @@ pub async fn create_app(db: Pool<Sqlite>, config: Config) -> Result<Router> {
         .allow_headers(Any);
 
     // 构建路由
-    let app = Router::new()
+    Router::new()
         // 认证路由
         .nest("/api/auth", auth::routes())
         // 书籍路由
@@ -59,7 +58,5 @@ pub async fn create_app(db: Pool<Sqlite>, config: Config) -> Result<Router> {
                 .layer(TraceLayer::new_for_http())
                 .layer(cors),
         )
-        .with_state(state);
-
-    Ok(app)
+        .with_state(state)
 }

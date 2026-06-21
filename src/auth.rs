@@ -17,33 +17,35 @@ use crate::{config::Config, error::AppError, models::User};
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
     pub sub: String,  // 用户ID
-    pub exp: usize,   // 过期时间
-    pub iat: usize,   // 颁发时间
+    pub exp: u64,     // 过期时间 (Unix 时间戳)
+    pub iat: u64,     // 颁发时间 (Unix 时间戳)
     pub role: String, // 角色: "user" 或 "admin"
 }
 
 // 为Claims实现方法
 impl Claims {
     // 创建用户JWT声明
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_wrap)]
     pub fn new_user(user_id: i64, config: &Config) -> Self {
         let now = Utc::now();
         let expiry = now + Duration::seconds(config.jwt.expiration as i64);
         Self {
             sub: user_id.to_string(),
-            iat: now.timestamp() as usize,
-            exp: expiry.timestamp() as usize,
+            iat: now.timestamp() as u64,
+            exp: expiry.timestamp() as u64,
             role: "user".to_string(),
         }
     }
 
     // 创建管理员JWT声明
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_wrap)]
     pub fn new_admin(admin_id: i64, config: &Config) -> Self {
         let now = Utc::now();
         let expiry = now + Duration::seconds(config.jwt.admin_expiration as i64);
         Self {
             sub: admin_id.to_string(),
-            iat: now.timestamp() as usize,
-            exp: expiry.timestamp() as usize,
+            iat: now.timestamp() as u64,
+            exp: expiry.timestamp() as u64,
             role: "admin".to_string(),
         }
     }
@@ -66,6 +68,7 @@ pub fn verify_token(token: &str, config: &Config) -> Result<Claims, AppError> {
 }
 
 // 提取用户的认证中间件
+#[allow(dead_code)]
 pub struct AuthUser {
     pub user_id: i64,
     pub created_at: DateTime<Utc>,
@@ -122,6 +125,7 @@ where
 }
 
 // 提取管理员的认证中间件
+#[allow(dead_code)]
 pub struct AuthAdmin {
     pub admin_id: i64,
 }

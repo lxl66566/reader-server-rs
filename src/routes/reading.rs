@@ -90,7 +90,7 @@ async fn update_reading_settings(
     }
 
     // 构建更新SQL
-    let mut query_builder: sqlx::QueryBuilder<'_, sqlx::Sqlite> =
+    let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> =
         sqlx::QueryBuilder::new("UPDATE reading_settings SET ");
     let mut first = true;
 

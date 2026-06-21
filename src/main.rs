@@ -1,3 +1,10 @@
+#![warn(clippy::pedantic)]
+#![allow(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    clippy::similar_names
+)]
+
 mod app;
 mod auth;
 mod config;
@@ -20,7 +27,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 #[tokio::main]
 async fn main() -> Result<()> {
     // 初始化错误处理
-    color_eyre::install().map_err(|e| anyhow::anyhow!("Failed to install color_eyre: {}", e))?;
+    color_eyre::install().map_err(|e| anyhow::anyhow!("Failed to install color_eyre: {e}"))?;
 
     // 初始化日志
     tracing_subscriber::registry()
@@ -44,7 +51,7 @@ async fn main() -> Result<()> {
     db::run_migrations(&db_pool).await?;
 
     // 构建应用
-    let app = app::create_app(db_pool, config.clone()).await?;
+    let app = app::create_app(db_pool, config.clone());
 
     // 获取服务地址
     let addr = SocketAddr::from(([0, 0, 0, 0], config.server.port));

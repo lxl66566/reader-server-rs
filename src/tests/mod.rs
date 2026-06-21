@@ -49,7 +49,7 @@ pub async fn setup_test_app() -> Result<(Router, Pool<Sqlite>)> {
         },
     };
 
-    let app = create_app(pool.clone(), config).await?;
+    let app = create_app(pool.clone(), config);
 
     Ok((app, pool))
 }
@@ -66,7 +66,7 @@ where
 {
     let mut req_builder = Request::builder().method(&method).uri(uri);
     if let Some(token) = auth_token {
-        req_builder = req_builder.header("Authorization", format!("Bearer {}", token));
+        req_builder = req_builder.header("Authorization", format!("Bearer {token}"));
     }
     let req = req_builder.body(body.into()).unwrap();
     app.clone().oneshot(req).await.unwrap()
@@ -85,7 +85,7 @@ pub async fn make_json_request(
         .uri(uri)
         .header("Content-Type", "application/json");
     if let Some(token) = auth_token {
-        req_builder = req_builder.header("Authorization", format!("Bearer {}", token));
+        req_builder = req_builder.header("Authorization", format!("Bearer {token}"));
     }
     let req = req_builder.body(Body::from(json)).unwrap();
     app.clone().oneshot(req).await.unwrap()
@@ -104,8 +104,7 @@ pub async fn make_multipart_request(
     for (name, value) in fields {
         body.extend_from_slice(
             format!(
-                "--{}\r\nContent-Disposition: form-data; name=\"{}\"\r\n\r\n{}\r\n",
-                boundary, name, value
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"
             )
             .as_bytes(),
         );
@@ -114,8 +113,7 @@ pub async fn make_multipart_request(
     if let Some((name, filename, data)) = file_field {
         body.extend_from_slice(
             format!(
-                "--{}\r\nContent-Disposition: form-data; name=\"{}\"; filename=\"{}\"\r\nContent-Type: application/octet-stream\r\n\r\n",
-                boundary, name, filename
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
             )
             .as_bytes(),
         );
@@ -123,14 +121,14 @@ pub async fn make_multipart_request(
         body.extend_from_slice(b"\r\n");
     }
 
-    body.extend_from_slice(format!("--{}--\r\n", boundary).as_bytes());
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
 
     let mut req_builder = Request::builder().method(Method::POST).uri(uri).header(
         "Content-Type",
-        format!("multipart/form-data; boundary={}", boundary),
+        format!("multipart/form-data; boundary={boundary}"),
     );
     if let Some(token) = auth_token {
-        req_builder = req_builder.header("Authorization", format!("Bearer {}", token));
+        req_builder = req_builder.header("Authorization", format!("Bearer {token}"));
     }
     let req = req_builder.body(Body::from(body)).unwrap();
     app.clone().oneshot(req).await.unwrap()
@@ -220,6 +218,6 @@ pub async fn upload_test_book(
     .await;
     assert_eq!(resp.status(), StatusCode::OK, "upload failed");
     let json = response_json(resp).await;
-    assert_eq!(json["code"], 0, "upload error: {:?}", json);
+    assert_eq!(json["code"], 0, "upload error: {json:?}");
     json["data"].clone()
 }

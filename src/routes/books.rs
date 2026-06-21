@@ -103,7 +103,7 @@ async fn upload_book(
                 is_public = value == "true" || value == "1";
             }
             "file" => {
-                file_name = field.file_name().map(|s| s.to_string());
+                file_name = field.file_name().map(std::string::ToString::to_string);
                 file_content =
                     Some(field.bytes().await.map_err(|e| {
                         AppError::FieldReadError("file".to_string(), e.to_string())
@@ -122,14 +122,19 @@ async fn upload_book(
         return Err(AppError::FileTooLarge);
     }
 
-    let file_ext = file_name.unwrap_or_default().to_lowercase();
+    let file_ext = file_name.and_then(|n| {
+        std::path::Path::new(&n)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_lowercase)
+    });
 
-    let (content, chapters, file_ext_str) = if file_ext.ends_with(".txt") {
+    let (content, chapters, file_ext_str) = if file_ext.as_deref() == Some("txt") {
         let text =
             String::from_utf8(file_content.to_vec()).map_err(|_| AppError::FileInvalidUtf8)?;
         let chs = extract_chapters(&text);
         (text, chs, "txt")
-    } else if file_ext.ends_with(".epub") {
+    } else if file_ext.as_deref() == Some("epub") {
         let result = parse_epub(&file_content)?;
         let ext = "txt";
         (result.text_content, result.chapters, ext)
@@ -140,7 +145,7 @@ async fn upload_book(
     // 生成唯一文件名
     let file_id = generate_uuid();
     let file_path =
-        PathBuf::from(&config.storage.book_dir).join(format!("{}.{}", file_id, file_ext_str));
+        PathBuf::from(&config.storage.book_dir).join(format!("{file_id}.{file_ext_str}"));
     let file_path_string = file_path.to_string_lossy();
 
     // 保存文件
@@ -165,12 +170,11 @@ async fn upload_book(
     // 保存章节信息
     let mut chapter_responses = Vec::new();
     for (chapter_title, position) in chapters {
-        let position_temp = position as i64;
         let chapter_id = sqlx::query!(
             "INSERT INTO chapters (book_id, title, position) VALUES (?, ?, ?)",
             book_id,
             chapter_title,
-            position_temp
+            position
         )
         .execute(&pool)
         .await?
@@ -179,7 +183,7 @@ async fn upload_book(
         chapter_responses.push(ChapterResponse {
             chapter_id,
             title: chapter_title,
-            position: position as i64,
+            position,
         });
     }
 
@@ -361,7 +365,7 @@ async fn update_book(
     }
 
     // 构建更新SQL
-    let mut query_builder: sqlx::QueryBuilder<'_, sqlx::Sqlite> =
+    let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> =
         sqlx::QueryBuilder::new("UPDATE books SET ");
     let mut first = true;
 
@@ -468,12 +472,14 @@ async fn get_book_content(
     let content_length = content.chars().count();
 
     // 确保位置有效
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     let position = params.position.max(0) as usize;
     if position >= content_length {
         return Err(AppError::PositionExceedsRange);
     }
 
     // 计算要返回的内容长度
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     let length = params.length.unwrap_or(4000).clamp(100, 10000) as usize;
 
     // 提取内容
@@ -487,6 +493,7 @@ async fn get_book_content(
     // 构建响应
     let response = BookContentResponse {
         content: content_slice,
+        #[allow(clippy::cast_possible_wrap)]
         next_position: end_pos as i64,
     };
 
@@ -600,6 +607,7 @@ async fn get_random_public_books(
 
     // 随机选择书籍
     let mut rng = rand::rng();
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     let selected_books: Vec<_> = books
         .sample(&mut rng, count as usize)
         .map(|book| PublicBookListItem {

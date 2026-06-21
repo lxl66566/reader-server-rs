@@ -27,6 +27,7 @@ pub enum AppError {
     InvalidAdminId,
 
     #[error("Token expired or invalid")]
+    #[allow(dead_code)]
     TokenExpiredOrInvalid,
 
     #[error("Admin not set up")]

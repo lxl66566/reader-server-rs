@@ -27,15 +27,8 @@ pub async fn init_db_pool(config: &Config) -> Result<Pool<Sqlite>> {
 }
 
 pub async fn run_migrations(pool: &Pool<Sqlite>) -> Result<()> {
-    // 使用 schema 模块中定义的 SQL 语句
     let sql = include_str!("../schema.sql");
-    let statements = sql.split(';').filter(|s| !s.trim().is_empty());
-
-    for statement in statements {
-        let query = format!("{};", statement);
-        sqlx::query(&query).execute(pool).await?;
-    }
-
+    sqlx::raw_sql(sql).execute(pool).await?;
     Ok(())
 }
 
@@ -50,15 +43,7 @@ pub async fn create_test_pool() -> Result<Pool<Sqlite>> {
         .max_connections(1)
         .connect_with(options)
         .await?;
-
-    // 使用 schema 模块中定义的 SQL 语句创建表
     let sql = include_str!("../schema.sql");
-    let statements = sql.split(';').filter(|s| !s.trim().is_empty());
-
-    for statement in statements {
-        let query = format!("{};", statement);
-        sqlx::query(&query).execute(&pool).await?;
-    }
-
+    sqlx::raw_sql(sql).execute(&pool).await?;
     Ok(pool)
 }
