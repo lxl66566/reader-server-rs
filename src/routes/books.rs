@@ -15,8 +15,9 @@ use crate::{
     config::Config,
     error::{ApiResponse, AppError},
     models::{
-        Book, BookContentResponse, BookDetailResponse, BookListItem, ChapterResponse,
-        PublicBookListItem, UpdateBookRequest, UploadBookResponse,
+        Book, BookContentResponse, BookDetailResponse, BookListItem, BookListResponse,
+        ChapterResponse, JumpToChapterResponse, PublicBookListItem, PublicBookListResponse,
+        RandomPublicBooksResponse, UpdateBookRequest, UploadBookResponse,
     },
     utils::{extract_chapters, generate_uuid, parse_epub},
 };
@@ -238,7 +239,7 @@ async fn list_books(
     auth: AuthUser,
     State(pool): State<Pool<Sqlite>>,
     Query(params): Query<PaginationParams>,
-) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+) -> Result<Json<ApiResponse<BookListResponse>>, AppError> {
     // 解析分页参数
     let page = params.page.unwrap_or(1);
     let limit = params.limit.unwrap_or(10);
@@ -284,10 +285,10 @@ async fn list_books(
         })
         .collect();
 
-    Ok(Json(ApiResponse::success(serde_json::json!({
-        "total": total,
-        "books": book_list
-    }))))
+    Ok(Json(ApiResponse::success(BookListResponse {
+        total,
+        books: book_list,
+    })))
 }
 
 // 获取书籍详情
@@ -524,7 +525,7 @@ async fn jump_to_chapter(
     State(pool): State<Pool<Sqlite>>,
     Path(book_id): Path<i64>,
     Query(params): Query<JumpToChapterParams>,
-) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+) -> Result<Json<ApiResponse<JumpToChapterResponse>>, AppError> {
     // 校验 chapter_id 有效
     if params.chapter_id <= 0 {
         return Err(AppError::ChapterNotFound);
@@ -552,9 +553,9 @@ async fn jump_to_chapter(
     .ok_or_else(|| AppError::ChapterNotFound)?;
 
     // 返回章节位置
-    Ok(Json(ApiResponse::success(serde_json::json!({
-        "position": chapter.position
-    }))))
+    Ok(Json(ApiResponse::success(JumpToChapterResponse {
+        position: chapter.position,
+    })))
 }
 
 // 获取公开书籍列表
@@ -562,7 +563,7 @@ async fn list_public_books(
     _auth: AuthUser,
     State(pool): State<Pool<Sqlite>>,
     Query(params): Query<PaginationParams>,
-) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+) -> Result<Json<ApiResponse<PublicBookListResponse>>, AppError> {
     // 解析分页参数
     let page = params.page.unwrap_or(1);
     let limit = params.limit.unwrap_or(10);
@@ -601,10 +602,10 @@ async fn list_public_books(
         })
         .collect();
 
-    Ok(Json(ApiResponse::success(serde_json::json!({
-        "total": total,
-        "books": book_list
-    }))))
+    Ok(Json(ApiResponse::success(PublicBookListResponse {
+        total,
+        books: book_list,
+    })))
 }
 
 // 随机获取公开书籍
@@ -612,7 +613,7 @@ async fn get_random_public_books(
     _auth: AuthUser,
     State(pool): State<Pool<Sqlite>>,
     Query(params): Query<RandomPublicParams>,
-) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+) -> Result<Json<ApiResponse<RandomPublicBooksResponse>>, AppError> {
     // 确定要返回的书籍数量
     let count = params.count.unwrap_or(1).clamp(1, 10);
 
@@ -631,7 +632,7 @@ async fn get_random_public_books(
     // 随机选择书籍
     let mut rng = rand::rng();
     #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-    let selected_books: Vec<_> = books
+    let selected_books: Vec<PublicBookListItem> = books
         .sample(&mut rng, count as usize)
         .map(|book| PublicBookListItem {
             book_id: book.id,
@@ -642,7 +643,7 @@ async fn get_random_public_books(
         })
         .collect();
 
-    Ok(Json(ApiResponse::success(serde_json::json!({
-        "books": selected_books
-    }))))
+    Ok(Json(ApiResponse::success(RandomPublicBooksResponse {
+        books: selected_books,
+    })))
 }

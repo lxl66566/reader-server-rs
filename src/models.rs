@@ -274,3 +274,84 @@ pub struct AdminUserListItem {
 pub struct ResetUserPasswordRequest {
     pub new_password: String,
 }
+
+// ============ 类型化响应结构体 ============
+
+// 用户认证响应（注册/登录）
+#[derive(Debug, Serialize)]
+pub struct AuthResponse {
+    pub user_id: i64,
+    pub username: String,
+    pub token: String,
+}
+
+// 管理员认证响应
+#[derive(Debug, Serialize)]
+pub struct AdminAuthResponse {
+    pub admin_token: String,
+}
+
+// 管理员检查设置响应
+#[derive(Debug, Serialize)]
+pub struct CheckSetupResponse {
+    pub is_setup: bool,
+}
+
+// 创建邀请码响应
+#[derive(Debug, Serialize)]
+pub struct CreateInviteCodeResponse {
+    pub invite_code: String,
+    pub limit_times: i64,
+    pub description: Option<String>,
+}
+
+// 邀请码列表响应
+#[derive(Debug, Serialize)]
+pub struct ListInviteCodesResponse {
+    pub invite_codes: Vec<InviteCode>,
+}
+
+// 用户列表响应
+#[derive(Debug, Serialize)]
+pub struct ListUsersResponse {
+    pub users: Vec<AdminUserListItem>,
+}
+
+// 管理员列表响应
+#[derive(Debug, Serialize)]
+pub struct ListAdminsResponse {
+    pub admins: Vec<AdminListItem>,
+}
+
+// 审计日志列表响应
+#[derive(Debug, Serialize)]
+pub struct ListAuditLogsResponse {
+    pub total: i64,
+    pub logs: Vec<AuditLog>,
+}
+
+// 书籍列表响应
+#[derive(Debug, Serialize)]
+pub struct BookListResponse {
+    pub total: i64,
+    pub books: Vec<BookListItem>,
+}
+
+// 公开书籍列表响应
+#[derive(Debug, Serialize)]
+pub struct PublicBookListResponse {
+    pub total: i64,
+    pub books: Vec<PublicBookListItem>,
+}
+
+// 随机公开书籍响应
+#[derive(Debug, Serialize)]
+pub struct RandomPublicBooksResponse {
+    pub books: Vec<PublicBookListItem>,
+}
+
+// 章节跳转响应
+#[derive(Debug, Serialize)]
+pub struct JumpToChapterResponse {
+    pub position: i64,
+}

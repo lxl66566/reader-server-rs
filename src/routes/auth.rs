@@ -11,8 +11,8 @@ use crate::{
     config::Config,
     error::{ApiResponse, AppError},
     models::{
-        Admin, AdminLoginRequest, AdminSetupRequest, ChangePasswordRequest, CreateUserRequest,
-        LoginRequest, User, UserInfoResponse,
+        Admin, AdminAuthResponse, AdminLoginRequest, AdminSetupRequest, AuthResponse,
+        ChangePasswordRequest, CreateUserRequest, LoginRequest, User, UserInfoResponse,
     },
     utils::{hash_password, verify_password},
 };
@@ -33,7 +33,7 @@ async fn register(
     State(pool): State<Pool<Sqlite>>,
     State(config): State<Config>,
     Json(req): Json<CreateUserRequest>,
-) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+) -> Result<Json<ApiResponse<AuthResponse>>, AppError> {
     // 验证用户名格式（按字符数计，支持中英文混排）
     let username_len = req.username.chars().count();
     if !(2..=20).contains(&username_len) {
@@ -123,11 +123,11 @@ async fn register(
     let token = create_token(&claims, &config)?;
 
     // 返回用户信息和令牌
-    Ok(Json(ApiResponse::success(serde_json::json!({
-        "user_id": user_id,
-        "username": req.username,
-        "token": token
-    }))))
+    Ok(Json(ApiResponse::success(AuthResponse {
+        user_id,
+        username: req.username,
+        token,
+    })))
 }
 
 // 最大登录失败次数，超过后锁定账户
@@ -140,7 +140,7 @@ async fn login(
     State(pool): State<Pool<Sqlite>>,
     State(config): State<Config>,
     Json(req): Json<LoginRequest>,
-) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+) -> Result<Json<ApiResponse<AuthResponse>>, AppError> {
     // 查找用户
     let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE username = ?")
         .bind(&req.username)
@@ -198,11 +198,11 @@ async fn login(
     let token = create_token(&claims, &config)?;
 
     // 返回用户信息和令牌
-    Ok(Json(ApiResponse::success(serde_json::json!({
-        "user_id": user.id,
-        "username": user.username,
-        "token": token
-    }))))
+    Ok(Json(ApiResponse::success(AuthResponse {
+        user_id: user.id,
+        username: user.username,
+        token,
+    })))
 }
 
 // 获取用户信息
@@ -274,7 +274,7 @@ async fn admin_setup(
     State(pool): State<Pool<Sqlite>>,
     State(config): State<Config>,
     Json(req): Json<AdminSetupRequest>,
-) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+) -> Result<Json<ApiResponse<AdminAuthResponse>>, AppError> {
     // 验证用户名格式
     let username_len = req.username.chars().count();
     if !(2..=20).contains(&username_len) {
@@ -328,9 +328,9 @@ async fn admin_setup(
     let token = create_token(&claims, &config)?;
 
     // 返回管理员令牌
-    Ok(Json(ApiResponse::success(serde_json::json!({
-        "admin_token": token
-    }))))
+    Ok(Json(ApiResponse::success(AdminAuthResponse {
+        admin_token: token,
+    })))
 }
 
 // 管理员登录
@@ -338,7 +338,7 @@ async fn admin_login(
     State(pool): State<Pool<Sqlite>>,
     State(config): State<Config>,
     Json(req): Json<AdminLoginRequest>,
-) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+) -> Result<Json<ApiResponse<AdminAuthResponse>>, AppError> {
     // 查找管理员
     let admin = sqlx::query_as::<_, Admin>("SELECT * FROM admin WHERE username = ?")
         .bind(&req.username)
@@ -356,7 +356,7 @@ async fn admin_login(
     let token = create_token(&claims, &config)?;
 
     // 返回管理员令牌
-    Ok(Json(ApiResponse::success(serde_json::json!({
-        "admin_token": token
-    }))))
+    Ok(Json(ApiResponse::success(AdminAuthResponse {
+        admin_token: token,
+    })))
 }

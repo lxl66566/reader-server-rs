@@ -9,8 +9,10 @@ use crate::{
     auth::AuthAdmin,
     error::{ApiResponse, AppError},
     models::{
-        AdminListItem, AdminUserListItem, AuditLog, CreateAdminRequest, CreateInviteCodeRequest,
-        InviteCode, ResetUserPasswordRequest, Settings, UpdateSettingsRequest,
+        AdminListItem, AdminUserListItem, AuditLog, CheckSetupResponse, CreateAdminRequest,
+        CreateInviteCodeRequest, CreateInviteCodeResponse, InviteCode, ListAdminsResponse,
+        ListAuditLogsResponse, ListInviteCodesResponse, ListUsersResponse,
+        ResetUserPasswordRequest, Settings, UpdateSettingsRequest,
     },
     routes::books::PaginationParams,
     utils::{generate_invite_code, hash_password},
@@ -57,14 +59,14 @@ async fn log_audit(
 // 检查是否已设置管理员
 async fn check_setup(
     State(pool): State<Pool<Sqlite>>,
-) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+) -> Result<Json<ApiResponse<CheckSetupResponse>>, AppError> {
     let admin_exists = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM admin)")
         .fetch_one(&pool)
         .await?;
 
-    Ok(Json(ApiResponse::success(serde_json::json!({
-        "is_setup": admin_exists
-    }))))
+    Ok(Json(ApiResponse::success(CheckSetupResponse {
+        is_setup: admin_exists,
+    })))
 }
 
 // 创建邀请码
@@ -72,7 +74,7 @@ async fn create_invite_code(
     admin: AuthAdmin,
     State(pool): State<Pool<Sqlite>>,
     Json(req): Json<CreateInviteCodeRequest>,
-) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+) -> Result<Json<ApiResponse<CreateInviteCodeResponse>>, AppError> {
     // 验证使用次数上限
     if req.limit_times <= 0 {
         return Err(AppError::InviteCodeLimitInvalid);
@@ -99,26 +101,26 @@ async fn create_invite_code(
     )
     .await?;
 
-    Ok(Json(ApiResponse::success(serde_json::json!({
-        "invite_code": invite_code,
-        "limit_times": req.limit_times,
-        "description": req.description
-    }))))
+    Ok(Json(ApiResponse::success(CreateInviteCodeResponse {
+        invite_code,
+        limit_times: req.limit_times,
+        description: req.description,
+    })))
 }
 
 // 查看所有邀请码
 async fn list_invite_codes(
     _: AuthAdmin,
     State(pool): State<Pool<Sqlite>>,
-) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+) -> Result<Json<ApiResponse<ListInviteCodesResponse>>, AppError> {
     let invite_codes =
         sqlx::query_as::<_, InviteCode>("SELECT * FROM invite_codes ORDER BY created_at DESC")
             .fetch_all(&pool)
             .await?;
 
-    Ok(Json(ApiResponse::success(serde_json::json!({
-        "invite_codes": invite_codes
-    }))))
+    Ok(Json(ApiResponse::success(ListInviteCodesResponse {
+        invite_codes,
+    })))
 }
 
 // 获取系统设置
@@ -185,9 +187,9 @@ async fn update_settings(
 async fn list_users(
     _: AuthAdmin,
     State(pool): State<Pool<Sqlite>>,
-) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+) -> Result<Json<ApiResponse<ListUsersResponse>>, AppError> {
     // 使用 JOIN + GROUP BY 一次性获取用户及其书籍数量，避免 N+1 查询
-    let user_list = sqlx::query_as::<_, AdminUserListItem>(
+    let users = sqlx::query_as::<_, AdminUserListItem>(
         r#"SELECT u.id AS user_id, u.username, u.created_at,
                   u.total_reading_time, COUNT(b.id) AS book_count
            FROM users u
@@ -198,9 +200,7 @@ async fn list_users(
     .fetch_all(&pool)
     .await?;
 
-    Ok(Json(ApiResponse::success(serde_json::json!({
-        "users": user_list
-    }))))
+    Ok(Json(ApiResponse::success(ListUsersResponse { users })))
 }
 
 // 重置用户密码
@@ -290,7 +290,7 @@ async fn revoke_user_tokens(
 async fn list_admins(
     _: AuthAdmin,
     State(pool): State<Pool<Sqlite>>,
-) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+) -> Result<Json<ApiResponse<ListAdminsResponse>>, AppError> {
     let admins = sqlx::query!("SELECT id, username, created_at FROM admin ORDER BY created_at DESC")
         .fetch_all(&pool)
         .await?;
@@ -304,9 +304,7 @@ async fn list_admins(
         })
         .collect();
 
-    Ok(Json(ApiResponse::success(serde_json::json!({
-        "admins": list
-    }))))
+    Ok(Json(ApiResponse::success(ListAdminsResponse { admins: list })))
 }
 
 // 创建新管理员
@@ -365,7 +363,7 @@ async fn list_audit_logs(
     _: AuthAdmin,
     State(pool): State<Pool<Sqlite>>,
     Query(params): Query<PaginationParams>,
-) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+) -> Result<Json<ApiResponse<ListAuditLogsResponse>>, AppError> {
     let page = params.page.unwrap_or(1);
     #[allow(clippy::cast_sign_loss)]
     let limit = params.limit.unwrap_or(20).min(100);
@@ -384,8 +382,5 @@ async fn list_audit_logs(
     .fetch_all(&pool)
     .await?;
 
-    Ok(Json(ApiResponse::success(serde_json::json!({
-        "total": total,
-        "logs": logs
-    }))))
+    Ok(Json(ApiResponse::success(ListAuditLogsResponse { total, logs })))
 }
