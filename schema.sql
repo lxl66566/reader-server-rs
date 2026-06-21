@@ -12,7 +12,10 @@ CREATE TABLE
     total_reading_time INTEGER NOT NULL DEFAULT 0,
     token_version INTEGER NOT NULL DEFAULT 0,
     failed_login_attempts INTEGER NOT NULL DEFAULT 0,
-    locked_until TEXT
+    locked_until TEXT,
+    -- 账户状态：active=正常；banned=被管理员封禁（拒绝登录与认证）
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'banned')),
+    banned_at TEXT
   );
 
 -- 管理员表
@@ -95,6 +98,49 @@ CREATE TABLE
     FOREIGN KEY (book_id) REFERENCES books (id) ON DELETE CASCADE
   );
 
+-- 书签：用户在书中的位置标记（轻量，仅记录位置）
+CREATE TABLE
+  IF NOT EXISTS bookmarks (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    book_id INTEGER NOT NULL,
+    position INTEGER NOT NULL,
+    label TEXT,
+    created_at TEXT NOT NULL DEFAULT (
+      strftime (
+        '%Y-%m-%dT%H:%M:%S.' || substr (strftime ('%f'), 4, 6) || 'Z'
+      )
+    ),
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+    FOREIGN KEY (book_id) REFERENCES books (id) ON DELETE CASCADE
+  );
+
+-- 批注：用户在书中的笔记 / 高亮，按 kind 枚举区分
+-- kind 取值：'note'（纯笔记）、'highlight'（高亮，需带内容片段）
+CREATE TABLE
+  IF NOT EXISTS annotations (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    book_id INTEGER NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('note', 'highlight')),
+    start_position INTEGER NOT NULL,
+    end_position INTEGER,
+    excerpt TEXT,
+    content TEXT,
+    created_at TEXT NOT NULL DEFAULT (
+      strftime (
+        '%Y-%m-%dT%H:%M:%S.' || substr (strftime ('%f'), 4, 6) || 'Z'
+      )
+    ),
+    updated_at TEXT NOT NULL DEFAULT (
+      strftime (
+        '%Y-%m-%dT%H:%M:%S.' || substr (strftime ('%f'), 4, 6) || 'Z'
+      )
+    ),
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+    FOREIGN KEY (book_id) REFERENCES books (id) ON DELETE CASCADE
+  );
+
 -- 阅读进度表
 CREATE TABLE
   IF NOT EXISTS reading_progress (
@@ -135,3 +181,5 @@ CREATE INDEX IF NOT EXISTS idx_books_user_id ON books (user_id);
 CREATE INDEX IF NOT EXISTS idx_books_is_public ON books (is_public);
 CREATE INDEX IF NOT EXISTS idx_chapters_book_id ON chapters (book_id);
 CREATE INDEX IF NOT EXISTS idx_reading_progress_user_book ON reading_progress (user_id, book_id);
+CREATE INDEX IF NOT EXISTS idx_bookmarks_user_book ON bookmarks (user_id, book_id);
+CREATE INDEX IF NOT EXISTS idx_annotations_user_book ON annotations (user_id, book_id);

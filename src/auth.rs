@@ -109,15 +109,19 @@ where
 
         let user_id: i64 = claims.sub.parse().map_err(|_| AppError::InvalidUserId)?;
 
-        // 验证用户存在，并检查 token 版本号是否匹配（用于吊销已签发的 token）
-        let user = sqlx::query!("SELECT token_version FROM users WHERE id = ?", user_id)
-            .fetch_optional(&pool)
-            .await
-            .map_err(AppError::Database)?;
+        // 验证用户存在、token 版本号匹配、账户未被封禁
+        let user = sqlx::query!(
+            "SELECT token_version, status FROM users WHERE id = ?",
+            user_id
+        )
+        .fetch_optional(&pool)
+        .await
+        .map_err(AppError::Database)?;
 
         match user {
             None => Err(AppError::UserNotFound),
             Some(row) if row.token_version != claims.ver => Err(AppError::TokenExpiredOrInvalid),
+            Some(row) if row.status == "banned" => Err(AppError::UserBanned),
             Some(_) => Ok(AuthUser { user_id }),
         }
     }

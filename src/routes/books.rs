@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use axum::{
     Json, Router,
     extract::{Path, Query, State, multipart::Multipart},
-    routing::{get, post},
+    routing::{delete, get, post, put},
 };
 use rand::prelude::IndexedRandom;
 use serde::Deserialize;
@@ -48,19 +48,70 @@ pub struct RandomPublicParams {
     pub count: Option<i64>,
 }
 
+// 搜索查询参数
+// scope: 缺省="mine"（仅自己的书）；"public"=公开书库；"all"=两者去重
+#[derive(Debug, Deserialize, Default)]
+pub struct SearchParams {
+    pub q: String,
+    pub scope: Option<String>,
+    pub page: Option<u32>,
+    pub limit: Option<u32>,
+}
+
+// 搜索范围枚举：编译期约束，避免运行期字符串匹配出错
+#[derive(Debug, Clone, Copy)]
+enum SearchScope {
+    Mine,
+    Public,
+    All,
+}
+
+impl SearchScope {
+    fn parse(s: Option<&str>) -> Result<Self, AppError> {
+        match s {
+            None | Some("") | Some("mine") => Ok(SearchScope::Mine),
+            Some("public") => Ok(SearchScope::Public),
+            Some("all") => Ok(SearchScope::All),
+            Some(_) => Err(AppError::InvalidSearchScope),
+        }
+    }
+}
+
 // 书籍路由
 pub fn routes() -> Router<crate::app::AppState> {
+    // 注意：所有 /{book_id}/... 路径必须放在同一个 Router 中，否则 axum 0.8
+    // 的路径树在某些动态+静态混合情况下会返回 422（路由匹配失败）。
     Router::new()
         .route("/upload", post(upload_book))
         .route("/", get(list_books))
+        .route("/search", get(search_books))
+        .route("/public", get(list_public_books))
+        .route("/random_public", get(get_random_public_books))
         .route(
             "/{book_id}",
             get(get_book_detail).put(update_book).delete(delete_book),
         )
         .route("/{book_id}/content", get(get_book_content))
         .route("/{book_id}/jump_to_chapter", get(jump_to_chapter))
-        .route("/public", get(list_public_books))
-        .route("/random_public", get(get_random_public_books))
+        .route(
+            "/{book_id}/bookmarks",
+            get(crate::routes::annotations::list_bookmarks)
+                .post(crate::routes::annotations::create_bookmark),
+        )
+        .route(
+            "/{book_id}/bookmarks/{bookmark_id}",
+            delete(crate::routes::annotations::delete_bookmark),
+        )
+        .route(
+            "/{book_id}/annotations",
+            get(crate::routes::annotations::list_annotations)
+                .post(crate::routes::annotations::create_annotation),
+        )
+        .route(
+            "/{book_id}/annotations/{annotation_id}",
+            put(crate::routes::annotations::update_annotation)
+                .delete(crate::routes::annotations::delete_annotation),
+        )
 }
 
 // 上传书籍
@@ -643,4 +694,130 @@ async fn get_random_public_books(
     Ok(Json(ApiResponse::success(RandomPublicBooksResponse {
         books: selected_books,
     })))
+}
+
+/// 转义 SQLite LIKE 的特殊字符（%, _, \），用 ESCAPE '\' 配合
+fn escape_like(input: &str) -> String {
+    let mut out = String::with_capacity(input.len() + 2);
+    for ch in input.chars() {
+        match ch {
+            '%' | '_' | '\\' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+// 搜索结果行（私用 FromRow 结构，避免在闭包里手动取列）
+#[derive(sqlx::FromRow)]
+struct SearchRow {
+    id: i64,
+    title: String,
+    author: Option<String>,
+    is_public: bool,
+    created_at: String,
+    position: Option<i64>,
+    reading_time: Option<i64>,
+    last_read_at: Option<String>,
+}
+
+// 搜索书籍：按 title/author/章节标题 LIKE 模糊匹配
+// 不做书内全文索引（FTS），因为后续书籍正文可能不再存 sqlite
+async fn search_books(
+    auth: AuthUser,
+    State(pool): State<Pool<Sqlite>>,
+    Query(params): Query<SearchParams>,
+) -> Result<Json<ApiResponse<BookListResponse>>, AppError> {
+    let q = params.q.trim();
+    if q.is_empty() {
+        return Err(AppError::SearchQueryEmpty);
+    }
+
+    let scope = SearchScope::parse(params.scope.as_deref())?;
+    let page = params.page.unwrap_or(1).max(1);
+    let limit = params.limit.unwrap_or(10).clamp(1, 50);
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+    let offset = ((page - 1) * limit) as i64;
+
+    // 构造 LIKE 模式：`%query%`，先转义用户输入的特殊字符
+    let pattern = format!("%{}%", escape_like(q));
+
+    // 使用 DISTINCT 因为 LEFT JOIN chapters 会让一本书出现多次
+    let mut qb = sqlx::QueryBuilder::new(
+        "SELECT DISTINCT b.id, b.title, b.author, b.is_public, b.created_at, \
+         rp.position AS position, rp.reading_time AS reading_time, rp.last_read_at AS last_read_at \
+         FROM books b \
+         LEFT JOIN reading_progress rp ON rp.book_id = b.id AND rp.user_id = ",
+    );
+    qb.push_bind(auth.user_id);
+    qb.push(" LEFT JOIN chapters c ON c.book_id = b.id WHERE (b.title LIKE ");
+    qb.push_bind(&pattern);
+    qb.push(" ESCAPE '\\' OR b.author LIKE ");
+    qb.push_bind(&pattern);
+    qb.push(" ESCAPE '\\' OR c.title LIKE ");
+    qb.push_bind(&pattern);
+    qb.push(" ESCAPE '\\') AND (");
+
+    push_scope_condition(&mut qb, scope, auth.user_id);
+    qb.push(") ORDER BY b.created_at DESC LIMIT ").push_bind(limit);
+    qb.push(" OFFSET ").push_bind(offset);
+
+    let rows = qb.build_query_as::<SearchRow>().fetch_all(&pool).await?;
+
+    let book_list: Vec<BookListItem> = rows
+        .into_iter()
+        .map(|r| BookListItem {
+            book_id: r.id,
+            title: r.title,
+            author: r.author,
+            is_public: r.is_public,
+            created_at: r.created_at,
+            last_read_at: r.last_read_at,
+            position: r.position.unwrap_or(0),
+            reading_time: r.reading_time.unwrap_or(0),
+        })
+        .collect();
+
+    // 单独查询总数，避免 DISTINCT + JOIN 的复杂聚合影响主查询性能
+    let mut count_qb = sqlx::QueryBuilder::new(
+        "SELECT COUNT(DISTINCT b.id) FROM books b LEFT JOIN chapters c ON c.book_id = b.id WHERE (b.title LIKE ",
+    );
+    count_qb.push_bind(&pattern);
+    count_qb.push(" ESCAPE '\\' OR b.author LIKE ");
+    count_qb.push_bind(&pattern);
+    count_qb.push(" ESCAPE '\\' OR c.title LIKE ");
+    count_qb.push_bind(&pattern);
+    count_qb.push(" ESCAPE '\\') AND (");
+    push_scope_condition(&mut count_qb, scope, auth.user_id);
+    count_qb.push(")");
+
+    let total: i64 = count_qb
+        .build_query_scalar::<i64>()
+        .fetch_one(&pool)
+        .await?;
+
+    Ok(Json(ApiResponse::success(BookListResponse {
+        total,
+        books: book_list,
+    })))
+}
+
+/// 把 scope 条件追加到已构造的 QueryBuilder（WHERE 子句的最后一个分组）
+fn push_scope_condition(qb: &mut sqlx::QueryBuilder<sqlx::Sqlite>, scope: SearchScope, user_id: i64) {
+    match scope {
+        SearchScope::Mine => {
+            qb.push("b.user_id = ").push_bind(user_id);
+        }
+        SearchScope::Public => {
+            qb.push("b.is_public = 1");
+        }
+        SearchScope::All => {
+            qb.push("b.user_id = ")
+                .push_bind(user_id)
+                .push(" OR b.is_public = 1");
+        }
+    }
 }

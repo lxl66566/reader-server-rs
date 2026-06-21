@@ -1,6 +1,16 @@
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
+/// 用户账户状态枚举
+/// active=正常；banned=被管理员封禁
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, sqlx::Type, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+#[sqlx(type_name = "TEXT", rename_all = "lowercase")]
+pub enum UserStatus {
+    Active,
+    Banned,
+}
+
 // 用户模型
 #[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
 pub struct User {
@@ -16,6 +26,11 @@ pub struct User {
     pub failed_login_attempts: i64,
     #[serde(skip_serializing)]
     pub locked_until: Option<String>,
+    pub status: UserStatus,
+    /// 被封禁的时间戳；active 状态下为 None。保留以便后续扩展（如解封审计）
+    #[serde(skip_serializing)]
+    #[allow(dead_code)]
+    pub banned_at: Option<String>,
 }
 
 // 创建用户请求
@@ -40,6 +55,7 @@ pub struct UserInfoResponse {
     pub username: String,
     pub total_reading_time: i64,
     pub book_count: i64,
+    pub status: UserStatus,
 }
 
 // 修改密码请求
@@ -47,6 +63,12 @@ pub struct UserInfoResponse {
 pub struct ChangePasswordRequest {
     pub old_password: String,
     pub new_password: String,
+}
+
+// 自助注销账户请求（需密码确认）
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DeleteAccountRequest {
+    pub password: String,
 }
 
 // 管理员模型
@@ -267,6 +289,8 @@ pub struct AdminUserListItem {
     pub created_at: String,
     pub book_count: i64,
     pub total_reading_time: i64,
+    pub status: UserStatus,
+    pub banned_at: Option<String>,
 }
 
 // 重置用户密码请求
@@ -350,8 +374,82 @@ pub struct RandomPublicBooksResponse {
     pub books: Vec<PublicBookListItem>,
 }
 
-// 章节跳转响应
+// 跳转章节查询参数响应
 #[derive(Debug, Serialize)]
 pub struct JumpToChapterResponse {
     pub position: i64,
+}
+
+// ============ 书签 / 批注 ============
+
+/// 批注类型枚举：note=纯笔记；highlight=高亮
+/// 序列化对外用字符串（保持 API 稳定可读），DB CHECK 约束同步
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, sqlx::Type, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+#[sqlx(type_name = "TEXT", rename_all = "lowercase")]
+pub enum AnnotationKind {
+    Note,
+    Highlight,
+}
+
+// 书签模型
+#[derive(Debug, Serialize, Deserialize, FromRow)]
+pub struct Bookmark {
+    pub id: i64,
+    pub user_id: i64,
+    pub book_id: i64,
+    pub position: i64,
+    pub label: Option<String>,
+    pub created_at: String,
+}
+
+// 创建书签请求
+#[derive(Debug, Deserialize)]
+pub struct CreateBookmarkRequest {
+    pub position: i64,
+    pub label: Option<String>,
+}
+
+// 批注模型
+#[derive(Debug, Serialize, Deserialize, FromRow)]
+pub struct Annotation {
+    pub id: i64,
+    pub user_id: i64,
+    pub book_id: i64,
+    pub kind: AnnotationKind,
+    pub start_position: i64,
+    pub end_position: Option<i64>,
+    pub excerpt: Option<String>,
+    pub content: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+// 创建批注请求
+#[derive(Debug, Deserialize)]
+pub struct CreateAnnotationRequest {
+    pub kind: AnnotationKind,
+    pub start_position: i64,
+    pub end_position: Option<i64>,
+    pub excerpt: Option<String>,
+    pub content: Option<String>,
+}
+
+// 更新批注请求（只允许改 content/excerpt，kind/位置不可改）
+#[derive(Debug, Deserialize)]
+pub struct UpdateAnnotationRequest {
+    pub excerpt: Option<String>,
+    pub content: Option<String>,
+}
+
+// 书签列表响应
+#[derive(Debug, Serialize)]
+pub struct ListBookmarksResponse {
+    pub bookmarks: Vec<Bookmark>,
+}
+
+// 批注列表响应
+#[derive(Debug, Serialize)]
+pub struct ListAnnotationsResponse {
+    pub annotations: Vec<Annotation>,
 }

@@ -1,7 +1,7 @@
 use axum::{
     Json, Router,
     extract::State,
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use sqlx::{Pool, Sqlite};
@@ -12,7 +12,8 @@ use crate::{
     error::{ApiResponse, AppError},
     models::{
         Admin, AdminAuthResponse, AdminLoginRequest, AdminSetupRequest, AuthResponse,
-        ChangePasswordRequest, CreateUserRequest, LoginRequest, User, UserInfoResponse,
+        ChangePasswordRequest, CreateUserRequest, DeleteAccountRequest, LoginRequest, User,
+        UserInfoResponse,
     },
     utils::{hash_password, verify_password},
 };
@@ -24,6 +25,10 @@ pub fn routes() -> Router<crate::app::AppState> {
         .route("/login", post(login))
         .route("/user_info", get(user_info))
         .route("/change_password", post(change_password))
+        .route(
+            "/account",
+            delete(delete_account),
+        )
         .route("/admin/setup", post(admin_setup))
         .route("/admin/login", post(admin_login))
 }
@@ -148,6 +153,11 @@ async fn login(
         .await?
         .ok_or_else(|| AppError::InvalidCredentials)?;
 
+    // 检查账户是否被管理员封禁（先于锁定判断，避免被封用户看到锁定提示）
+    if user.status == crate::models::UserStatus::Banned {
+        return Err(AppError::UserBanned);
+    }
+
     // 检查账户是否被锁定
     if let Some(ref locked_until) = user.locked_until
         && let Ok(dt) = locked_until.parse::<DateTime<Utc>>()
@@ -228,6 +238,7 @@ async fn user_info(
         username: user.username,
         total_reading_time: user.total_reading_time,
         book_count,
+        status: user.status,
     })))
 }
 
@@ -268,6 +279,51 @@ async fn change_password(
     // 返回成功信息
     Ok(Json(ApiResponse::<()>::message(
         "Password changed successfully",
+    )))
+}
+
+// 用户自助注销账户：需密码确认；删除用户记录（外键级联删书 / 进度 / 批注）
+// 同时删除用户上传的书籍文件
+async fn delete_account(
+    auth: AuthUser,
+    State(pool): State<Pool<Sqlite>>,
+    Json(req): Json<DeleteAccountRequest>,
+) -> Result<Json<ApiResponse<()>>, AppError> {
+    // 复用 change_password 的鉴权逻辑：用密码确认身份
+    let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = ?")
+        .bind(auth.user_id)
+        .fetch_one(&pool)
+        .await?;
+
+    if !verify_password(&req.password, &user.password_hash)? {
+        return Err(AppError::IncorrectOldPassword);
+    }
+
+    // 删除前先取出用户的所有书籍文件路径；外键级联会删 DB 记录，但文件系统需手动清理
+    let book_paths = sqlx::query_scalar::<_, String>(
+        "SELECT file_path FROM books WHERE user_id = ?",
+    )
+    .bind(auth.user_id)
+    .fetch_all(&pool)
+    .await?;
+
+    // 删除用户记录（books / chapters / reading_progress / bookmarks / annotations
+    // / reading_settings 都有 ON DELETE CASCADE，会一并被删）
+    sqlx::query!("DELETE FROM users WHERE id = ?", auth.user_id)
+        .execute(&pool)
+        .await?;
+
+    // DB 删除成功后再清理文件；失败仅记日志
+    for path in book_paths {
+        if std::path::Path::new(&path).exists()
+            && let Err(e) = tokio::fs::remove_file(&path).await
+        {
+            tracing::warn!(error = %e, file_path = %path, "Failed to delete book file during account deletion");
+        }
+    }
+
+    Ok(Json(ApiResponse::<()>::message(
+        "Account deleted successfully",
     )))
 }
 

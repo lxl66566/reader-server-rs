@@ -3,6 +3,7 @@ use axum::{
     extract::{Path, Query, State},
     routing::{get, post},
 };
+use chrono::{SecondsFormat, Utc};
 use sqlx::{Pool, Sqlite};
 
 use crate::{
@@ -28,6 +29,8 @@ pub fn routes() -> Router<crate::app::AppState> {
         .route("/users", get(list_users))
         .route("/users/{user_id}/reset_password", post(reset_password))
         .route("/users/{user_id}/revoke_tokens", post(revoke_user_tokens))
+        .route("/users/{user_id}/ban", post(ban_user))
+        .route("/users/{user_id}/unban", post(unban_user))
         .route("/admins", get(list_admins).post(create_admin))
         .route("/audit_logs", get(list_audit_logs))
 }
@@ -191,7 +194,8 @@ async fn list_users(
     // 使用 JOIN + GROUP BY 一次性获取用户及其书籍数量，避免 N+1 查询
     let users = sqlx::query_as::<_, AdminUserListItem>(
         r"SELECT u.id AS user_id, u.username, u.created_at,
-                  u.total_reading_time, COUNT(b.id) AS book_count
+                  u.total_reading_time, u.status, u.banned_at,
+                  COUNT(b.id) AS book_count
            FROM users u
            LEFT JOIN books b ON b.user_id = u.id
            GROUP BY u.id
@@ -284,6 +288,71 @@ async fn revoke_user_tokens(
     .await?;
 
     Ok(Json(ApiResponse::<()>::message("User tokens revoked")))
+}
+
+// 封禁用户：设 status=banned 并递增 token_version 立即踢下线
+async fn ban_user(
+    admin: AuthAdmin,
+    State(pool): State<Pool<Sqlite>>,
+    Path(user_id): Path<i64>,
+) -> Result<Json<ApiResponse<()>>, AppError> {
+    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    let result = sqlx::query!(
+        "UPDATE users SET status = 'banned', banned_at = ?, token_version = token_version + 1 \
+         WHERE id = ? AND status != 'banned'",
+        now,
+        user_id,
+    )
+    .execute(&pool)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        // 可能不存在或已经被封禁
+        let exists =
+            sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM users WHERE id = ?)")
+                .bind(user_id)
+                .fetch_one(&pool)
+                .await?;
+        if !exists {
+            return Err(AppError::UserNotFound);
+        }
+        // 已被封禁，幂等返回成功
+    }
+
+    log_audit(&pool, &admin, "ban_user", Some("user"), Some(user_id), None).await?;
+
+    Ok(Json(ApiResponse::<()>::message("User banned")))
+}
+
+// 解封用户
+async fn unban_user(
+    admin: AuthAdmin,
+    State(pool): State<Pool<Sqlite>>,
+    Path(user_id): Path<i64>,
+) -> Result<Json<ApiResponse<()>>, AppError> {
+    let result = sqlx::query!(
+        "UPDATE users SET status = 'active', banned_at = NULL, failed_login_attempts = 0, locked_until = NULL \
+         WHERE id = ? AND status = 'banned'",
+        user_id,
+    )
+    .execute(&pool)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        let exists =
+            sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM users WHERE id = ?)")
+                .bind(user_id)
+                .fetch_one(&pool)
+                .await?;
+        if !exists {
+            return Err(AppError::UserNotFound);
+        }
+        // 非封禁状态，幂等返回成功
+    }
+
+    log_audit(&pool, &admin, "unban_user", Some("user"), Some(user_id), None).await?;
+
+    Ok(Json(ApiResponse::<()>::message("User unbanned")))
 }
 
 // 列出所有管理员

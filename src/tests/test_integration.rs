@@ -671,6 +671,387 @@ async fn test_full_integration() {
     println!("\n===== All integration tests passed! =====");
 }
 
+#[tokio::test]
+async fn test_bookmarks_and_annotations() {
+    let (app, _pool) = setup_test_app().await.unwrap();
+    let token = register_and_login(&app, "reader", "password1").await;
+
+    // 上传一本书作为测试目标
+    let book = upload_test_book(&app, &token, "笔记测试书", TEST_BOOK_CONTENT, false).await;
+    let book_id = book["book_id"].as_i64().unwrap();
+
+    // ================================================================
+    //  书签 CRUD
+    // ================================================================
+
+    // 创建书签
+    let resp = super::make_json_request(
+        &app,
+        Method::POST,
+        &format!("/api/v1/books/{book_id}/bookmarks"),
+        &serde_json::json!({"position": 100, "label": "第一章末尾"}),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = response_json(resp).await;
+    let bookmark_id = json["data"]["id"].as_i64().unwrap();
+    assert_eq!(json["data"]["position"], 100);
+
+    // 列出书签
+    let resp = make_request(
+        &app,
+        Method::GET,
+        &format!("/api/v1/books/{book_id}/bookmarks"),
+        Body::empty(),
+        Some(&token),
+    )
+    .await;
+    let json = response_json(resp).await;
+    assert_eq!(json["data"]["bookmarks"].as_array().unwrap().len(), 1);
+
+    // 删除书签
+    let resp = make_request(
+        &app,
+        Method::DELETE,
+        &format!("/api/v1/books/{book_id}/bookmarks/{bookmark_id}"),
+        Body::empty(),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 删除不存在书签应 404
+    let resp = make_request(
+        &app,
+        Method::DELETE,
+        &format!("/api/v1/books/{book_id}/bookmarks/99999"),
+        Body::empty(),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    // ================================================================
+    //  批注 CRUD
+    // ================================================================
+
+    // 创建笔记
+    let resp = super::make_json_request(
+        &app,
+        Method::POST,
+        &format!("/api/v1/books/{book_id}/annotations"),
+        &serde_json::json!({
+            "kind": "note",
+            "start_position": 50,
+            "content": "这段写得好"
+        }),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = response_json(resp).await;
+    let note_id = json["data"]["id"].as_i64().unwrap();
+
+    // 创建高亮：必须带 end_position > start_position
+    let resp = super::make_json_request(
+        &app,
+        Method::POST,
+        &format!("/api/v1/books/{book_id}/annotations"),
+        &serde_json::json!({
+            "kind": "highlight",
+            "start_position": 200,
+            "end_position": 250,
+            "excerpt": "..."
+        }),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = response_json(resp).await;
+    let highlight_id = json["data"]["id"].as_i64().unwrap();
+
+    // 高亮校验：end_position 缺失应失败
+    let resp = super::make_json_request(
+        &app,
+        Method::POST,
+        &format!("/api/v1/books/{book_id}/annotations"),
+        &serde_json::json!({"kind": "highlight", "start_position": 10}),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // 列出批注
+    let resp = make_request(
+        &app,
+        Method::GET,
+        &format!("/api/v1/books/{book_id}/annotations"),
+        Body::empty(),
+        Some(&token),
+    )
+    .await;
+    let json = response_json(resp).await;
+    assert_eq!(json["data"]["annotations"].as_array().unwrap().len(), 2);
+
+    // 更新批注内容
+    let resp = super::make_json_request(
+        &app,
+        Method::PUT,
+        &format!("/api/v1/books/{book_id}/annotations/{note_id}"),
+        &serde_json::json!({"content": "更新后的笔记"}),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 删除批注
+    let resp = make_request(
+        &app,
+        Method::DELETE,
+        &format!("/api/v1/books/{book_id}/annotations/{highlight_id}"),
+        Body::empty(),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 列表应只剩一条
+    let resp = make_request(
+        &app,
+        Method::GET,
+        &format!("/api/v1/books/{book_id}/annotations"),
+        Body::empty(),
+        Some(&token),
+    )
+    .await;
+    let json = response_json(resp).await;
+    assert_eq!(json["data"]["annotations"].as_array().unwrap().len(), 1);
+
+    println!("\n===== Bookmarks/Annotations tests passed! =====");
+}
+
+#[tokio::test]
+async fn test_book_search() {
+    let (app, _pool) = setup_test_app().await.unwrap();
+    let token = register_and_login(&app, "searcher", "password1").await;
+
+    upload_test_book(&app, &token, "三体", "刘慈欣\n第一章 科学边界\n...", false).await;
+    upload_test_book(
+        &app,
+        &token,
+        "球状闪电",
+        "刘慈欣\n序章\n...",
+        false,
+    )
+    .await;
+    upload_test_book(
+        &app,
+        &token,
+        "小王子",
+        "圣埃克苏佩里\n...",
+        false,
+    )
+    .await;
+
+    // 按 title 搜
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/v1/books/search?q=%E4%B8%89", // "三"
+        Body::empty(),
+        Some(&token),
+    )
+    .await;
+    let json = response_json(resp).await;
+    assert_eq!(json["data"]["total"], 1);
+    assert_eq!(json["data"]["books"][0]["title"], "三体");
+
+    // 按 author 搜（刘慈欣匹配两本）
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/v1/books/search?q=%E5%88%98%E6%85%88%E6%AC%A3", // "刘慈欣"
+        Body::empty(),
+        Some(&token),
+    )
+    .await;
+    let json = response_json(resp).await;
+    assert_eq!(json["data"]["total"], 2);
+
+    // 按作者搜（圣埃克苏佩里 → 小王子）
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/v1/books/search?q=%E5%9C%A3%E5%9F%83%E5%85%8B", // "圣埃"
+        Body::empty(),
+        Some(&token),
+    )
+    .await;
+    let json = response_json(resp).await;
+    assert_eq!(json["data"]["total"], 1);
+    assert_eq!(json["data"]["books"][0]["title"], "小王子");
+
+    // 空查询应 400
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/v1/books/search?q=",
+        Body::empty(),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // 非法 scope 应 400
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/v1/books/search?q=x&scope=invalid",
+        Body::empty(),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    println!("\n===== Book search tests passed! =====");
+}
+
+#[tokio::test]
+async fn test_user_ban_and_delete_account() {
+    let (app, _pool) = setup_test_app().await.unwrap();
+    let (_admin_token, _) = setup_admin(&app).await;
+
+    // 关闭邀请码，方便注册
+    let _ = super::make_json_request(
+        &app,
+        Method::PUT,
+        "/api/v1/admin/settings",
+        &serde_json::json!({"invite_code_required": false}),
+        Some(&_admin_token),
+    )
+    .await;
+
+    let token_user = register_and_login(&app, "ban_me", "pass1234").await;
+
+    // user 上传一本书
+    let _book = upload_test_book(&app, &token_user, "测试", TEST_BOOK_CONTENT, false).await;
+
+    // 列出用户拿 user_id
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/v1/admin/users",
+        Body::empty(),
+        Some(&_admin_token),
+    )
+    .await;
+    let json = response_json(resp).await;
+    let user_id = json["data"]["users"][0]["user_id"].as_i64().unwrap();
+    assert_eq!(json["data"]["users"][0]["status"], "active");
+
+    // ================================================================
+    //  封禁 / 解封
+    // ================================================================
+
+    // 封禁
+    let resp = make_request(
+        &app,
+        Method::POST,
+        &format!("/api/v1/admin/users/{user_id}/ban"),
+        Body::empty(),
+        Some(&_admin_token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 用户原 token 应失效（被封禁）
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/v1/auth/user_info",
+        Body::empty(),
+        Some(&token_user),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // 列表 status=banned
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/v1/admin/users",
+        Body::empty(),
+        Some(&_admin_token),
+    )
+    .await;
+    let json = response_json(resp).await;
+    assert_eq!(json["data"]["users"][0]["status"], "banned");
+
+    // 解封
+    let resp = make_request(
+        &app,
+        Method::POST,
+        &format!("/api/v1/admin/users/{user_id}/unban"),
+        Body::empty(),
+        Some(&_admin_token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 但 token_version 已变更，旧 token 仍失效；重新登录才能用
+    let resp = super::make_json_request(
+        &app,
+        Method::POST,
+        "/api/v1/auth/login",
+        &serde_json::json!({"username": "ban_me", "password": "pass1234"}),
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = response_json(resp).await;
+    let new_token = json["data"]["token"].as_str().unwrap().to_string();
+
+    // ================================================================
+    //  自助注销
+    // ================================================================
+
+    // 错密码应失败
+    let resp = super::make_json_request(
+        &app,
+        Method::DELETE,
+        "/api/v1/auth/account",
+        &serde_json::json!({"password": "wrong"}),
+        Some(&new_token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // 正确密码注销
+    let resp = super::make_json_request(
+        &app,
+        Method::DELETE,
+        "/api/v1/auth/account",
+        &serde_json::json!({"password": "pass1234"}),
+        Some(&new_token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 再登录应失败（账户已删）
+    let resp = super::make_json_request(
+        &app,
+        Method::POST,
+        "/api/v1/auth/login",
+        &serde_json::json!({"username": "ban_me", "password": "pass1234"}),
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    println!("\n===== Ban / Delete account tests passed! =====");
+}
+
 async fn login_as_admin(app: &axum::Router) -> axum::response::Response {
     super::make_json_request(
         app,

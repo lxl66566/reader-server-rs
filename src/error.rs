@@ -36,6 +36,9 @@ pub enum AppError {
     #[error("Account temporarily locked due to too many failed login attempts")]
     UserLockedOut,
 
+    #[error("Account has been banned")]
+    UserBanned,
+
     #[error("Admin not found")]
     AdminNotFound,
 
@@ -62,6 +65,21 @@ pub enum AppError {
 
     #[error("Chapter not found")]
     ChapterNotFound,
+
+    #[error("Bookmark not found")]
+    BookmarkNotFound,
+
+    #[error("Annotation not found")]
+    AnnotationNotFound,
+
+    #[error("Highlight annotation requires end_position > start_position")]
+    AnnotationRangeInvalid,
+
+    #[error("Search query must not be empty")]
+    SearchQueryEmpty,
+
+    #[error("Invalid search scope; must be one of: mine, public, all")]
+    InvalidSearchScope,
 
     #[error("Username must be between 2 and 20 characters")]
     UsernameLengthInvalid,
@@ -149,7 +167,8 @@ impl IntoResponse for AppError {
             | AppError::InvalidAdminId
             | AppError::TokenExpiredOrInvalid
             | AppError::IncorrectAdminPassword
-            | AppError::UserLockedOut => StatusCode::UNAUTHORIZED,
+            | AppError::UserLockedOut
+            | AppError::UserBanned => StatusCode::UNAUTHORIZED,
 
             AppError::BookAccessDenied
             | AppError::BookModifyDenied
@@ -159,6 +178,8 @@ impl IntoResponse for AppError {
             AppError::BookNotFound
             | AppError::UserNotFound
             | AppError::ChapterNotFound
+            | AppError::BookmarkNotFound
+            | AppError::AnnotationNotFound
             | AppError::AdminNotFound => StatusCode::NOT_FOUND,
 
             AppError::UsernameLengthInvalid
@@ -179,6 +200,9 @@ impl IntoResponse for AppError {
             | AppError::UnsupportedFileFormat
             | AppError::PositionExceedsRange
             | AppError::InvalidPosition
+            | AppError::AnnotationRangeInvalid
+            | AppError::SearchQueryEmpty
+            | AppError::InvalidSearchScope
             | AppError::FormParseError(_)
             | AppError::FieldReadError(_, _) => StatusCode::BAD_REQUEST,
 
