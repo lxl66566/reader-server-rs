@@ -11,6 +11,8 @@ pub struct Config {
     pub db: DbConfig,
     pub storage: StorageConfig,
     pub jwt: JwtConfig,
+    pub log: LogConfig,
+    pub rate_limit: RateLimitConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,6 +41,22 @@ pub struct JwtConfig {
     pub admin_expiration: u64,
 }
 
+/// 日志轮转配置
+/// rotation: "hourly" | "daily" | "never"（never 时只输出到 stderr）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogConfig {
+    pub dir: PathBuf,
+    pub rotation: String,
+}
+
+/// 全局 IP 限流配置
+/// per_second + burst_size 共同决定 token bucket；按客户端 IP 维度计数
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RateLimitConfig {
+    pub per_second: u64,
+    pub burst_size: u32,
+}
+
 impl Default for Config {
     fn default() -> Self {
         Config {
@@ -58,6 +76,14 @@ impl Default for Config {
                 secret: String::new(),              // load_config 首次运行时会生成随机值
                 expiration: 60 * 60 * 24 * 30,      // 30天
                 admin_expiration: 60 * 60 * 24 * 7, // 7天
+            },
+            log: LogConfig {
+                dir: PathBuf::from("logs"),
+                rotation: "daily".to_string(),
+            },
+            rate_limit: RateLimitConfig {
+                per_second: 10,
+                burst_size: 30,
             },
         }
     }

@@ -67,6 +67,9 @@ type Annotation = {
 |---|---|---|---|---|
 | GET | /health | - | - | 文本 "ok" |
 | POST | /api/v1/auth/register | - | Body: { username: string; password: string; invite_code?: string } | { user_id: number; username: string; token: string } |
+
+> 全局按客户端 IP 维度限流，默认 10 rps / burst 30；超限返回 429。
+> `/health` 与带 If-None-Match 命中的请求不消耗带宽。
 | POST | /api/v1/auth/login | - | Body: { username: string; password: string } | { user_id: number; username: string; token: string } |
 | GET | /api/v1/auth/user_info | Auth | - | { user_id: number; username: string; total_reading_time: number; book_count: number; status: 'active' \| 'banned' } |
 | POST | /api/v1/auth/change_password | Auth | Body: { old_password: string; new_password: string } | {} |
@@ -100,7 +103,7 @@ type Annotation = {
 | GET | /api/v1/books?page=number&limit=number | Auth | - | { total: number; books: Book[] } |
 | GET | /api/v1/books/search?q=string&scope=mine\|public\|all&page=number&limit=number | Auth | - | { total: number; books: Book[] } |
 | GET | /api/v1/books/:book_id | Auth | - | BookDetail |
-| GET | /api/v1/books/:book_id/content?position=number&length=number | Auth | - | { content: string; next_position: number } |
+| GET | /api/v1/books/:book_id/content?position=number&length=number | Auth | Header: If-None-Match? | 200 + ETag：{ content: string; next_position: number }；ETag 命中返回 304 |
 | GET | /api/v1/books/:book_id/jump_to_chapter?chapter_id=number | Auth | - | { position: number } |
 | PUT | /api/v1/books/:book_id | Auth | Body: { title?: string; author?: string; is_public?: boolean } | {} |
 | DELETE | /api/v1/books/:book_id | Auth | - | {} |
@@ -122,7 +125,7 @@ type Annotation = {
 
 | 方法 | URL | 权限 | 请求参数 | 响应 data |
 |---|---|---|---|---|
-| GET | /api/v1/reading/settings | Auth | - | ReadingSettings |
+| GET | /api/v1/reading/settings | Auth | Header: If-None-Match? | 200 + ETag：ReadingSettings；ETag 命中返回 304 |
 | PUT | /api/v1/reading/settings | Auth | Body: { font_size?: number; background_color?: string; text_color?: string; line_height?: number; letter_spacing?: number; paragraph_spacing?: number; reading_width?: number; text_indent?: number; simplified_chinese?: boolean } | {} |
 | POST | /api/v1/reading/heartbeat | Auth | Body: { book_id: number; position: number; device_id: string } | { synced: boolean; position: number; reading_time: number } |
 

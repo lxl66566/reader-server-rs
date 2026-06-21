@@ -29,17 +29,12 @@ async fn main() -> Result<()> {
     // 初始化错误处理
     color_eyre::install().map_err(|e| anyhow::anyhow!("Failed to install color_eyre: {e}"))?;
 
-    // 初始化日志
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "reader_server_rs=debug,tower_http=debug,axum=debug".into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
-
-    // 加载配置
+    // 加载配置（先于日志初始化，因为日志路径来自配置）
     let config = config::load_config().await?;
+
+    // 初始化日志：同时输出到滚动文件与 stderr
+    // _guard 必须存活到程序结束，否则后台 flush 任务会被 drop，丢日志
+    let _log_guard = init_tracing(&config)?;
 
     // 确保目录存在
     ensure_directories(&config).await?;
@@ -62,6 +57,53 @@ async fn main() -> Result<()> {
     axum::serve(TcpListener::bind(addr).await?, app).await?;
 
     Ok(())
+}
+
+/// 初始化 tracing：根据配置选择滚动策略，同时输出到文件和 stderr
+/// 返回的 WorkerGuard 必须由调用方持有到程序退出，确保异步 writer 刷盘
+fn init_tracing(config: &config::Config) -> Result<Option<tracing_appender::non_blocking::WorkerGuard>> {
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "reader_server_rs=debug,tower_http=debug,axum=debug".into());
+
+    let rotation = config.log.rotation.trim().to_ascii_lowercase();
+    if rotation == "never" {
+        // 仅 stderr
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(tracing_subscriber::fmt::layer())
+            .init();
+        tracing::info!("日志仅输出到 stderr（rotation=never）");
+        return Ok(None);
+    }
+
+    // 确保日志目录存在（同步创建，因为日志初始化早于 async runtime 上下文）
+    std::fs::create_dir_all(&config.log.dir)?;
+
+    let file_appender = match rotation.as_str() {
+        "hourly" => tracing_appender::rolling::hourly(&config.log.dir, "reader-server.log"),
+        "daily" | "" => tracing_appender::rolling::daily(&config.log.dir, "reader-server.log"),
+        other => {
+            anyhow::bail!("unknown log rotation '{other}', expected hourly/daily/never")
+        }
+    };
+    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+
+    // 文件 layer 用 non-blocking writer；stderr layer 直接走标准 fmt
+    let file_layer = tracing_subscriber::fmt::layer().with_writer(non_blocking);
+    let stderr_layer = tracing_subscriber::fmt::layer().with_writer(std::io::stderr);
+
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(file_layer)
+        .with(stderr_layer)
+        .init();
+
+    tracing::info!(
+        dir = %config.log.dir.display(),
+        rotation = %rotation,
+        "日志文件已启用滚动"
+    );
+    Ok(Some(guard))
 }
 
 async fn ensure_directories(config: &config::Config) -> Result<()> {

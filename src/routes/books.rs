@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use axum::{
     Json, Router,
     extract::{Path, Query, State, multipart::Multipart},
+    http::{HeaderMap, header},
+    response::{IntoResponse, Response},
     routing::{delete, get, post, put},
 };
 use rand::prelude::IndexedRandom;
@@ -19,7 +21,8 @@ use crate::{
         ChapterResponse, JumpToChapterResponse, PublicBookListItem, PublicBookListResponse,
         RandomPublicBooksResponse, UpdateBookRequest, UploadBookResponse,
     },
-    utils::{extract_chapters, generate_uuid, parse_epub},
+    routes::reading::etag_matches,
+    utils::{extract_chapters, generate_uuid, make_etag, parse_epub},
 };
 
 // 分页查询参数
@@ -515,7 +518,8 @@ async fn get_book_content(
     State(pool): State<Pool<Sqlite>>,
     Path(book_id): Path<i64>,
     Query(params): Query<ContentParams>,
-) -> Result<Json<ApiResponse<BookContentResponse>>, AppError> {
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
     // 查询书籍信息
     let book = sqlx::query!(
         "SELECT user_id, file_path, is_public FROM books WHERE id = ?",
@@ -558,13 +562,27 @@ async fn get_book_content(
         .collect();
 
     // 构建响应
-    let response = BookContentResponse {
+    let resp_data = BookContentResponse {
         content: content_slice,
         #[allow(clippy::cast_possible_wrap)]
         next_position: end_pos as i64,
     };
 
-    Ok(Json(ApiResponse::success(response)))
+    // 基于 book_id + position + 内容片段生成 ETag；同书同位置同长度则命中
+    let etag_input = format!("{book_id}:{position}:{length}:{}", resp_data.content);
+    let etag = make_etag(&etag_input);
+
+    if let Some(if_none) = headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok())
+        && etag_matches(if_none, &etag)
+    {
+        return Ok(axum::http::StatusCode::NOT_MODIFIED.into_response());
+    }
+
+    Ok((
+        [(header::ETAG, etag.as_str())],
+        Json(ApiResponse::success(resp_data)),
+    )
+        .into_response())
 }
 
 // 跳转到指定章节

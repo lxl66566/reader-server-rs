@@ -50,6 +50,14 @@ pub async fn setup_test_app() -> Result<(Router, Pool<Sqlite>)> {
             expiration: 3600,
             admin_expiration: 3600,
         },
+        log: crate::config::LogConfig {
+            dir: std::env::temp_dir().join("test_logs"),
+            rotation: "never".to_string(),
+        },
+        rate_limit: crate::config::RateLimitConfig {
+            per_second: 1000,
+            burst_size: 1000,
+        },
     };
 
     let app = create_app(pool.clone(), config);
@@ -67,7 +75,12 @@ pub async fn make_request<B>(
 where
     B: Into<Body>,
 {
-    let mut req_builder = Request::builder().method(&method).uri(uri);
+    // 测试用 oneshot 没有 peer_addr；tower_governor 默认从 X-Forwarded-For
+    // 取 IP，故统一注入一个测试 IP 以避免被限流层拒绝
+    let mut req_builder = Request::builder()
+        .method(&method)
+        .uri(uri)
+        .header("X-Forwarded-For", "127.0.0.1");
     if let Some(token) = auth_token {
         req_builder = req_builder.header("Authorization", format!("Bearer {token}"));
     }
@@ -86,7 +99,8 @@ pub async fn make_json_request(
     let mut req_builder = Request::builder()
         .method(&method)
         .uri(uri)
-        .header("Content-Type", "application/json");
+        .header("Content-Type", "application/json")
+        .header("X-Forwarded-For", "127.0.0.1");
     if let Some(token) = auth_token {
         req_builder = req_builder.header("Authorization", format!("Bearer {token}"));
     }
@@ -126,10 +140,11 @@ pub async fn make_multipart_request(
 
     body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
 
-    let mut req_builder = Request::builder().method(Method::POST).uri(uri).header(
-        "Content-Type",
-        format!("multipart/form-data; boundary={boundary}"),
-    );
+    let mut req_builder = Request::builder()
+        .method(Method::POST)
+        .uri(uri)
+        .header("Content-Type", format!("multipart/form-data; boundary={boundary}"))
+        .header("X-Forwarded-For", "127.0.0.1");
     if let Some(token) = auth_token {
         req_builder = req_builder.header("Authorization", format!("Bearer {token}"));
     }

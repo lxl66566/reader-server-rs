@@ -1,6 +1,11 @@
 use axum::{Router, extract::FromRef, routing::get};
 use sqlx::{Pool, Sqlite};
 use tower::ServiceBuilder;
+use tower_governor::{
+    GovernorLayer,
+    governor::GovernorConfigBuilder,
+    key_extractor::SmartIpKeyExtractor,
+};
 use tower_http::{
     compression::CompressionLayer,
     cors::{Any, CorsLayer},
@@ -43,9 +48,19 @@ pub fn create_app(db: Pool<Sqlite>, config: Config) -> Router {
         .allow_methods(Any)
         .allow_headers(Any);
 
+    // 创建限流配置：用 SmartIpKeyExtractor 支持 X-Forwarded-For / x-real-ip / forwarded
+    // 部署时务必保证反代正确设置这些 header（否则会被伪造绕过）
+    let governor_config = GovernorConfigBuilder::default()
+        .key_extractor(SmartIpKeyExtractor)
+        .per_second(state.config.rate_limit.per_second)
+        .burst_size(state.config.rate_limit.burst_size)
+        .use_headers()
+        .finish()
+        .expect("governor config with positive per_second/burst_size always builds");
+
     // 构建路由
     Router::new()
-        // 健康检查
+        // 健康检查（不受限流影响，方便监控探活）
         .route("/health", get(|| async { "ok" }))
         // 认证路由
         .nest("/api/v1/auth", auth::routes())
@@ -55,7 +70,9 @@ pub fn create_app(db: Pool<Sqlite>, config: Config) -> Router {
         .nest("/api/v1/reading", reading::routes())
         // 管理员路由
         .nest("/api/v1/admin", admin::routes())
-        // 中间件
+        // 限流：内层最先执行；放外层避免被其它 layer 包装导致 body 类型不兼容
+        .layer(GovernorLayer::new(governor_config))
+        // 其它中间件
         .layer(
             ServiceBuilder::new()
                 .layer(CompressionLayer::new())

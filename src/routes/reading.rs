@@ -1,6 +1,8 @@
 use axum::{
     Json, Router,
     extract::State,
+    http::{HeaderMap, header},
+    response::{IntoResponse, Response},
     routing::{get, post},
 };
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -10,7 +12,28 @@ use crate::{
     auth::AuthUser,
     error::{ApiResponse, AppError},
     models::{HeartbeatRequest, HeartbeatResponse, ReadingSettings, UpdateReadingSettingsRequest},
+    utils::make_etag,
 };
+
+/// 检查请求头 If-None-Match 是否命中给定 ETag
+/// 处理 `*` 通配、`W/` 前缀、以及逗号分隔的多个 ETag
+pub fn etag_matches(if_none_match: &str, etag: &str) -> bool {
+    /// 去掉 weak 前缀 W/ 或 w/，便于比较
+    fn strip_weak(s: &str) -> &str {
+        s.trim_start_matches("W/").trim_start_matches("w/")
+    }
+
+    for candidate in if_none_match.split(',') {
+        let candidate = candidate.trim();
+        if candidate == "*" {
+            return true;
+        }
+        if strip_weak(candidate) == strip_weak(etag) {
+            return true;
+        }
+    }
+    false
+}
 
 // 阅读路由
 pub fn routes() -> Router<crate::app::AppState> {
@@ -26,7 +49,8 @@ pub fn routes() -> Router<crate::app::AppState> {
 async fn get_reading_settings(
     auth: AuthUser,
     State(pool): State<Pool<Sqlite>>,
-) -> Result<Json<ApiResponse<ReadingSettings>>, AppError> {
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
     // 查询用户阅读设置
     let settings =
         sqlx::query_as::<_, ReadingSettings>("SELECT * FROM reading_settings WHERE user_id = ?")
@@ -62,7 +86,22 @@ async fn get_reading_settings(
         }
     };
 
-    Ok(Json(ApiResponse::success(settings)))
+    // 序列化 payload，基于其内容生成 ETag；客户端 If-None-Match 命中则返回 304
+    let body =
+        serde_json::to_string(&settings).map_err(|e| AppError::Internal(e.to_string()))?;
+    let etag = make_etag(&body);
+
+    if let Some(if_none) = headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok())
+        && etag_matches(if_none, &etag)
+    {
+        return Ok(axum::http::StatusCode::NOT_MODIFIED.into_response());
+    }
+
+    Ok((
+        [(header::ETAG, etag.as_str())],
+        Json(ApiResponse::success(settings)),
+    )
+        .into_response())
 }
 
 // 更新阅读设置

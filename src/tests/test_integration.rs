@@ -1052,6 +1052,55 @@ async fn test_user_ban_and_delete_account() {
     println!("\n===== Ban / Delete account tests passed! =====");
 }
 
+#[tokio::test]
+async fn test_etag_caching() {
+    let (app, _pool) = setup_test_app().await.unwrap();
+    let token = register_and_login(&app, "cacher", "password1").await;
+
+    // 第一次获取设置：应该返回 200 + ETag
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/v1/reading/settings",
+        Body::empty(),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let etag = resp
+        .headers()
+        .get("etag")
+        .expect("ETag should be set")
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    // 第二次带 If-None-Match：应该返回 304
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/v1/reading/settings",
+        Body::empty(),
+        Some(&token),
+    )
+    .await;
+    // make_request 不支持自定义 header，重发同样请求验证 ETag 仍然稳定
+    let _ = resp;
+    // 直接重新发带 If-None-Match 的请求
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/api/v1/reading/settings")
+        .header("Authorization", format!("Bearer {token}"))
+        .header("If-None-Match", &etag)
+        .header("X-Forwarded-For", "127.0.0.1")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
+
+    println!("\n===== ETag caching tests passed! =====");
+}
+
 async fn login_as_admin(app: &axum::Router) -> axum::response::Response {
     super::make_json_request(
         app,
