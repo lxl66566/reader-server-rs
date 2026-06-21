@@ -28,8 +28,8 @@ impl Claims {
     // 创建用户JWT声明
     pub fn new_user(user_id: i64, token_version: i64, config: &Config) -> Self {
         let now = Utc::now();
-        let expiration = i64::try_from(config.jwt.expiration)
-            .expect("JWT expiration must fit in i64");
+        let expiration =
+            i64::try_from(config.jwt.expiration).expect("JWT expiration must fit in i64");
         let expiry = now + Duration::seconds(expiration);
         Self {
             sub: user_id.to_string(),
@@ -56,7 +56,7 @@ impl Claims {
     }
 }
 
-/// 将 DateTime 的 timestamp 从 i64 安全转为 u64。
+/// 将 `DateTime` 的 timestamp 从 i64 安全转为 u64。
 /// 在 1970 年之后的正常业务场景下不会失败。
 fn timestamp_u64(dt: &DateTime<Utc>) -> u64 {
     u64::try_from(dt.timestamp()).expect("timestamp must be non-negative")
@@ -110,13 +110,10 @@ where
         let user_id: i64 = claims.sub.parse().map_err(|_| AppError::InvalidUserId)?;
 
         // 验证用户存在，并检查 token 版本号是否匹配（用于吊销已签发的 token）
-        let user = sqlx::query!(
-            "SELECT token_version FROM users WHERE id = ?",
-            user_id
-        )
-        .fetch_optional(&pool)
-        .await
-        .map_err(AppError::Database)?;
+        let user = sqlx::query!("SELECT token_version FROM users WHERE id = ?", user_id)
+            .fetch_optional(&pool)
+            .await
+            .map_err(AppError::Database)?;
 
         match user {
             None => Err(AppError::UserNotFound),

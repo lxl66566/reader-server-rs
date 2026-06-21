@@ -266,7 +266,9 @@ async fn change_password(
     .await?;
 
     // 返回成功信息
-    Ok(Json(ApiResponse::<()>::message("Password changed successfully")))
+    Ok(Json(ApiResponse::<()>::message(
+        "Password changed successfully",
+    )))
 }
 
 // 管理员首次设置

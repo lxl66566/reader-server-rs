@@ -100,8 +100,7 @@ async fn update_reading_settings(
         has_update = true;
     }
     if let Some(v) = req.background_color {
-        sep.push("background_color = ")
-            .push_bind_unseparated(v);
+        sep.push("background_color = ").push_bind_unseparated(v);
         has_update = true;
     }
     if let Some(v) = req.text_color {
@@ -113,18 +112,15 @@ async fn update_reading_settings(
         has_update = true;
     }
     if let Some(v) = req.letter_spacing {
-        sep.push("letter_spacing = ")
-            .push_bind_unseparated(v);
+        sep.push("letter_spacing = ").push_bind_unseparated(v);
         has_update = true;
     }
     if let Some(v) = req.paragraph_spacing {
-        sep.push("paragraph_spacing = ")
-            .push_bind_unseparated(v);
+        sep.push("paragraph_spacing = ").push_bind_unseparated(v);
         has_update = true;
     }
     if let Some(v) = req.reading_width {
-        sep.push("reading_width = ")
-            .push_bind_unseparated(v);
+        sep.push("reading_width = ").push_bind_unseparated(v);
         has_update = true;
     }
     if let Some(v) = req.text_indent {
@@ -132,8 +128,7 @@ async fn update_reading_settings(
         has_update = true;
     }
     if let Some(v) = req.simplified_chinese {
-        sep.push("simplified_chinese = ")
-            .push_bind_unseparated(v);
+        sep.push("simplified_chinese = ").push_bind_unseparated(v);
         has_update = true;
     }
 
@@ -269,7 +264,8 @@ async fn process_heartbeat(
 
     let result = qb.build().execute(&pool).await?;
 
-    // 乐观锁竞争失败：并发请求已抢先更新，返回当前最新进度（设备相同 → synced=true）
+    // 乐观锁竞争失败：并发请求已抢先更新，返回当前最新进度（设备相同 →
+    // synced=true）
     if result.rows_affected() == 0 {
         let current = sqlx::query!(
             "SELECT position, reading_time FROM reading_progress WHERE user_id = ? AND book_id = ?",

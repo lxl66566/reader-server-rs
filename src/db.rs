@@ -34,7 +34,8 @@ pub async fn run_migrations(pool: &Pool<Sqlite>) -> Result<()> {
 }
 
 /// 兼容性迁移：为旧版数据库（schema.sql 变更前创建）补充新增列。
-/// 新建数据库的 CREATE TABLE 已包含这些列，ALTER TABLE 会失败（duplicate column），忽略即可。
+/// 新建数据库的 CREATE TABLE 已包含这些列，ALTER TABLE 会失败（duplicate
+/// column），忽略即可。
 async fn run_compat_migrations(pool: &Pool<Sqlite>) -> Result<()> {
     for stmt in [
         "ALTER TABLE admin ADD COLUMN username TEXT",

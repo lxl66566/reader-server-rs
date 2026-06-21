@@ -190,12 +190,12 @@ async fn list_users(
 ) -> Result<Json<ApiResponse<ListUsersResponse>>, AppError> {
     // 使用 JOIN + GROUP BY 一次性获取用户及其书籍数量，避免 N+1 查询
     let users = sqlx::query_as::<_, AdminUserListItem>(
-        r#"SELECT u.id AS user_id, u.username, u.created_at,
+        r"SELECT u.id AS user_id, u.username, u.created_at,
                   u.total_reading_time, COUNT(b.id) AS book_count
            FROM users u
            LEFT JOIN books b ON b.user_id = u.id
            GROUP BY u.id
-           ORDER BY u.created_at DESC"#,
+           ORDER BY u.created_at DESC",
     )
     .fetch_all(&pool)
     .await?;
@@ -291,9 +291,10 @@ async fn list_admins(
     _: AuthAdmin,
     State(pool): State<Pool<Sqlite>>,
 ) -> Result<Json<ApiResponse<ListAdminsResponse>>, AppError> {
-    let admins = sqlx::query!("SELECT id, username, created_at FROM admin ORDER BY created_at DESC")
-        .fetch_all(&pool)
-        .await?;
+    let admins =
+        sqlx::query!("SELECT id, username, created_at FROM admin ORDER BY created_at DESC")
+            .fetch_all(&pool)
+            .await?;
 
     let list: Vec<AdminListItem> = admins
         .into_iter()
@@ -304,7 +305,9 @@ async fn list_admins(
         })
         .collect();
 
-    Ok(Json(ApiResponse::success(ListAdminsResponse { admins: list })))
+    Ok(Json(ApiResponse::success(ListAdminsResponse {
+        admins: list,
+    })))
 }
 
 // 创建新管理员
@@ -368,7 +371,7 @@ async fn list_audit_logs(
     #[allow(clippy::cast_sign_loss)]
     let limit = params.limit.unwrap_or(20).min(100);
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let offset = ((page - 1) * limit) as i64;
+    let offset = i64::from((page - 1) * limit);
 
     let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audit_logs")
         .fetch_one(&pool)
@@ -382,5 +385,8 @@ async fn list_audit_logs(
     .fetch_all(&pool)
     .await?;
 
-    Ok(Json(ApiResponse::success(ListAuditLogsResponse { total, logs })))
+    Ok(Json(ApiResponse::success(ListAuditLogsResponse {
+        total,
+        logs,
+    })))
 }

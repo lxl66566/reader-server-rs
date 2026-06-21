@@ -185,7 +185,7 @@ async fn upload_book(
             let result = chapter_qb.build().execute(&pool).await?;
 
             // SQLite 多行 INSERT 的 rowid 连续递增
-            #[allow(clippy::cast_sign_loss)]
+            #[allow(clippy::cast_sign_loss, clippy::cast_possible_wrap)]
             let count = chapters.len() as i64;
             let last_id = result.last_insert_rowid();
             let first_id = last_id - count + 1;
@@ -398,18 +398,15 @@ async fn update_book(
 
     let mut has_update = false;
     if let Some(title) = &req.title {
-        sep.push("title = ")
-            .push_bind_unseparated(title.clone());
+        sep.push("title = ").push_bind_unseparated(title.clone());
         has_update = true;
     }
     if let Some(author) = &req.author {
-        sep.push("author = ")
-            .push_bind_unseparated(author.clone());
+        sep.push("author = ").push_bind_unseparated(author.clone());
         has_update = true;
     }
     if let Some(is_public) = req.is_public {
-        sep.push("is_public = ")
-            .push_bind_unseparated(is_public);
+        sep.push("is_public = ").push_bind_unseparated(is_public);
         has_update = true;
     }
 

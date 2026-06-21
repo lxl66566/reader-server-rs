@@ -55,7 +55,7 @@ impl Default for Config {
                 max_file_size: 10 * 1024 * 1024, // 10MB
             },
             jwt: JwtConfig {
-                secret: String::new(), // load_config 首次运行时会生成随机值
+                secret: String::new(),              // load_config 首次运行时会生成随机值
                 expiration: 60 * 60 * 24 * 30,      // 30天
                 admin_expiration: 60 * 60 * 24 * 7, // 7天
             },

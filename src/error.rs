@@ -200,11 +200,7 @@ impl IntoResponse for AppError {
             self.to_string()
         };
 
-        (
-            status,
-            Json(ErrorResponse { message }),
-        )
-            .into_response()
+        (status, Json(ErrorResponse { message })).into_response()
     }
 }
 
