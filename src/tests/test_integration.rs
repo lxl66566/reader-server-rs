@@ -24,7 +24,7 @@ async fn test_full_integration() {
     let resp = make_request(
         &app,
         Method::GET,
-        "/api/admin/check_setup",
+        "/api/v1/admin/check_setup",
         Body::empty(),
         None,
     )
@@ -41,7 +41,7 @@ async fn test_full_integration() {
     let resp = make_request(
         &app,
         Method::GET,
-        "/api/admin/check_setup",
+        "/api/v1/admin/check_setup",
         Body::empty(),
         None,
     )
@@ -53,7 +53,7 @@ async fn test_full_integration() {
     let resp = super::make_json_request(
         &app,
         Method::POST,
-        "/api/auth/admin/setup",
+        "/api/v1/auth/admin/setup",
         &serde_json::json!({"username": "another", "password": "another"}),
         None,
     )
@@ -75,7 +75,7 @@ async fn test_full_integration() {
     let resp = super::make_json_request(
         &app,
         Method::PUT,
-        "/api/admin/settings",
+        "/api/v1/admin/settings",
         &serde_json::json!({"invite_code_required": false}),
         Some(&admin_token),
     )
@@ -86,7 +86,7 @@ async fn test_full_integration() {
     let resp = make_request(
         &app,
         Method::GET,
-        "/api/admin/settings",
+        "/api/v1/admin/settings",
         Body::empty(),
         Some(&admin_token),
     )
@@ -99,7 +99,7 @@ async fn test_full_integration() {
     let resp = super::make_json_request(
         &app,
         Method::POST,
-        "/api/admin/invite_code",
+        "/api/v1/admin/invite_code",
         &serde_json::json!({"limit_times": 1, "description": "test invite"}),
         Some(&admin_token),
     )
@@ -113,7 +113,7 @@ async fn test_full_integration() {
     let resp = make_request(
         &app,
         Method::GET,
-        "/api/admin/invite_codes",
+        "/api/v1/admin/invite_codes",
         Body::empty(),
         Some(&admin_token),
     )
@@ -154,7 +154,7 @@ async fn test_full_integration() {
     let resp = make_request(
         &app,
         Method::GET,
-        "/api/auth/user_info",
+        "/api/v1/auth/user_info",
         Body::empty(),
         Some(&token1),
     )
@@ -179,7 +179,7 @@ async fn test_full_integration() {
     let resp = super::make_json_request(
         &app,
         Method::POST,
-        "/api/auth/change_password",
+        "/api/v1/auth/change_password",
         &serde_json::json!({"old_password": "password1", "new_password": "newpassword1"}),
         Some(&token1),
     )
@@ -206,7 +206,7 @@ async fn test_full_integration() {
     let _resp = super::make_json_request(
         &app,
         Method::PUT,
-        "/api/admin/settings",
+        "/api/v1/admin/settings",
         &serde_json::json!({"invite_code_required": true}),
         Some(&admin_token),
     )
@@ -232,7 +232,7 @@ async fn test_full_integration() {
     let _resp = super::make_json_request(
         &app,
         Method::PUT,
-        "/api/admin/settings",
+        "/api/v1/admin/settings",
         &serde_json::json!({"invite_code_required": false}),
         Some(&admin_token),
     )
@@ -255,7 +255,7 @@ async fn test_full_integration() {
     let resp = make_request(
         &app,
         Method::GET,
-        "/api/books",
+        "/api/v1/books",
         Body::empty(),
         Some(&token1),
     )
@@ -270,7 +270,7 @@ async fn test_full_integration() {
     let resp = make_request(
         &app,
         Method::GET,
-        &format!("/api/books/{book1_id}"),
+        &format!("/api/v1/books/{book1_id}"),
         Body::empty(),
         Some(&token1),
     )
@@ -284,7 +284,7 @@ async fn test_full_integration() {
     let resp = make_request(
         &app,
         Method::GET,
-        &format!("/api/books/{book1_id}/content?position=0&length=100"),
+        &format!("/api/v1/books/{book1_id}/content?position=0&length=100"),
         Body::empty(),
         Some(&token1),
     )
@@ -298,7 +298,7 @@ async fn test_full_integration() {
     let resp = super::make_json_request(
         &app,
         Method::PUT,
-        &format!("/api/books/{book1_id}"),
+        &format!("/api/v1/books/{book1_id}"),
         &serde_json::json!({"title": "修改后的标题", "is_public": false}),
         Some(&token1),
     )
@@ -309,7 +309,7 @@ async fn test_full_integration() {
     let resp = make_request(
         &app,
         Method::GET,
-        &format!("/api/books/{book1_id}"),
+        &format!("/api/v1/books/{book1_id}"),
         Body::empty(),
         Some(&token1),
     )
@@ -322,7 +322,7 @@ async fn test_full_integration() {
     let resp = make_request(
         &app,
         Method::GET,
-        &format!("/api/books/{book1_id}"),
+        &format!("/api/v1/books/{book1_id}"),
         Body::empty(),
         Some(&token2),
     )
@@ -333,7 +333,7 @@ async fn test_full_integration() {
     let resp = make_request(
         &app,
         Method::DELETE,
-        &format!("/api/books/{book1_id}"),
+        &format!("/api/v1/books/{book1_id}"),
         Body::empty(),
         Some(&token2),
     )
@@ -344,7 +344,7 @@ async fn test_full_integration() {
     let resp = make_request(
         &app,
         Method::DELETE,
-        &format!("/api/books/{book2_id}"),
+        &format!("/api/v1/books/{book2_id}"),
         Body::empty(),
         Some(&token1),
     )
@@ -355,7 +355,7 @@ async fn test_full_integration() {
     let resp = make_request(
         &app,
         Method::GET,
-        "/api/books",
+        "/api/v1/books",
         Body::empty(),
         Some(&token1),
     )
@@ -376,7 +376,7 @@ async fn test_full_integration() {
     let resp = make_request(
         &app,
         Method::GET,
-        "/api/books/public",
+        "/api/v1/books/public",
         Body::empty(),
         Some(&token2),
     )
@@ -389,7 +389,7 @@ async fn test_full_integration() {
     let resp = make_request(
         &app,
         Method::GET,
-        "/api/books/random_public?count=1",
+        "/api/v1/books/random_public?count=1",
         Body::empty(),
         Some(&token2),
     )
@@ -407,7 +407,7 @@ async fn test_full_integration() {
     let resp = make_request(
         &app,
         Method::GET,
-        "/api/reading/settings",
+        "/api/v1/reading/settings",
         Body::empty(),
         Some(&token1),
     )
@@ -422,7 +422,7 @@ async fn test_full_integration() {
     let resp = super::make_json_request(
         &app,
         Method::PUT,
-        "/api/reading/settings",
+        "/api/v1/reading/settings",
         &serde_json::json!({
             "font_size": 22,
             "background_color": "#FFFFFF",
@@ -443,7 +443,7 @@ async fn test_full_integration() {
     let resp = make_request(
         &app,
         Method::GET,
-        "/api/reading/settings",
+        "/api/v1/reading/settings",
         Body::empty(),
         Some(&token1),
     )
@@ -458,7 +458,7 @@ async fn test_full_integration() {
     let resp = super::make_json_request(
         &app,
         Method::PUT,
-        "/api/reading/settings",
+        "/api/v1/reading/settings",
         &serde_json::json!({"font_size": 24}),
         Some(&token1),
     )
@@ -469,7 +469,7 @@ async fn test_full_integration() {
     let resp = make_request(
         &app,
         Method::GET,
-        "/api/reading/settings",
+        "/api/v1/reading/settings",
         Body::empty(),
         Some(&token1),
     )
@@ -487,7 +487,7 @@ async fn test_full_integration() {
     let resp = super::make_json_request(
         &app,
         Method::POST,
-        "/api/reading/heartbeat",
+        "/api/v1/reading/heartbeat",
         &serde_json::json!({"book_id": book1_id, "position": 100, "device_id": "device1"}),
         Some(&token1),
     )
@@ -501,7 +501,7 @@ async fn test_full_integration() {
     let resp = super::make_json_request(
         &app,
         Method::POST,
-        "/api/reading/heartbeat",
+        "/api/v1/reading/heartbeat",
         &serde_json::json!({"book_id": book1_id, "position": 200, "device_id": "device1"}),
         Some(&token1),
     )
@@ -515,7 +515,7 @@ async fn test_full_integration() {
     let resp = super::make_json_request(
         &app,
         Method::POST,
-        "/api/reading/heartbeat",
+        "/api/v1/reading/heartbeat",
         &serde_json::json!({"book_id": book1_id, "position": 999, "device_id": "device2"}),
         Some(&token1),
     )
@@ -532,7 +532,7 @@ async fn test_full_integration() {
     let resp = make_request(
         &app,
         Method::GET,
-        &format!("/api/books/{public_book_id}"),
+        &format!("/api/v1/books/{public_book_id}"),
         Body::empty(),
         Some(&token2),
     )
@@ -547,7 +547,7 @@ async fn test_full_integration() {
         let resp = make_request(
             &app,
             Method::GET,
-            &format!("/api/books/{public_book_id}/jump_to_chapter?chapter_id={chapter_id}"),
+            &format!("/api/v1/books/{public_book_id}/jump_to_chapter?chapter_id={chapter_id}"),
             Body::empty(),
             Some(&token2),
         )
@@ -567,7 +567,7 @@ async fn test_full_integration() {
     let resp = make_request(
         &app,
         Method::GET,
-        "/api/admin/users",
+        "/api/v1/admin/users",
         Body::empty(),
         Some(&admin_token),
     )
@@ -585,7 +585,7 @@ async fn test_full_integration() {
     let resp = super::make_json_request(
         &app,
         Method::POST,
-        &format!("/api/admin/users/{user2_id}/reset_password"),
+        &format!("/api/v1/admin/users/{user2_id}/reset_password"),
         &serde_json::json!({"new_password": "resetpwd123"}),
         Some(&admin_token),
     )
@@ -602,14 +602,14 @@ async fn test_full_integration() {
     section!("I. Error Handling");
 
     // I1: no auth token
-    let resp = make_request(&app, Method::GET, "/api/books", Body::empty(), None).await;
+    let resp = make_request(&app, Method::GET, "/api/v1/books", Body::empty(), None).await;
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 
     // I2: non-existent book
     let resp = make_request(
         &app,
         Method::GET,
-        "/api/books/99999",
+        "/api/v1/books/99999",
         Body::empty(),
         Some(&token1),
     )
@@ -620,7 +620,7 @@ async fn test_full_integration() {
     let resp = make_request(
         &app,
         Method::GET,
-        &format!("/api/books/{book1_id}/content?position=999999"),
+        &format!("/api/v1/books/{book1_id}/content?position=999999"),
         Body::empty(),
         Some(&token1),
     )
@@ -631,7 +631,7 @@ async fn test_full_integration() {
     let resp = make_request(
         &app,
         Method::GET,
-        "/api/admin/users",
+        "/api/v1/admin/users",
         Body::empty(),
         Some(&token1),
     )
@@ -642,7 +642,7 @@ async fn test_full_integration() {
     let exe_bytes: &[u8] = &[0x4D, 0x5A, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00]; // MZ = Windows EXE
     let resp = make_multipart_request(
         &app,
-        "/api/books/upload",
+        "/api/v1/books/upload",
         vec![("title", "bad file"), ("is_public", "true")],
         Some(("file", "test.exe", exe_bytes)),
         Some(&token1),
@@ -654,7 +654,7 @@ async fn test_full_integration() {
     let resp = super::make_json_request(
         &app,
         Method::POST,
-        "/api/auth/change_password",
+        "/api/v1/auth/change_password",
         &serde_json::json!({"old_password": "wrongpassword", "new_password": "newpwd"}),
         Some(&token1),
     )
@@ -675,7 +675,7 @@ async fn login_as_admin(app: &axum::Router) -> axum::response::Response {
     super::make_json_request(
         app,
         Method::POST,
-        "/api/auth/admin/login",
+        "/api/v1/auth/admin/login",
         &serde_json::json!({"username": "admin", "password": "admin123"}),
         None,
     )

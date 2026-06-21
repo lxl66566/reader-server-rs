@@ -146,7 +146,7 @@ pub async fn setup_admin(app: &Router) -> (String, serde_json::Value) {
     let resp = make_json_request(
         app,
         Method::POST,
-        "/api/auth/admin/setup",
+        "/api/v1/auth/admin/setup",
         &serde_json::json!({"username": "admin", "password": "admin123"}),
         None,
     )
@@ -167,7 +167,7 @@ pub async fn register_user(
     make_json_request(
         app,
         Method::POST,
-        "/api/auth/register",
+        "/api/v1/auth/register",
         &serde_json::json!({
             "username": username,
             "password": password,
@@ -190,7 +190,7 @@ pub async fn login(app: &Router, username: &str, password: &str, device_id: &str
     make_json_request(
         app,
         Method::POST,
-        "/api/auth/login",
+        "/api/v1/auth/login",
         &serde_json::json!({
             "username": username,
             "password": password,
@@ -210,7 +210,7 @@ pub async fn upload_test_book(
 ) -> serde_json::Value {
     let resp = make_multipart_request(
         app,
-        "/api/books/upload",
+        "/api/v1/books/upload",
         vec![
             ("title", title),
             ("is_public", if is_public { "true" } else { "false" }),

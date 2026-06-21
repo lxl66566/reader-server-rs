@@ -19,6 +19,8 @@
 | 3001 | 用户不存在 |
 | 9999 | 服务器内部错误 |
 
+> 所有业务接口前缀统一为 `/api/v1`；健康检查 `/health` 不在版本前缀下。
+
 # 通用类型与认证
 
 ```
@@ -51,52 +53,53 @@ type AuditLogItem = { id: number; admin_id: number; admin_username: string; acti
 
 | 方法 | URL | 权限 | 请求参数 | 响应 data |
 |---|---|---|---|---|
-| POST | /api/auth/register | - | Body: { username: string; password: string; invite_code?: string } | { user_id: number; username: string; token: string } |
-| POST | /api/auth/login | - | Body: { username: string; password: string } | { user_id: number; username: string; token: string } |
-| GET | /api/auth/user_info | Auth | - | { user_id: number; username: string; total_reading_time: number; book_count: number } |
-| POST | /api/auth/change_password | Auth | Body: { old_password: string; new_password: string } | {} |
-| POST | /api/auth/admin/setup | - | Body: { username: string; password: string } | { admin_token: string } |
-| POST | /api/auth/admin/login | - | Body: { username: string; password: string } | { admin_token: string } |
+| GET | /health | - | - | 文本 "ok" |
+| POST | /api/v1/auth/register | - | Body: { username: string; password: string; invite_code?: string } | { user_id: number; username: string; token: string } |
+| POST | /api/v1/auth/login | - | Body: { username: string; password: string } | { user_id: number; username: string; token: string } |
+| GET | /api/v1/auth/user_info | Auth | - | { user_id: number; username: string; total_reading_time: number; book_count: number } |
+| POST | /api/v1/auth/change_password | Auth | Body: { old_password: string; new_password: string } | {} |
+| POST | /api/v1/auth/admin/setup | - | Body: { username: string; password: string } | { admin_token: string } |
+| POST | /api/v1/auth/admin/login | - | Body: { username: string; password: string } | { admin_token: string } |
 
 ### 管理员
 
 | 方法 | URL | 权限 | 请求参数 | 响应 data |
 |---|---|---|---|---|
-| GET | /api/admin/check_setup | - | - | { is_setup: boolean } |
-| POST | /api/admin/invite_code | Admin | Body: { limit_times: number; description?: string } | { invite_code: string; limit_times: number; description: string \| null } |
-| GET | /api/admin/invite_codes | Admin | - | { invite_codes: InviteCodeItem[] } |
-| GET | /api/admin/settings | Admin | - | { invite_code_required: boolean } |
-| PUT | /api/admin/settings | Admin | Body: { invite_code_required: boolean } | {} |
-| GET | /api/admin/users | Admin | - | { users: UserItem[] } |
-| POST | /api/admin/users/:user_id/reset_password | Admin | Body: { new_password: string } | {} |
-| POST | /api/admin/users/:user_id/revoke_tokens | Admin | - | {} |
-| GET | /api/admin/admins | Admin | - | { admins: AdminItem[] } |
-| POST | /api/admin/admins | Admin | Body: { username: string; password: string } | {} |
-| GET | /api/admin/audit_logs?page=number&limit=number | Admin | - | { total: number; logs: AuditLogItem[] } |
+| GET | /api/v1/admin/check_setup | - | - | { is_setup: boolean } |
+| POST | /api/v1/admin/invite_code | Admin | Body: { limit_times: number; description?: string } | { invite_code: string; limit_times: number; description: string \| null } |
+| GET | /api/v1/admin/invite_codes | Admin | - | { invite_codes: InviteCodeItem[] } |
+| GET | /api/v1/admin/settings | Admin | - | { invite_code_required: boolean } |
+| PUT | /api/v1/admin/settings | Admin | Body: { invite_code_required: boolean } | {} |
+| GET | /api/v1/admin/users | Admin | - | { users: UserItem[] } |
+| POST | /api/v1/admin/users/:user_id/reset_password | Admin | Body: { new_password: string } | {} |
+| POST | /api/v1/admin/users/:user_id/revoke_tokens | Admin | - | {} |
+| GET | /api/v1/admin/admins | Admin | - | { admins: AdminItem[] } |
+| POST | /api/v1/admin/admins | Admin | Body: { username: string; password: string } | {} |
+| GET | /api/v1/admin/audit_logs?page=number&limit=number | Admin | - | { total: number; logs: AuditLogItem[] } |
 
 ### 书籍管理
 
 | 方法 | URL | 权限 | 请求参数 | 响应 data |
 |---|---|---|---|---|
-| POST | /api/books/upload | Auth | FormData: file (txt/epub), title: string, author?: string, is_public: boolean | { book_id: number; title: string; author: string \| null; chapters: { chapter_id: number; title: string; position: number }[] } |
-| GET | /api/books?page=number&limit=number | Auth | - | { total: number; books: Book[] } |
-| GET | /api/books/:book_id | Auth | - | BookDetail |
-| GET | /api/books/:book_id/content?position=number&length=number | Auth | - | { content: string; next_position: number } |
-| GET | /api/books/:book_id/jump_to_chapter?chapter_id=number | Auth | - | { position: number } |
-| PUT | /api/books/:book_id | Auth | Body: { title?: string; author?: string; is_public?: boolean } | {} |
-| DELETE | /api/books/:book_id | Auth | - | {} |
-| GET | /api/books/public?page=number&limit=number | Auth | - | { total: number; books: PublicBook[] } |
+| POST | /api/v1/books/upload | Auth | FormData: file (txt/epub), title: string, author?: string, is_public: boolean | { book_id: number; title: string; author: string \| null; chapters: { chapter_id: number; title: string; position: number }[] } |
+| GET | /api/v1/books?page=number&limit=number | Auth | - | { total: number; books: Book[] } |
+| GET | /api/v1/books/:book_id | Auth | - | BookDetail |
+| GET | /api/v1/books/:book_id/content?position=number&length=number | Auth | - | { content: string; next_position: number } |
+| GET | /api/v1/books/:book_id/jump_to_chapter?chapter_id=number | Auth | - | { position: number } |
+| PUT | /api/v1/books/:book_id | Auth | Body: { title?: string; author?: string; is_public?: boolean } | {} |
+| DELETE | /api/v1/books/:book_id | Auth | - | {} |
+| GET | /api/v1/books/public?page=number&limit=number | Auth | - | { total: number; books: PublicBook[] } |
 
 ### 阅读进度与设置
 
 | 方法 | URL | 权限 | 请求参数 | 响应 data |
 |---|---|---|---|---|
-| GET | /api/reading/settings | Auth | - | ReadingSettings |
-| PUT | /api/reading/settings | Auth | Body: { font_size?: number; background_color?: string; text_color?: string; line_height?: number; letter_spacing?: number; paragraph_spacing?: number; reading_width?: number; text_indent?: number; simplified_chinese?: boolean } | {} |
-| POST | /api/reading/heartbeat | Auth | Body: { book_id: number; position: number; device_id: string } | { synced: boolean; position: number; reading_time: number } |
+| GET | /api/v1/reading/settings | Auth | - | ReadingSettings |
+| PUT | /api/v1/reading/settings | Auth | Body: { font_size?: number; background_color?: string; text_color?: string; line_height?: number; letter_spacing?: number; paragraph_spacing?: number; reading_width?: number; text_indent?: number; simplified_chinese?: boolean } | {} |
+| POST | /api/v1/reading/heartbeat | Auth | Body: { book_id: number; position: number; device_id: string } | { synced: boolean; position: number; reading_time: number } |
 
 ### 推荐
 
 | 方法 | URL | 权限 | 请求参数 | 响应 data |
 |---|---|---|---|---|
-| GET | /api/books/random_public?count=number（默认1） | Auth | - | { books: PublicBook[] } |
+| GET | /api/v1/books/random_public?count=number（默认1） | Auth | - | { books: PublicBook[] } |

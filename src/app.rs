@@ -1,4 +1,4 @@
-use axum::{Router, extract::FromRef};
+use axum::{Router, extract::FromRef, routing::get};
 use sqlx::{Pool, Sqlite};
 use tower::ServiceBuilder;
 use tower_http::{
@@ -45,14 +45,16 @@ pub fn create_app(db: Pool<Sqlite>, config: Config) -> Router {
 
     // 构建路由
     Router::new()
+        // 健康检查
+        .route("/health", get(|| async { "ok" }))
         // 认证路由
-        .nest("/api/auth", auth::routes())
+        .nest("/api/v1/auth", auth::routes())
         // 书籍路由
-        .nest("/api/books", books::routes())
+        .nest("/api/v1/books", books::routes())
         // 阅读路由
-        .nest("/api/reading", reading::routes())
+        .nest("/api/v1/reading", reading::routes())
         // 管理员路由
-        .nest("/api/admin", admin::routes())
+        .nest("/api/v1/admin", admin::routes())
         // 中间件
         .layer(
             ServiceBuilder::new()
