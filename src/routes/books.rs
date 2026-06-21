@@ -169,25 +169,36 @@ async fn upload_book(
         .await?
         .last_insert_rowid();
 
-        // 保存章节信息
-        let mut chapter_responses = Vec::with_capacity(chapters.len());
-        for (chapter_title, position) in chapters {
-            let chapter_id = sqlx::query!(
-                "INSERT INTO chapters (book_id, title, position) VALUES (?, ?, ?)",
-                book_id,
-                chapter_title,
-                position
-            )
-            .execute(&pool)
-            .await?
-            .last_insert_rowid();
-
-            chapter_responses.push(ChapterResponse {
-                chapter_id,
-                title: chapter_title,
-                position,
+        // 批量插入章节（单次 roundtrip），通过 last_insert_rowid 推算所有 id
+        let chapter_responses = if chapters.is_empty() {
+            Vec::new()
+        } else {
+            let mut chapter_qb = sqlx::QueryBuilder::new(
+                "INSERT INTO chapters (book_id, title, position) ",
+            );
+            chapter_qb.push_values(chapters.iter(), |mut b, (title, position)| {
+                b.push_bind(book_id)
+                    .push_bind(title.clone())
+                    .push_bind(*position);
             });
-        }
+            let result = chapter_qb.build().execute(&pool).await?;
+
+            // SQLite 多行 INSERT 的 rowid 连续递增
+            #[allow(clippy::cast_sign_loss)]
+            let count = chapters.len() as i64;
+            let last_id = result.last_insert_rowid();
+            let first_id = last_id - count + 1;
+
+            chapters
+                .into_iter()
+                .zip(first_id..=last_id)
+                .map(|((title, position), chapter_id)| ChapterResponse {
+                    chapter_id,
+                    title,
+                    position,
+                })
+                .collect()
+        };
 
         // 创建初始阅读进度
         sqlx::query!(
@@ -379,36 +390,29 @@ async fn update_book(
         return Err(AppError::BookModifyDenied);
     }
 
-    // 构建更新SQL
+    // 构建动态更新 SQL（使用 separated 自动处理逗号分隔）
     let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> =
         sqlx::QueryBuilder::new("UPDATE books SET ");
-    let mut first = true;
+    let mut sep = query_builder.separated(", ");
 
+    let mut has_update = false;
     if let Some(title) = &req.title {
-        if !first {
-            query_builder.push(", ");
-        }
-        query_builder.push("title = ").push_bind(title.clone());
-        first = false;
+        sep.push("title = ")
+            .push_bind_unseparated(title.clone());
+        has_update = true;
     }
-
     if let Some(author) = &req.author {
-        if !first {
-            query_builder.push(", ");
-        }
-        query_builder.push("author = ").push_bind(author.clone());
-        first = false;
+        sep.push("author = ")
+            .push_bind_unseparated(author.clone());
+        has_update = true;
     }
-
     if let Some(is_public) = req.is_public {
-        if !first {
-            query_builder.push(", ");
-        }
-        query_builder.push("is_public = ").push_bind(is_public);
-        first = false;
+        sep.push("is_public = ")
+            .push_bind_unseparated(is_public);
+        has_update = true;
     }
 
-    if first {
+    if !has_update {
         return Ok(Json(ApiResponse::<()>::message("No updates")));
     }
 

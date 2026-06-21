@@ -89,94 +89,55 @@ async fn update_reading_settings(
         .await?;
     }
 
-    // 构建更新SQL
+    // 构建动态更新 SQL（使用 separated 自动处理逗号分隔）
     let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> =
         sqlx::QueryBuilder::new("UPDATE reading_settings SET ");
-    let mut first = true;
+    let mut sep = query_builder.separated(", ");
 
-    if let Some(font_size) = req.font_size {
-        if !first {
-            query_builder.push(", ");
-        }
-        query_builder.push("font_size = ").push_bind(font_size);
-        first = false;
+    let mut has_update = false;
+    if let Some(v) = req.font_size {
+        sep.push("font_size = ").push_bind_unseparated(v);
+        has_update = true;
+    }
+    if let Some(v) = req.background_color {
+        sep.push("background_color = ")
+            .push_bind_unseparated(v);
+        has_update = true;
+    }
+    if let Some(v) = req.text_color {
+        sep.push("text_color = ").push_bind_unseparated(v);
+        has_update = true;
+    }
+    if let Some(v) = req.line_height {
+        sep.push("line_height = ").push_bind_unseparated(v);
+        has_update = true;
+    }
+    if let Some(v) = req.letter_spacing {
+        sep.push("letter_spacing = ")
+            .push_bind_unseparated(v);
+        has_update = true;
+    }
+    if let Some(v) = req.paragraph_spacing {
+        sep.push("paragraph_spacing = ")
+            .push_bind_unseparated(v);
+        has_update = true;
+    }
+    if let Some(v) = req.reading_width {
+        sep.push("reading_width = ")
+            .push_bind_unseparated(v);
+        has_update = true;
+    }
+    if let Some(v) = req.text_indent {
+        sep.push("text_indent = ").push_bind_unseparated(v);
+        has_update = true;
+    }
+    if let Some(v) = req.simplified_chinese {
+        sep.push("simplified_chinese = ")
+            .push_bind_unseparated(v);
+        has_update = true;
     }
 
-    if let Some(background_color) = req.background_color {
-        if !first {
-            query_builder.push(", ");
-        }
-        query_builder
-            .push("background_color = ")
-            .push_bind(background_color);
-        first = false;
-    }
-
-    if let Some(text_color) = req.text_color {
-        if !first {
-            query_builder.push(", ");
-        }
-        query_builder.push("text_color = ").push_bind(text_color);
-        first = false;
-    }
-
-    if let Some(line_height) = req.line_height {
-        if !first {
-            query_builder.push(", ");
-        }
-        query_builder.push("line_height = ").push_bind(line_height);
-        first = false;
-    }
-
-    if let Some(letter_spacing) = req.letter_spacing {
-        if !first {
-            query_builder.push(", ");
-        }
-        query_builder
-            .push("letter_spacing = ")
-            .push_bind(letter_spacing);
-        first = false;
-    }
-
-    if let Some(paragraph_spacing) = req.paragraph_spacing {
-        if !first {
-            query_builder.push(", ");
-        }
-        query_builder
-            .push("paragraph_spacing = ")
-            .push_bind(paragraph_spacing);
-        first = false;
-    }
-
-    if let Some(reading_width) = req.reading_width {
-        if !first {
-            query_builder.push(", ");
-        }
-        query_builder
-            .push("reading_width = ")
-            .push_bind(reading_width);
-        first = false;
-    }
-
-    if let Some(text_indent) = req.text_indent {
-        if !first {
-            query_builder.push(", ");
-        }
-        query_builder.push("text_indent = ").push_bind(text_indent);
-        first = false;
-    }
-
-    if let Some(simplified_chinese) = req.simplified_chinese {
-        if !first {
-            query_builder.push(", ");
-        }
-        query_builder
-            .push("simplified_chinese = ")
-            .push_bind(simplified_chinese);
-        first = false;
-    }
-
-    if first {
+    if !has_update {
         return Ok(Json(ApiResponse::<()>::message("No updates")));
     }
 

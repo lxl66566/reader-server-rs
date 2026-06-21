@@ -129,3 +129,9 @@ CREATE TABLE
 
 -- 为 user_id 创建索引
 CREATE INDEX IF NOT EXISTS idx_reading_settings_user_id ON reading_settings (user_id);
+
+-- 性能关键索引
+CREATE INDEX IF NOT EXISTS idx_books_user_id ON books (user_id);
+CREATE INDEX IF NOT EXISTS idx_books_is_public ON books (is_public);
+CREATE INDEX IF NOT EXISTS idx_chapters_book_id ON chapters (book_id);
+CREATE INDEX IF NOT EXISTS idx_reading_progress_user_book ON reading_progress (user_id, book_id);

@@ -260,7 +260,7 @@ pub struct UpdateReadingSettingsRequest {
 }
 
 // 管理员用户列表项
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, FromRow)]
 pub struct AdminUserListItem {
     pub user_id: i64,
     pub username: String,

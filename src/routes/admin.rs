@@ -10,7 +10,7 @@ use crate::{
     error::{ApiResponse, AppError},
     models::{
         AdminListItem, AdminUserListItem, AuditLog, CreateAdminRequest, CreateInviteCodeRequest,
-        InviteCode, ResetUserPasswordRequest, Settings, UpdateSettingsRequest, User,
+        InviteCode, ResetUserPasswordRequest, Settings, UpdateSettingsRequest,
     },
     routes::books::PaginationParams,
     utils::{generate_invite_code, hash_password},
@@ -186,27 +186,17 @@ async fn list_users(
     _: AuthAdmin,
     State(pool): State<Pool<Sqlite>>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
-    let users = sqlx::query_as::<_, User>("SELECT * FROM users ORDER BY created_at DESC")
-        .fetch_all(&pool)
-        .await?;
-
-    // 查询每个用户的书籍数量
-    let mut user_list = Vec::new();
-    for user in users {
-        let book_count =
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM books WHERE user_id = ?")
-                .bind(user.id)
-                .fetch_one(&pool)
-                .await?;
-
-        user_list.push(AdminUserListItem {
-            user_id: user.id,
-            username: user.username,
-            created_at: user.created_at,
-            book_count,
-            total_reading_time: user.total_reading_time,
-        });
-    }
+    // 使用 JOIN + GROUP BY 一次性获取用户及其书籍数量，避免 N+1 查询
+    let user_list = sqlx::query_as::<_, AdminUserListItem>(
+        r#"SELECT u.id AS user_id, u.username, u.created_at,
+                  u.total_reading_time, COUNT(b.id) AS book_count
+           FROM users u
+           LEFT JOIN books b ON b.user_id = u.id
+           GROUP BY u.id
+           ORDER BY u.created_at DESC"#,
+    )
+    .fetch_all(&pool)
+    .await?;
 
     Ok(Json(ApiResponse::success(serde_json::json!({
         "users": user_list

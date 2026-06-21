@@ -2,6 +2,7 @@ use axum::{Router, extract::FromRef};
 use sqlx::{Pool, Sqlite};
 use tower::ServiceBuilder;
 use tower_http::{
+    compression::CompressionLayer,
     cors::{Any, CorsLayer},
     trace::TraceLayer,
 };
@@ -55,6 +56,7 @@ pub fn create_app(db: Pool<Sqlite>, config: Config) -> Router {
         // 中间件
         .layer(
             ServiceBuilder::new()
+                .layer(CompressionLayer::new())
                 .layer(TraceLayer::new_for_http())
                 .layer(cors),
         )
