@@ -519,7 +519,7 @@ async fn backup_global(
                 tracing::warn!(error = %e, dir = %book_dir.display(), "skip book_dir in backup");
                 zip.finish()
                     .map_err(|e| AppError::Internal(format!("zip finalize: {e}")))?;
-                return finalize_backup(zip_buf);
+                return Ok(finalize_backup(zip_buf));
             }
         };
 
@@ -544,18 +544,18 @@ async fn backup_global(
             .map_err(|e| AppError::Internal(format!("zip finalize: {e}")))?;
     }
 
-    finalize_backup(zip_buf)
+    Ok(finalize_backup(zip_buf))
 }
 
-fn finalize_backup(zip_buf: Vec<u8>) -> Result<Response, AppError> {
+fn finalize_backup(zip_buf: Vec<u8>) -> Response {
     let timestamp = Utc::now().format("%Y%m%d_%H%M%S");
     let filename = format!("reader-backup-{timestamp}.zip");
-    Ok(Response::builder()
+    Response::builder()
         .header(header::CONTENT_TYPE, "application/zip")
         .header(
             header::CONTENT_DISPOSITION,
             format!("attachment; filename=\"{filename}\""),
         )
         .body(Body::from(zip_buf))
-        .unwrap())
+        .unwrap()
 }

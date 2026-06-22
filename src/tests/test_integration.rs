@@ -13,7 +13,7 @@ macro_rules! section {
 
 #[tokio::test]
 async fn test_full_integration() {
-    let (app, _pool) = setup_test_app().await.unwrap();
+    let (app, pool) = setup_test_app().await.unwrap();
 
     // ================================================================
     //  A. Admin & Setup
@@ -483,47 +483,40 @@ async fn test_full_integration() {
     // ================================================================
     section!("G. Reading Progress & Heartbeat");
 
-    // G1: first heartbeat (creates progress)
-    let resp = super::make_json_request(
-        &app,
-        Method::POST,
-        "/api/v1/reading/heartbeat",
-        &serde_json::json!({"book_id": book1_id, "position": 100, "device_id": "device1"}),
-        Some(&token1),
-    )
-    .await;
-    assert_eq!(resp.status(), StatusCode::OK);
-    let json = response_json(resp).await;
-    assert_eq!(json["data"]["synced"], true);
-    assert_eq!(json["data"]["position"], 100);
+    // 心跳核心逻辑测试：直接调用 process_heartbeat_logic
+    // （协议层 WS 端到端测试见 test_ws_reading_session）
+    let user1_id: i64 = sqlx::query_scalar("SELECT id FROM users WHERE username = 'user1'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
-    // G2: second heartbeat (same device, progress updates)
-    let resp = super::make_json_request(
-        &app,
-        Method::POST,
-        "/api/v1/reading/heartbeat",
-        &serde_json::json!({"book_id": book1_id, "position": 200, "device_id": "device1"}),
-        Some(&token1),
-    )
-    .await;
-    assert_eq!(resp.status(), StatusCode::OK);
-    let json = response_json(resp).await;
-    assert_eq!(json["data"]["synced"], true);
-    assert_eq!(json["data"]["position"], 200);
+    // G1: 首次心跳创建进度记录
+    let result =
+        crate::routes::reading::process_heartbeat_logic(&pool, user1_id, book1_id, 100, "device1")
+            .await
+            .unwrap();
+    assert!(result.synced);
+    assert_eq!(result.position, 100);
+    assert_eq!(result.reading_time, 0);
+    assert!(result.updated);
 
-    // G3: heartbeat from different device (should return server progress)
-    let resp = super::make_json_request(
-        &app,
-        Method::POST,
-        "/api/v1/reading/heartbeat",
-        &serde_json::json!({"book_id": book1_id, "position": 999, "device_id": "device2"}),
-        Some(&token1),
-    )
-    .await;
-    assert_eq!(resp.status(), StatusCode::OK);
-    let json = response_json(resp).await;
-    assert_eq!(json["data"]["synced"], false);
-    assert_eq!(json["data"]["position"], 200); // server's saved progress
+    // G2: 同设备再次心跳，进度更新（updated=true）
+    let result =
+        crate::routes::reading::process_heartbeat_logic(&pool, user1_id, book1_id, 200, "device1")
+            .await
+            .unwrap();
+    assert!(result.synced);
+    assert_eq!(result.position, 200);
+    assert!(result.updated);
+
+    // G3: 不同设备心跳：返回服务端进度（synced=false），不更新（updated=false）
+    let result =
+        crate::routes::reading::process_heartbeat_logic(&pool, user1_id, book1_id, 999, "device2")
+            .await
+            .unwrap();
+    assert!(!result.synced);
+    assert_eq!(result.position, 200); // server's saved progress
+    assert!(!result.updated);
 
     // G4: user2 accesses user1's public book
     let public_book = upload_test_book(&app, &token1, "公开书", TEST_BOOK_CONTENT, true).await;
@@ -906,7 +899,7 @@ async fn test_book_search() {
 #[tokio::test]
 async fn test_user_ban_and_delete_account() {
     let (app, _pool) = setup_test_app().await.unwrap();
-    let (_admin_token, _) = setup_admin(&app).await;
+    let (admin_token, _) = setup_admin(&app).await;
 
     // 关闭邀请码，方便注册
     let _ = super::make_json_request(
@@ -914,7 +907,7 @@ async fn test_user_ban_and_delete_account() {
         Method::PUT,
         "/api/v1/admin/settings",
         &serde_json::json!({"invite_code_required": false}),
-        Some(&_admin_token),
+        Some(&admin_token),
     )
     .await;
 
@@ -929,7 +922,7 @@ async fn test_user_ban_and_delete_account() {
         Method::GET,
         "/api/v1/admin/users",
         Body::empty(),
-        Some(&_admin_token),
+        Some(&admin_token),
     )
     .await;
     let json = response_json(resp).await;
@@ -946,7 +939,7 @@ async fn test_user_ban_and_delete_account() {
         Method::POST,
         &format!("/api/v1/admin/users/{user_id}/ban"),
         Body::empty(),
-        Some(&_admin_token),
+        Some(&admin_token),
     )
     .await;
     assert_eq!(resp.status(), StatusCode::OK);
@@ -968,7 +961,7 @@ async fn test_user_ban_and_delete_account() {
         Method::GET,
         "/api/v1/admin/users",
         Body::empty(),
-        Some(&_admin_token),
+        Some(&admin_token),
     )
     .await;
     let json = response_json(resp).await;
@@ -980,7 +973,7 @@ async fn test_user_ban_and_delete_account() {
         Method::POST,
         &format!("/api/v1/admin/users/{user_id}/unban"),
         Body::empty(),
-        Some(&_admin_token),
+        Some(&admin_token),
     )
     .await;
     assert_eq!(resp.status(), StatusCode::OK);
@@ -1096,4 +1089,165 @@ async fn login_as_admin(app: &axum::Router) -> axum::response::Response {
         None,
     )
     .await
+}
+
+// ----------------------------------------------------------------
+//  WebSocket 阅读会话端到端测试
+// ----------------------------------------------------------------
+
+/// 已连接的 ws 客户端类型别名（避免到处写长类型）
+type WsClient =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// 启动一个真实 TCP 服务（提供 `connect_info` 给限流层），返回监听地址
+async fn spawn_server(app: axum::Router) -> std::net::SocketAddr {
+    use std::net::SocketAddr;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await;
+    });
+    addr
+}
+
+async fn ws_connect(addr: std::net::SocketAddr, token: &str) -> WsClient {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+    let url = format!("ws://{addr}/api/v1/reading/ws?token={token}");
+    let mut req = url.into_client_request().unwrap();
+    // 注入 X-Forwarded-For 以满足 SmartIpKeyExtractor
+    req.headers_mut()
+        .insert("X-Forwarded-For", "127.0.0.1".parse().unwrap());
+    let (ws, _) = tokio_tungstenite::connect_async(req).await.unwrap();
+    ws
+}
+
+async fn send_json(ws: &mut WsClient, msg: &serde_json::Value) {
+    use futures_util::SinkExt;
+    use tokio_tungstenite::tungstenite::Message;
+    ws.send(Message::Text(msg.to_string().into()))
+        .await
+        .unwrap();
+}
+
+/// 接收一条消息，跳过 Ping/Pong，将 Text 帧解析为 JSON
+async fn recv_json(ws: &mut WsClient) -> serde_json::Value {
+    use futures_util::StreamExt;
+    use tokio_tungstenite::tungstenite::Message;
+    loop {
+        match ws.next().await.unwrap().unwrap() {
+            Message::Text(t) => return serde_json::from_str(t.as_str()).unwrap(),
+            Message::Close(_) => panic!("connection closed unexpectedly"),
+            // Ping/Pong/Binary/Frame 由底层处理或忽略
+            _ => {}
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_ws_reading_session() {
+    let (app, _pool) = setup_test_app().await.unwrap();
+    let token = register_and_login(&app, "wsuser", "password").await;
+    let book = upload_test_book(&app, &token, "wsbook", TEST_BOOK_CONTENT, false).await;
+    let book_id = book["book_id"].as_i64().unwrap();
+
+    let addr = spawn_server(app).await;
+
+    // 设备 1 建连、订阅、首次心跳
+    let mut ws_a = ws_connect(addr, &token).await;
+    send_json(
+        &mut ws_a,
+        &serde_json::json!({"type":"subscribe","book_id":book_id,"device_id":"device1"}),
+    )
+    .await;
+    let v = recv_json(&mut ws_a).await;
+    assert_eq!(v["type"], "subscribed");
+
+    send_json(
+        &mut ws_a,
+        &serde_json::json!({"type":"heartbeat","book_id":book_id,"position":100}),
+    )
+    .await;
+    let v = recv_json(&mut ws_a).await;
+    assert_eq!(v["type"], "heartbeat_ack");
+    assert_eq!(v["synced"], true);
+    assert_eq!(v["position"], 100);
+    assert_eq!(v["reading_time"], 0); // 首次心跳不累加
+
+    // 设备 2 建连、订阅；心跳时检测到 last_device=device1 → synced=false
+    let mut ws_b = ws_connect(addr, &token).await;
+    send_json(
+        &mut ws_b,
+        &serde_json::json!({"type":"subscribe","book_id":book_id,"device_id":"device2"}),
+    )
+    .await;
+    let v = recv_json(&mut ws_b).await;
+    assert_eq!(v["type"], "subscribed");
+
+    send_json(
+        &mut ws_b,
+        &serde_json::json!({"type":"heartbeat","book_id":book_id,"position":999}),
+    )
+    .await;
+    let v = recv_json(&mut ws_b).await;
+    assert_eq!(v["type"], "heartbeat_ack");
+    assert_eq!(v["synced"], false);
+    assert_eq!(v["position"], 100); // 服务端进度（来自 device1）
+
+    // 设备 1 再次心跳：广播 progress_update 给设备 2
+    send_json(
+        &mut ws_a,
+        &serde_json::json!({"type":"heartbeat","book_id":book_id,"position":150}),
+    )
+    .await;
+    let v = recv_json(&mut ws_a).await;
+    assert_eq!(v["type"], "heartbeat_ack");
+    assert_eq!(v["position"], 150);
+
+    let v = recv_json(&mut ws_b).await;
+    assert_eq!(v["type"], "progress_update");
+    assert_eq!(v["position"], 150);
+    assert_eq!(v["device_id"], "device1");
+
+    // unsubscribe
+    send_json(
+        &mut ws_b,
+        &serde_json::json!({"type":"unsubscribe","book_id":book_id}),
+    )
+    .await;
+    let v = recv_json(&mut ws_b).await;
+    assert_eq!(v["type"], "unsubscribed");
+
+    // 退订后再心跳应得到 error（设备 2）
+    send_json(
+        &mut ws_b,
+        &serde_json::json!({"type":"heartbeat","book_id":book_id,"position":1}),
+    )
+    .await;
+    let v = recv_json(&mut ws_b).await;
+    assert_eq!(v["type"], "error");
+
+    let _ = ws_a.close(None).await;
+    let _ = ws_b.close(None).await;
+}
+
+#[tokio::test]
+async fn test_ws_unauthenticated_rejected() {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+    let (app, _pool) = setup_test_app().await.unwrap();
+    let addr = spawn_server(app).await;
+
+    // 无 token：connect 应被服务端拒绝（axum 在升级阶段返回错误响应）
+    let url = format!("ws://{addr}/api/v1/reading/ws");
+    let mut req = url.into_client_request().unwrap();
+    req.headers_mut()
+        .insert("X-Forwarded-For", "127.0.0.1".parse().unwrap());
+    let result = tokio_tungstenite::connect_async(req).await;
+    assert!(result.is_err(), "ws without token should be rejected");
 }

@@ -13,6 +13,7 @@ mod error;
 mod models;
 mod routes;
 mod utils;
+mod ws;
 
 // 因为是 bin target，所以集成测试必须放在 src 里
 #[cfg(test)]
@@ -46,7 +47,7 @@ async fn main() -> Result<()> {
     db::run_migrations(&db_pool).await?;
 
     // 构建应用
-    let app = app::create_app(db_pool, config.clone());
+    let app = app::create_app(db_pool, &config);
 
     // 获取服务地址
     let addr = SocketAddr::from(([0, 0, 0, 0], config.server.port));

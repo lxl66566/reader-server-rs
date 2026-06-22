@@ -265,21 +265,7 @@ pub struct BookTagsResponse {
     pub tags: Vec<String>,
 }
 
-// 心跳包请求
-#[derive(Debug, Deserialize)]
-pub struct HeartbeatRequest {
-    pub book_id: i64,
-    pub position: i64,
-    pub device_id: String,
-}
-
-// 心跳包响应
-#[derive(Debug, Serialize)]
-pub struct HeartbeatResponse {
-    pub synced: bool,
-    pub position: i64,
-    pub reading_time: i64,
-}
+// 心跳协议已迁移至 ws::protocol，旧的 HTTP 心跳包数据结构已删除
 
 // 更新阅读设置请求
 #[derive(Debug, Serialize, Deserialize)]

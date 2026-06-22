@@ -3,7 +3,7 @@ use axum::{
     extract::State,
     http::{HeaderMap, header},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::get,
 };
 use chrono::{DateTime, SecondsFormat, Utc};
 use sqlx::{Pool, Sqlite};
@@ -12,8 +12,7 @@ use crate::{
     auth::AuthUser,
     error::{ApiResponse, AppError},
     models::{
-        DailyReadingStat, HeartbeatRequest, HeartbeatResponse, ReadingSettings,
-        ReadingStatsResponse, UpdateReadingSettingsRequest,
+        DailyReadingStat, ReadingSettings, ReadingStatsResponse, UpdateReadingSettingsRequest,
     },
     utils::make_etag,
 };
@@ -45,7 +44,8 @@ pub fn routes() -> Router<crate::app::AppState> {
             "/settings",
             get(get_reading_settings).put(update_reading_settings),
         )
-        .route("/heartbeat", post(process_heartbeat))
+        // WebSocket 入口：替代旧的每秒轮询心跳接口
+        .route("/ws", get(crate::ws::handler::ws_handler))
         .route("/stats", get(get_reading_stats))
 }
 
@@ -188,28 +188,44 @@ async fn update_reading_settings(
     Ok(Json(ApiResponse::<()>::message("Settings updated")))
 }
 
-// 处理心跳包
-async fn process_heartbeat(
-    auth: AuthUser,
-    State(pool): State<Pool<Sqlite>>,
-    Json(req): Json<HeartbeatRequest>,
-) -> Result<Json<ApiResponse<HeartbeatResponse>>, AppError> {
+/// 心跳处理结果：供 HTTP 与 WS 复用
+#[derive(Debug, Clone)]
+pub struct HeartbeatResult {
+    pub synced: bool,
+    pub position: i64,
+    pub reading_time: i64,
+    /// 本次心跳是否实际更新了服务端进度
+    /// （WS 据此决定是否向其他设备广播进度更新）
+    pub updated: bool,
+}
+
+/// 处理心跳的核心逻辑
+///
+/// 设计要点：
+/// - 首次心跳会创建进度记录
+/// - 若 `last_device_id` 与本次不同，返回服务器进度（让新设备同步），不更新
+/// - 同设备正常更新进度，累加阅读时间（与上次间隔 < 30s 才计入）
+/// - 使用乐观锁：若并发心跳抢先更新，本次视为未更新但返回最新进度
+pub async fn process_heartbeat_logic(
+    pool: &Pool<Sqlite>,
+    user_id: i64,
+    book_id: i64,
+    position: i64,
+    device_id: &str,
+) -> Result<HeartbeatResult, AppError> {
     // 校验 position 非负
-    if req.position < 0 {
+    if position < 0 {
         return Err(AppError::InvalidPosition);
     }
 
     // 检查书籍是否存在
-    let book = sqlx::query!(
-        "SELECT user_id, is_public FROM books WHERE id = ?",
-        req.book_id
-    )
-    .fetch_optional(&pool)
-    .await?
-    .ok_or_else(|| AppError::BookNotFound)?;
+    let book = sqlx::query!("SELECT user_id, is_public FROM books WHERE id = ?", book_id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| AppError::BookNotFound)?;
 
     // 检查权限
-    if book.user_id != auth.user_id && !book.is_public {
+    if book.user_id != user_id && !book.is_public {
         return Err(AppError::BookAccessDenied);
     }
 
@@ -218,14 +234,13 @@ async fn process_heartbeat(
         "SELECT position, reading_time, last_read_at, last_device_id 
          FROM reading_progress 
          WHERE user_id = ? AND book_id = ?",
-        auth.user_id,
-        req.book_id
+        user_id,
+        book_id
     )
-    .fetch_optional(&pool)
+    .fetch_optional(pool)
     .await?;
 
     let now = Utc::now();
-    let current_device_id = req.device_id.clone();
     let now_str = now.to_rfc3339_opts(SecondsFormat::Millis, true);
 
     // 如果没有阅读进度记录，创建一个
@@ -234,20 +249,21 @@ async fn process_heartbeat(
             "INSERT INTO reading_progress 
              (user_id, book_id, position, last_read_at, last_device_id) 
              VALUES (?, ?, ?, ?, ?)",
-            auth.user_id,
-            req.book_id,
-            req.position,
+            user_id,
+            book_id,
+            position,
             now_str,
-            current_device_id
+            device_id
         )
-        .execute(&pool)
+        .execute(pool)
         .await?;
 
-        return Ok(Json(ApiResponse::success(HeartbeatResponse {
+        return Ok(HeartbeatResult {
             synced: true,
-            position: req.position,
+            position,
             reading_time: 0,
-        })));
+            updated: true,
+        });
     }
 
     let progress = progress.unwrap();
@@ -255,17 +271,16 @@ async fn process_heartbeat(
     let last_read_at = progress.last_read_at;
 
     // 检查设备ID是否相同
-    let is_same_device = last_device_id
-        .as_deref()
-        .is_none_or(|id| id == current_device_id);
+    let is_same_device = last_device_id.as_deref().is_none_or(|id| id == device_id);
 
-    // 如果设备不同，返回服务器保存的进度
+    // 如果设备不同，返回服务器保存的进度（让新设备同步），不更新
     if !is_same_device {
-        return Ok(Json(ApiResponse::success(HeartbeatResponse {
+        return Ok(HeartbeatResult {
             synced: false,
             position: progress.position,
             reading_time: progress.reading_time,
-        })));
+            updated: false,
+        });
     }
 
     // 计算阅读时间增量；解析失败时跳过（不累加），避免 panic
@@ -284,17 +299,17 @@ async fn process_heartbeat(
     // 若在此期间被其他并发心跳修改，rows_affected == 0。
     // 使用 reading_time = reading_time + ? 确保原子累加。
     let mut qb = sqlx::QueryBuilder::new("UPDATE reading_progress SET position = ");
-    qb.push_bind(req.position);
+    qb.push_bind(position);
     qb.push(", reading_time = reading_time + ");
     qb.push_bind(reading_time_increment);
     qb.push(", last_read_at = ");
     qb.push_bind(&now_str);
     qb.push(", last_device_id = ");
-    qb.push_bind(&current_device_id);
+    qb.push_bind(device_id);
     qb.push(" WHERE user_id = ");
-    qb.push_bind(auth.user_id);
+    qb.push_bind(user_id);
     qb.push(" AND book_id = ");
-    qb.push_bind(req.book_id);
+    qb.push_bind(book_id);
     qb.push(" AND ");
     match &last_read_at {
         Some(t) => {
@@ -306,24 +321,25 @@ async fn process_heartbeat(
         }
     }
 
-    let result = qb.build().execute(&pool).await?;
+    let result = qb.build().execute(pool).await?;
 
     // 乐观锁竞争失败：并发请求已抢先更新，返回当前最新进度（设备相同 →
-    // synced=true）
+    // synced=true，但未广播）
     if result.rows_affected() == 0 {
         let current = sqlx::query!(
             "SELECT position, reading_time FROM reading_progress WHERE user_id = ? AND book_id = ?",
-            auth.user_id,
-            req.book_id
+            user_id,
+            book_id
         )
-        .fetch_one(&pool)
+        .fetch_one(pool)
         .await?;
 
-        return Ok(Json(ApiResponse::success(HeartbeatResponse {
+        return Ok(HeartbeatResult {
             synced: true,
             position: current.position,
             reading_time: current.reading_time,
-        })));
+            updated: false,
+        });
     }
 
     // 更新用户总阅读时间
@@ -333,9 +349,9 @@ async fn process_heartbeat(
              SET total_reading_time = total_reading_time + ? 
              WHERE id = ?",
             reading_time_increment,
-            auth.user_id
+            user_id
         )
-        .execute(&pool)
+        .execute(pool)
         .await?;
 
         // 同步累加当日阅读统计；INSERT ON CONFLICT 处理 upsert
@@ -343,22 +359,22 @@ async fn process_heartbeat(
         sqlx::query!(
             "INSERT INTO daily_reading_stats (user_id, date, reading_seconds) VALUES (?, ?, ?) \
              ON CONFLICT (user_id, date) DO UPDATE SET reading_seconds = reading_seconds + excluded.reading_seconds",
-            auth.user_id,
+            user_id,
             today,
             reading_time_increment,
         )
-        .execute(&pool)
+        .execute(pool)
         .await?;
     }
 
     let new_reading_time = progress.reading_time + reading_time_increment;
 
-    // 返回同步状态和最新阅读时间
-    Ok(Json(ApiResponse::success(HeartbeatResponse {
+    Ok(HeartbeatResult {
         synced: true,
-        position: req.position,
+        position,
         reading_time: new_reading_time,
-    })))
+        updated: true,
+    })
 }
 
 /// 计算两个日期字符串（YYYY-MM-DD）之间相隔的天数（later - earlier）
@@ -437,7 +453,7 @@ fn compute_streaks(sorted_desc_dates: &[String], today: &str, yesterday: &str) -
         for d in &sorted_desc_dates[1..] {
             if days_between(&prev, d) == Some(1) {
                 current_streak += 1;
-                prev = d.clone();
+                prev.clone_from(d);
             } else {
                 break;
             }

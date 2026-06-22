@@ -13,6 +13,7 @@ use tower_http::{
 use crate::{
     config::Config,
     routes::{admin, auth, books, reading},
+    ws::manager::ConnectionRegistry,
 };
 
 // 应用状态
@@ -20,6 +21,7 @@ use crate::{
 pub struct AppState {
     pub db: Pool<Sqlite>,
     pub config: Config,
+    pub ws: std::sync::Arc<ConnectionRegistry>,
 }
 
 // 为状态实现FromRef trait，允许从状态中提取数据库连接和配置
@@ -35,10 +37,20 @@ impl FromRef<AppState> for Config {
     }
 }
 
+impl FromRef<AppState> for std::sync::Arc<ConnectionRegistry> {
+    fn from_ref(state: &AppState) -> Self {
+        state.ws.clone()
+    }
+}
+
 // 创建应用实例
-pub fn create_app(db: Pool<Sqlite>, config: Config) -> Router {
+pub fn create_app(db: Pool<Sqlite>, config: &Config) -> Router {
     // 创建共享状态
-    let state = AppState { db, config };
+    let state = AppState {
+        db,
+        config: config.clone(),
+        ws: ConnectionRegistry::new(),
+    };
 
     // 创建CORS中间件
     let cors = CorsLayer::new()

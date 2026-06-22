@@ -127,10 +127,39 @@ type Annotation = {
 |---|---|---|---|---|
 | GET | /api/v1/reading/settings | Auth | Header: If-None-Match? | 200 + ETag：ReadingSettings；ETag 命中返回 304 |
 | PUT | /api/v1/reading/settings | Auth | Body: { font_size?: number; background_color?: string; text_color?: string; line_height?: number; letter_spacing?: number; paragraph_spacing?: number; reading_width?: number; text_indent?: number; simplified_chinese?: boolean } | {} |
-| POST | /api/v1/reading/heartbeat | Auth | Body: { book_id: number; position: number; device_id: string } | { synced: boolean; position: number; reading_time: number } |
+| GET | /api/v1/reading/stats | Auth | - | { total_reading_seconds: number; current_streak_days: number; longest_streak_days: number; recent_days: { date: string; reading_seconds: number }[] } |
 
 ### 推荐
 
 | 方法 | URL | 权限 | 请求参数 | 响应 data |
 |---|---|---|---|---|
 | GET | /api/v1/books/random_public?count=number（默认1） | Auth | - | { books: PublicBook[] } |
+
+### 阅读会话 WebSocket
+
+`GET /api/v1/reading/ws` 升级为 WebSocket，**替代** 旧的每秒轮询 `POST /heartbeat`。
+鉴权：浏览器原生 WebSocket 无法设置请求头，因此通过 query 参数 `?token=<jwt>` 传递；非浏览器客户端也可继续用 `Authorization: Bearer <jwt>` 头。
+
+#### 客户端 → 服务端（JSON 文本帧，`type` 取值如下）
+
+| type | 字段 | 说明 |
+|---|---|---|
+| `subscribe` | `book_id: number`, `device_id: string` | 进入阅读页面时调用，声明本连接的设备标识并开始接收该书进度广播；同一连接再次 subscribe 同一本书会以新 `device_id` 覆盖旧订阅 |
+| `heartbeat` | `book_id: number`, `position: number` | 上报阅读位置；服务端据此累加阅读时间并广播进度。必须先 subscribe 才能心跳 |
+| `unsubscribe` | `book_id: number` | 离开阅读页面时调用 |
+
+#### 服务端 → 客户端（JSON 文本帧，`type` 取值如下）
+
+| type | 字段 | 说明 |
+|---|---|---|
+| `subscribed` | `book_id` | 订阅成功 |
+| `heartbeat_ack` | `book_id`, `synced: boolean`, `position: number`, `reading_time: number` | 心跳响应。`synced=false` 表示检测到其他设备正在阅读，客户端应跳转到返回的 `position` |
+| `progress_update` | `book_id`, `position: number`, `reading_time: number`, `device_id: string` | 广播：同账号下另一台设备刚刚更新了进度，本设备应跳转以保持多端同步 |
+| `unsubscribed` | `book_id` | 退订成功 |
+| `error` | `message: string` | 业务/协议错误；连接不会关闭 |
+
+#### 行为细节
+
+- 服务端每 30s 主动发送 WebSocket `Ping`；客户端无响应超过 120s 将被断开。
+- 心跳间隔需 ≤ 30s，否则相邻两次心跳的间隔不计入阅读时间。
+- 当某次心跳与 `last_device_id` 不一致时（用户在另一台设备阅读中），返回服务端最新进度并 `synced=false`，**不广播**。

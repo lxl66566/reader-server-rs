@@ -60,7 +60,7 @@ pub async fn setup_test_app() -> Result<(Router, Pool<Sqlite>)> {
         },
     };
 
-    let app = create_app(pool.clone(), config);
+    let app = create_app(pool.clone(), &config);
 
     Ok((app, pool))
 }
