@@ -1,6 +1,9 @@
+use std::sync::Arc;
+
 use axum::{
     Json,
     extract::{Path, State},
+    http::HeaderMap,
 };
 use chrono::{SecondsFormat, Utc};
 use sqlx::{Pool, Sqlite};
@@ -12,7 +15,60 @@ use crate::{
         Annotation, AnnotationKind, Bookmark, CreateAnnotationRequest, CreateBookmarkRequest,
         ListAnnotationsResponse, ListBookmarksResponse, UpdateAnnotationRequest,
     },
+    ws::manager::ConnectionRegistry,
+    ws::protocol::ServerMessage,
 };
+
+/// 从请求头中提取可选的 device_id（用于 ws 广播时排除发起方设备）。
+/// 客户端在 POST/PUT/DELETE 时可附带 `X-Device-Id` 头来精确避免回环通知。
+fn device_id_from_headers(headers: &HeaderMap) -> Option<&str> {
+    headers.get("x-device-id").and_then(|v| v.to_str().ok())
+}
+
+/// 广播书签变更给订阅了同 (user, book) 的其它设备。
+/// `exclude_device` 通常是发起本次 HTTP 请求的 device_id（可选）。
+async fn broadcast_bookmark_changed(
+    ws: &Arc<ConnectionRegistry>,
+    user_id: i64,
+    book_id: i64,
+    exclude_device: Option<&str>,
+    action: &str,
+    bookmark_id: i64,
+) {
+    ws.broadcast_progress(
+        user_id,
+        book_id,
+        exclude_device,
+        ServerMessage::BookmarkChanged {
+            book_id,
+            action: action.to_string(),
+            bookmark_id,
+        },
+    )
+    .await;
+}
+
+/// 广播批注变更给订阅了同 (user, book) 的其它设备。
+async fn broadcast_annotation_changed(
+    ws: &Arc<ConnectionRegistry>,
+    user_id: i64,
+    book_id: i64,
+    exclude_device: Option<&str>,
+    action: &str,
+    annotation_id: i64,
+) {
+    ws.broadcast_progress(
+        user_id,
+        book_id,
+        exclude_device,
+        ServerMessage::AnnotationChanged {
+            book_id,
+            action: action.to_string(),
+            annotation_id,
+        },
+    )
+    .await;
+}
 
 /// 检查用户对书籍的访问权限（所有者或公开书），失败返回对应 `AppError`
 async fn check_book_access(
@@ -56,7 +112,9 @@ pub async fn list_bookmarks(
 pub async fn create_bookmark(
     auth: AuthUser,
     State(pool): State<Pool<Sqlite>>,
+    State(ws): State<Arc<ConnectionRegistry>>,
     Path(book_id): Path<i64>,
+    headers: HeaderMap,
     Json(req): Json<CreateBookmarkRequest>,
 ) -> Result<Json<ApiResponse<Bookmark>>, AppError> {
     if req.position < 0 {
@@ -82,13 +140,25 @@ pub async fn create_bookmark(
         .fetch_one(&pool)
         .await?;
 
+    broadcast_bookmark_changed(
+        &ws,
+        auth.user_id,
+        book_id,
+        device_id_from_headers(&headers),
+        "created",
+        id,
+    )
+    .await;
+
     Ok(Json(ApiResponse::success(bookmark)))
 }
 
 pub async fn delete_bookmark(
     auth: AuthUser,
     State(pool): State<Pool<Sqlite>>,
+    State(ws): State<Arc<ConnectionRegistry>>,
     Path((book_id, bookmark_id)): Path<(i64, i64)>,
+    headers: HeaderMap,
 ) -> Result<Json<ApiResponse<()>>, AppError> {
     // 通过 user_id 限制确保只能删自己的书签
     let result = sqlx::query!(
@@ -103,6 +173,16 @@ pub async fn delete_bookmark(
     if result.rows_affected() == 0 {
         return Err(AppError::BookmarkNotFound);
     }
+
+    broadcast_bookmark_changed(
+        &ws,
+        auth.user_id,
+        book_id,
+        device_id_from_headers(&headers),
+        "deleted",
+        bookmark_id,
+    )
+    .await;
 
     Ok(Json(ApiResponse::<()>::message("Bookmark deleted")))
 }
@@ -132,7 +212,9 @@ pub async fn list_annotations(
 pub async fn create_annotation(
     auth: AuthUser,
     State(pool): State<Pool<Sqlite>>,
+    State(ws): State<Arc<ConnectionRegistry>>,
     Path(book_id): Path<i64>,
+    headers: HeaderMap,
     Json(req): Json<CreateAnnotationRequest>,
 ) -> Result<Json<ApiResponse<Annotation>>, AppError> {
     if req.start_position < 0 {
@@ -171,13 +253,25 @@ pub async fn create_annotation(
         .fetch_one(&pool)
         .await?;
 
+    broadcast_annotation_changed(
+        &ws,
+        auth.user_id,
+        book_id,
+        device_id_from_headers(&headers),
+        "created",
+        id,
+    )
+    .await;
+
     Ok(Json(ApiResponse::success(annotation)))
 }
 
 pub async fn update_annotation(
     auth: AuthUser,
     State(pool): State<Pool<Sqlite>>,
+    State(ws): State<Arc<ConnectionRegistry>>,
     Path((book_id, annotation_id)): Path<(i64, i64)>,
+    headers: HeaderMap,
     Json(req): Json<UpdateAnnotationRequest>,
 ) -> Result<Json<ApiResponse<()>>, AppError> {
     // 至少一个字段要更新
@@ -207,13 +301,25 @@ pub async fn update_annotation(
         return Err(AppError::AnnotationNotFound);
     }
 
+    broadcast_annotation_changed(
+        &ws,
+        auth.user_id,
+        book_id,
+        device_id_from_headers(&headers),
+        "updated",
+        annotation_id,
+    )
+    .await;
+
     Ok(Json(ApiResponse::<()>::message("Annotation updated")))
 }
 
 pub async fn delete_annotation(
     auth: AuthUser,
     State(pool): State<Pool<Sqlite>>,
+    State(ws): State<Arc<ConnectionRegistry>>,
     Path((book_id, annotation_id)): Path<(i64, i64)>,
+    headers: HeaderMap,
 ) -> Result<Json<ApiResponse<()>>, AppError> {
     let result = sqlx::query!(
         "DELETE FROM annotations WHERE id = ? AND user_id = ? AND book_id = ?",
@@ -227,6 +333,16 @@ pub async fn delete_annotation(
     if result.rows_affected() == 0 {
         return Err(AppError::AnnotationNotFound);
     }
+
+    broadcast_annotation_changed(
+        &ws,
+        auth.user_id,
+        book_id,
+        device_id_from_headers(&headers),
+        "deleted",
+        annotation_id,
+    )
+    .await;
 
     Ok(Json(ApiResponse::<()>::message("Annotation deleted")))
 }

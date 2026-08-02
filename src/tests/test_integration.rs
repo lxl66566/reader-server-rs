@@ -1251,3 +1251,112 @@ async fn test_ws_unauthenticated_rejected() {
     let result = tokio_tungstenite::connect_async(req).await;
     assert!(result.is_err(), "ws without token should be rejected");
 }
+
+#[tokio::test]
+async fn test_ws_annotation_bookmark_sync() {
+    // 验证：通过 HTTP 接口增删书签 / 批注时，订阅了同 (user, book) 的其它
+    // ws 连接会收到 BookmarkChanged / AnnotationChanged 通知
+    let (app, _pool) = setup_test_app().await.unwrap();
+    let token = register_and_login(&app, "syncuser", "password1").await;
+    let book = upload_test_book(&app, &token, "syncbook", TEST_BOOK_CONTENT, false).await;
+    let book_id = book["book_id"].as_i64().unwrap();
+
+    // 复用同一个 Router clone：HTTP oneshot 与 TCP ws 共享 AppState
+    let addr = spawn_server(app.clone()).await;
+
+    // 设备 A：ws 连接 + 订阅
+    let mut ws_a = ws_connect(addr, &token).await;
+    send_json(
+        &mut ws_a,
+        &serde_json::json!({"type":"subscribe","book_id":book_id,"device_id":"deviceA"}),
+    )
+    .await;
+    let _ = recv_json(&mut ws_a).await; // subscribed
+
+    // 设备 B：ws 连接 + 订阅（带 X-Device-Id，便于后续 HTTP 调用排除自身）
+    let mut ws_b = ws_connect(addr, &token).await;
+    send_json(
+        &mut ws_b,
+        &serde_json::json!({"type":"subscribe","book_id":book_id,"device_id":"deviceB"}),
+    )
+    .await;
+    let _ = recv_json(&mut ws_b).await; // subscribed
+
+    // 设备 B 通过 HTTP 创建书签（带 X-Device-Id: deviceB）
+    // 期望：设备 A 收到 bookmark_changed，设备 B 自己被排除不收到
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri(format!("/api/v1/books/{book_id}/bookmarks"))
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Content-Type", "application/json")
+        .header("X-Device-Id", "deviceB")
+        .header("X-Forwarded-For", "127.0.0.1")
+        .body(Body::from(
+            serde_json::to_vec(&serde_json::json!({"position": 50, "label": "标记"})).unwrap(),
+        ))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let _bookmark_json: serde_json::Value = response_json(resp).await;
+    let created_id = _bookmark_json["data"]["id"].as_i64().unwrap();
+
+    // 设备 A 应收到 bookmark_changed
+    let v = recv_json(&mut ws_a).await;
+    assert_eq!(v["type"], "bookmark_changed");
+    assert_eq!(v["book_id"], book_id);
+    assert_eq!(v["action"], "created");
+    assert_eq!(v["bookmark_id"], created_id);
+
+    // 设备 A 通过 HTTP 创建批注（无 X-Device-Id，所以设备 B 也应收到，包括设备 A 自己）
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri(format!("/api/v1/books/{book_id}/annotations"))
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Content-Type", "application/json")
+        .header("X-Forwarded-For", "127.0.0.1")
+        .body(Body::from(
+            serde_json::to_vec(&serde_json::json!({
+                "kind": "note",
+                "start_position": 10,
+                "content": "笔记"
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let aj: serde_json::Value = response_json(resp).await;
+    let annotation_id = aj["data"]["id"].as_i64().unwrap();
+
+    // 设备 A 自己也订阅了，所以会收到（HTTP 调用方未声明 device_id）
+    let v = recv_json(&mut ws_a).await;
+    assert_eq!(v["type"], "annotation_changed");
+    assert_eq!(v["action"], "created");
+    assert_eq!(v["annotation_id"], annotation_id);
+
+    // 设备 B 也收到
+    let v = recv_json(&mut ws_b).await;
+    assert_eq!(v["type"], "annotation_changed");
+    assert_eq!(v["action"], "created");
+    assert_eq!(v["annotation_id"], annotation_id);
+
+    // 设备 B 通过 HTTP 删除书签（带 X-Device-Id: deviceB）
+    let req = Request::builder()
+        .method(Method::DELETE)
+        .uri(format!("/api/v1/books/{book_id}/bookmarks/{created_id}"))
+        .header("Authorization", format!("Bearer {token}"))
+        .header("X-Device-Id", "deviceB")
+        .header("X-Forwarded-For", "127.0.0.1")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let v = recv_json(&mut ws_a).await;
+    assert_eq!(v["type"], "bookmark_changed");
+    assert_eq!(v["action"], "deleted");
+    assert_eq!(v["bookmark_id"], created_id);
+
+    let _ = ws_a.close(None).await;
+    let _ = ws_b.close(None).await;
+}

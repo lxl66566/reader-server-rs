@@ -246,7 +246,7 @@ async fn handle_text(
                             .broadcast_progress(
                                 session.user_id,
                                 book_id,
-                                &device_id,
+                                Some(&device_id),
                                 ServerMessage::ProgressUpdate {
                                     book_id,
                                     position: result.position,

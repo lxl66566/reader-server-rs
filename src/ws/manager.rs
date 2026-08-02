@@ -44,18 +44,21 @@ impl ConnectionRegistry {
         guard.remove(key);
     }
 
-    /// 广播进度更新给同 `(user, book)` 下除 `exclude_device` 之外的所有设备。
-    /// 接收方已断开时 send 失败，下次连接清理时会自动剔除。
+    /// 广播进度更新给同 `(user, book)` 下的所有设备（可选排除某个 device，
+    /// 通常排除发起心跳的设备本身）。
     pub async fn broadcast_progress(
         &self,
         user_id: i64,
         book_id: i64,
-        exclude_device: &str,
+        exclude_device: Option<&str>,
         msg: ServerMessage,
     ) {
         let guard = self.conns.read().await;
         for ((u, b, d), tx) in guard.iter() {
-            if *u == user_id && *b == book_id && d.as_str() != exclude_device {
+            if *u == user_id
+                && *b == book_id
+                && exclude_device.map_or(true, |ex| d.as_str() != ex)
+            {
                 let _ = tx.send(msg.clone());
             }
         }

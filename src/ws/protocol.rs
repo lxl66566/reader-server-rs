@@ -38,6 +38,21 @@ pub enum ServerMessage {
     },
     /// 退订成功
     Unsubscribed { book_id: i64 },
+    /// 书签变更通知：客户端收到后重新拉取书签列表
+    ///（HTTP 接口不感知发起方设备，发起方可通过 X-Device-Id 头被排除）
+    BookmarkChanged {
+        book_id: i64,
+        /// `created` / `deleted`（更新目前走 delete+recreate 也可）
+        action: String,
+        bookmark_id: i64,
+    },
+    /// 批注变更通知：客户端收到后重新拉取批注列表
+    AnnotationChanged {
+        book_id: i64,
+        /// `created` / `updated` / `deleted`
+        action: String,
+        annotation_id: i64,
+    },
     /// 业务/协议错误（连接不会关闭，客户端可继续发消息）
     Error { message: String },
 }
