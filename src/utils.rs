@@ -80,24 +80,33 @@ pub fn verify_password(password: &str, hash: &str) -> Result<bool, AppError> {
         .is_ok())
 }
 
-// 从文本中提取章节
+/// 从文本中提取章节
+///
+/// 返回 `(章节标题, 章节首字符在全文字符流中的偏移)` 列表。
+/// 偏移量统一以"字符"（`chars().count()`）为单位，与
+/// `reading_progress.position`、`bookmarks.position`、`get_book_content`
+/// 的 `position` 参数保持一致——章节跳转、内容切片才能对齐。
 #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
 pub fn extract_chapters(content: &str) -> Vec<(String, i64)> {
     let mut chapters = Vec::new();
-    let mut lines = content.lines().enumerate();
+    let mut char_offset = 0i64; // 当前行首字符在全文中的偏移
+    let mut is_first_line = true;
 
-    if let Some((pos, first_line)) = lines.next() {
-        let first_line = first_line.trim();
-        if !first_line.is_empty() {
-            chapters.push((first_line.to_string(), pos as i64));
+    for line in content.lines() {
+        let line_char_count = line.chars().count() as i64;
+        let trimmed = line.trim();
+        let should_record = if is_first_line {
+            // 第一行非空时直接作为首章，无论是否匹配章节正则
+            !trimmed.is_empty()
+        } else {
+            CHAPTER_RE.is_match(trimmed).unwrap_or(false)
+        };
+        if should_record {
+            chapters.push((trimmed.to_string(), char_offset));
         }
-    }
-
-    for (line_num, line) in lines {
-        let line = line.trim();
-        if CHAPTER_RE.is_match(line).unwrap_or(false) {
-            chapters.push((line.to_string(), line_num as i64));
-        }
+        // 跳过本行字符 + 1 个换行符（lines() 不返回行尾，但全文里有一个）
+        char_offset += line_char_count + 1;
+        is_first_line = false;
     }
 
     chapters
