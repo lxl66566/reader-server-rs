@@ -200,6 +200,9 @@ CREATE TABLE
     reading_width INTEGER NOT NULL DEFAULT 800,
     text_indent REAL NOT NULL DEFAULT 2,
     simplified_chinese BOOLEAN NOT NULL DEFAULT 1,
+    -- 用户时区（IANA 名称，如 Asia/Shanghai），影响 daily_reading_stats 归算
+    -- 与连续阅读天数判断；默认 UTC
+    timezone TEXT NOT NULL DEFAULT 'UTC',
     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
   );
 

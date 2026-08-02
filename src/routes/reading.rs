@@ -17,6 +17,27 @@ use crate::{
     utils::make_etag,
 };
 
+/// 默认时区（无法解析用户时区或用户未设置时使用）
+const DEFAULT_TZ: chrono_tz::Tz = chrono_tz::UTC;
+
+/// 解析时区字符串；失败时回退到 UTC
+fn parse_tz(s: &str) -> chrono_tz::Tz {
+    s.parse().unwrap_or(DEFAULT_TZ)
+}
+
+/// 返回用户本地"现在"；读不到 reading_settings 时按 UTC
+async fn user_local_now(pool: &Pool<Sqlite>, user_id: i64) -> DateTime<chrono_tz::Tz> {
+    let tz_str: Option<String> =
+        sqlx::query_scalar("SELECT timezone FROM reading_settings WHERE user_id = ?")
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+    let tz = tz_str.as_deref().map(parse_tz).unwrap_or(DEFAULT_TZ);
+    Utc::now().with_timezone(&tz)
+}
+
 /// 检查请求头 If-None-Match 是否命中给定 `ETag`
 /// 处理 `*` 通配、`W/` 前缀、以及逗号分隔的多个 `ETag`
 pub fn etag_matches(if_none_match: &str, etag: &str) -> bool {
@@ -87,6 +108,7 @@ async fn get_reading_settings(
             reading_width: 800,
             text_indent: 2.0,
             simplified_chinese: true,
+            timezone: "UTC".to_string(),
         }
     };
 
@@ -173,6 +195,14 @@ async fn update_reading_settings(
     }
     if let Some(v) = req.simplified_chinese {
         sep.push("simplified_chinese = ").push_bind_unseparated(v);
+        has_update = true;
+    }
+    if let Some(v) = req.timezone {
+        // 校验时区名是否合法（必须能解析为 IANA 时区）
+        if v.parse::<chrono_tz::Tz>().is_err() {
+            return Err(AppError::InvalidTimezone);
+        }
+        sep.push("timezone = ").push_bind_unseparated(v);
         has_update = true;
     }
 
@@ -355,7 +385,9 @@ pub async fn process_heartbeat_logic(
         .await?;
 
         // 同步累加当日阅读统计；INSERT ON CONFLICT 处理 upsert
-        let today = now.format("%Y-%m-%d").to_string();
+        // 注意：日期按用户本地时区归算，避免 UTC+8 凌晨被记到前一天
+        let local_now = user_local_now(pool, user_id).await;
+        let today = local_now.format("%Y-%m-%d").to_string();
         sqlx::query!(
             "INSERT INTO daily_reading_stats (user_id, date, reading_seconds) VALUES (?, ?, ?) \
              ON CONFLICT (user_id, date) DO UPDATE SET reading_seconds = reading_seconds + excluded.reading_seconds",
@@ -398,13 +430,21 @@ async fn get_reading_stats(
             .fetch_one(&pool)
             .await?;
 
+    // 日期边界按用户本地时区归算（避免 UTC 与本地日期错位导致统计/连续天数错乱）
+    let local_now = user_local_now(&pool, auth.user_id).await;
+    let today = local_now.format("%Y-%m-%d").to_string();
+    let thirty_days_ago = (local_now - chrono::Duration::days(29))
+        .format("%Y-%m-%d")
+        .to_string();
+
     // 最近 30 天的每日时长（按日期升序）
     let recent_days: Vec<DailyReadingStat> = sqlx::query_as::<_, DailyReadingStat>(
         "SELECT date, reading_seconds FROM daily_reading_stats \
-         WHERE user_id = ? AND date >= date('now', '-29 days') \
+         WHERE user_id = ? AND date >= ? \
          ORDER BY date ASC",
     )
     .bind(auth.user_id)
+    .bind(&thirty_days_ago)
     .fetch_all(&pool)
     .await?;
 
@@ -416,8 +456,7 @@ async fn get_reading_stats(
     .fetch_all(&pool)
     .await?;
 
-    let today = Utc::now().format("%Y-%m-%d").to_string();
-    let yesterday = (Utc::now() - chrono::Duration::days(1))
+    let yesterday = (local_now - chrono::Duration::days(1))
         .format("%Y-%m-%d")
         .to_string();
 

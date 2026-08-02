@@ -11,6 +11,7 @@ axum               = { version = "0.8.3", features = ["multipart", "ws"] }
 axum-extra         = { version = "0.12.1", features = ["typed-header"] }
 bytes              = "1.12"
 chrono             = { version = "0.4", features = ["serde"] }
+chrono-tz          = { version = "0.10", features = ["serde"] }
 color-eyre         = "0.6"
 epub               = "2.0"
 fancy-regex        = "0.18"

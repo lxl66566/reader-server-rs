@@ -181,6 +181,8 @@ pub struct ReadingSettings {
     pub reading_width: i64,
     pub text_indent: f64,
     pub simplified_chinese: bool,
+    /// IANA 时区名（如 `Asia/Shanghai`），用于阅读统计与连续天数归算
+    pub timezone: String,
 }
 
 // 上传书籍响应
@@ -279,6 +281,8 @@ pub struct UpdateReadingSettingsRequest {
     pub reading_width: Option<i64>,
     pub text_indent: Option<f64>,
     pub simplified_chinese: Option<bool>,
+    /// IANA 时区名；服务端会校验有效性
+    pub timezone: Option<String>,
 }
 
 // 管理员用户列表项

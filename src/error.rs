@@ -132,6 +132,9 @@ pub enum AppError {
     #[error("Position must not be negative")]
     InvalidPosition,
 
+    #[error("Invalid timezone identifier (must be IANA name, e.g. Asia/Shanghai)")]
+    InvalidTimezone,
+
     #[error("Failed to parse form data: {0}")]
     FormParseError(String),
 
@@ -198,8 +201,9 @@ impl IntoResponse for AppError {
             | AppError::FileTooLarge
             | AppError::FileInvalidUtf8
             | AppError::UnsupportedFileFormat
-            | AppError::PositionExceedsRange
+            |             AppError::PositionExceedsRange
             | AppError::InvalidPosition
+            | AppError::InvalidTimezone
             | AppError::AnnotationRangeInvalid
             | AppError::SearchQueryEmpty
             | AppError::InvalidSearchScope
