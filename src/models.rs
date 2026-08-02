@@ -167,6 +167,28 @@ pub struct Book {
     pub created_at: String,
 }
 
+/// 阅读主题预设
+/// light=浅色；sepia=护眼米黄；dark=深色；system=跟随系统
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, sqlx::Type, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+#[sqlx(type_name = "TEXT", rename_all = "lowercase")]
+pub enum ReadingTheme {
+    Light,
+    Sepia,
+    Dark,
+    System,
+}
+
+/// 翻页模式
+/// scroll=滚动；paginate=翻页
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, sqlx::Type, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+#[sqlx(type_name = "TEXT", rename_all = "lowercase")]
+pub enum PaginationMode {
+    Scroll,
+    Paginate,
+}
+
 // 阅读设置模型
 #[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct ReadingSettings {
@@ -183,6 +205,10 @@ pub struct ReadingSettings {
     pub simplified_chinese: bool,
     /// IANA 时区名（如 `Asia/Shanghai`），用于阅读统计与连续天数归算
     pub timezone: String,
+    /// 字体族标识（前端解释），如 `serif`/`sans-serif`/自定义字体名
+    pub font_family: String,
+    pub theme: ReadingTheme,
+    pub pagination_mode: PaginationMode,
 }
 
 // 上传书籍响应
@@ -283,6 +309,9 @@ pub struct UpdateReadingSettingsRequest {
     pub simplified_chinese: Option<bool>,
     /// IANA 时区名；服务端会校验有效性
     pub timezone: Option<String>,
+    pub font_family: Option<String>,
+    pub theme: Option<ReadingTheme>,
+    pub pagination_mode: Option<PaginationMode>,
 }
 
 // 管理员用户列表项

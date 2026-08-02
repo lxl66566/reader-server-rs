@@ -135,6 +135,9 @@ pub enum AppError {
     #[error("Invalid timezone identifier (must be IANA name, e.g. Asia/Shanghai)")]
     InvalidTimezone,
 
+    #[error("Invalid font_family (must be 1-128 chars)")]
+    InvalidFontFamily,
+
     #[error("Failed to parse form data: {0}")]
     FormParseError(String),
 
@@ -204,6 +207,7 @@ impl IntoResponse for AppError {
             |             AppError::PositionExceedsRange
             | AppError::InvalidPosition
             | AppError::InvalidTimezone
+            | AppError::InvalidFontFamily
             | AppError::AnnotationRangeInvalid
             | AppError::SearchQueryEmpty
             | AppError::InvalidSearchScope

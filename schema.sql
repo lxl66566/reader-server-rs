@@ -203,6 +203,12 @@ CREATE TABLE
     -- 用户时区（IANA 名称，如 Asia/Shanghai），影响 daily_reading_stats 归算
     -- 与连续阅读天数判断；默认 UTC
     timezone TEXT NOT NULL DEFAULT 'UTC',
+    -- 字体族标识（前端解释），允许预设或自定义字体名/URL
+    font_family TEXT NOT NULL DEFAULT 'serif',
+    -- 主题预设；与 background_color/text_color 解耦，方便前端做"跟随系统"等
+    theme TEXT NOT NULL DEFAULT 'light' CHECK (theme IN ('light', 'sepia', 'dark', 'system')),
+    -- 翻页模式：scroll=滚动；paginate=翻页
+    pagination_mode TEXT NOT NULL DEFAULT 'scroll' CHECK (pagination_mode IN ('scroll', 'paginate')),
     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
   );
 

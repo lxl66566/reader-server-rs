@@ -12,7 +12,8 @@ use crate::{
     auth::AuthUser,
     error::{ApiResponse, AppError},
     models::{
-        DailyReadingStat, ReadingSettings, ReadingStatsResponse, UpdateReadingSettingsRequest,
+        DailyReadingStat, PaginationMode, ReadingSettings, ReadingStatsResponse, ReadingTheme,
+        UpdateReadingSettingsRequest,
     },
     utils::make_etag,
 };
@@ -109,6 +110,9 @@ async fn get_reading_settings(
             text_indent: 2.0,
             simplified_chinese: true,
             timezone: "UTC".to_string(),
+            font_family: "serif".to_string(),
+            theme: ReadingTheme::Light,
+            pagination_mode: PaginationMode::Scroll,
         }
     };
 
@@ -203,6 +207,24 @@ async fn update_reading_settings(
             return Err(AppError::InvalidTimezone);
         }
         sep.push("timezone = ").push_bind_unseparated(v);
+        has_update = true;
+    }
+    if let Some(v) = req.font_family {
+        // 限制长度，避免滥用；具体字体解析交给前端
+        let trimmed = v.trim();
+        if trimmed.is_empty() || trimmed.chars().count() > 128 {
+            return Err(AppError::InvalidFontFamily);
+        }
+        sep.push("font_family = ")
+            .push_bind_unseparated(trimmed.to_string());
+        has_update = true;
+    }
+    if let Some(v) = req.theme {
+        sep.push("theme = ").push_bind_unseparated(v);
+        has_update = true;
+    }
+    if let Some(v) = req.pagination_mode {
+        sep.push("pagination_mode = ").push_bind_unseparated(v);
         has_update = true;
     }
 
