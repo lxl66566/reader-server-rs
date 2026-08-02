@@ -544,7 +544,7 @@ async fn get_book_content(
 ) -> Result<Response, AppError> {
     // 查询书籍信息
     let book = sqlx::query!(
-        "SELECT user_id, file_path, is_public FROM books WHERE id = ?",
+        "SELECT user_id, file_path, is_public, total_chars FROM books WHERE id = ?",
         book_id
     )
     .fetch_optional(&pool)
@@ -556,41 +556,33 @@ async fn get_book_content(
         return Err(AppError::BookAccessDenied);
     }
 
-    // 获取文件内容
-    let content = fs::read_to_string(&book.file_path)
-        .await
-        .map_err(AppError::Io)?;
-
-    // 计算内容长度
-    let content_length = content.chars().count();
+    let content_length = book.total_chars.max(0);
 
     // 确保位置有效
-    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-    let position = params.position.max(0) as usize;
-    if position >= content_length {
+    if params.position < 0 || params.position >= content_length {
         return Err(AppError::PositionExceedsRange);
     }
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+    let position = params.position as usize;
 
     // 计算要返回的内容长度
     #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     let length = params.length.unwrap_or(4000).clamp(100, 10000) as usize;
 
-    // 提取内容
-    let end_pos = (position + length).min(content_length);
-    let content_slice: String = content
-        .chars()
-        .skip(position)
-        .take(end_pos - position)
-        .collect();
+    // 计算结束位置（基于已持久化的全文字符数，无需读全文）
+    let end_pos = (position + length).min(content_length as usize);
+
+    // 流式读取：避免大书全量进内存
+    let content_slice = read_char_slice(&book.file_path, position, end_pos - position).await?;
 
     // 构建响应
+    #[allow(clippy::cast_possible_wrap)]
     let resp_data = BookContentResponse {
         content: content_slice,
-        #[allow(clippy::cast_possible_wrap)]
         next_position: end_pos as i64,
     };
 
-    // 基于 book_id + position + 内容片段生成 ETag；同书同位置同长度则命中
+    // 基于 book_id + position + length + 内容片段生成 ETag；同书同位置同长度则命中
     let etag_input = format!("{book_id}:{position}:{length}:{}", resp_data.content);
     let etag = make_etag(&etag_input);
 
@@ -607,6 +599,76 @@ async fn get_book_content(
         Json(ApiResponse::success(resp_data)),
     )
         .into_response())
+}
+
+/// 从文件中按字符偏移流式读取一段文本。
+///
+/// 实现要点：用 `BufReader::fill_buf` + `consume` 按块读取，
+/// 依靠 `std::str::from_utf8` 返回的 `valid_up_to()` 把块对齐到 UTF-8
+/// 字符边界，既避免一次性读入大文件，也避免字节级 seek 在多字节字符
+/// 中间切开。
+async fn read_char_slice(
+    path: &str,
+    char_offset: usize,
+    char_count: usize,
+) -> Result<String, AppError> {
+    use tokio::io::AsyncBufReadExt;
+
+    let file = fs::File::open(path).await.map_err(AppError::Io)?;
+    let mut reader = tokio::io::BufReader::new(file);
+
+    let mut collected = String::with_capacity(char_count * 4);
+    let mut skipped = 0usize;
+    let mut taken = 0usize;
+
+    while taken < char_count {
+        let buf = reader.fill_buf().await.map_err(AppError::Io)?;
+        if buf.is_empty() {
+            break; // EOF
+        }
+
+        // 对齐到 UTF-8 字符边界：处理"块末尾恰好切在多字节字符中间"
+        let valid_len = match std::str::from_utf8(buf) {
+            Ok(_) => buf.len(),
+            Err(e) => {
+                let v = e.valid_up_to();
+                if v == 0 {
+                    // 块开头即不完整序列：理论上 16KB BufReader 缓冲足够
+                    // 容下任何单字符（最多 4 字节），此处为防御性兜底
+                    return Err(AppError::Internal(
+                        "UTF-8 boundary alignment failed".to_string(),
+                    ));
+                }
+                v
+            }
+        };
+
+        let chunk = std::str::from_utf8(&buf[..valid_len]).expect("verified above");
+
+        // 跳过尚未到达的字符偏移
+        if skipped < char_offset {
+            let chunk_chars: Vec<(usize, char)> = chunk.char_indices().collect();
+            let remaining_skip = char_offset - skipped;
+            if let Some(&(byte_off, _)) = chunk_chars.get(remaining_skip) {
+                let after = &chunk[byte_off..];
+                skipped = char_offset;
+                let take_chars: String = after.chars().take(char_count - taken).collect();
+                taken += take_chars.chars().count();
+                collected.push_str(&take_chars);
+            } else {
+                skipped += chunk_chars.len();
+            }
+        } else {
+            let take_chars: String = chunk.chars().take(char_count - taken).collect();
+            taken += take_chars.chars().count();
+            collected.push_str(&take_chars);
+        }
+
+        // 推进缓冲，valid_len 一定是字符边界，安全
+        reader.consume(valid_len);
+    }
+
+    Ok(collected)
 }
 
 // 跳转到指定章节
@@ -974,4 +1036,43 @@ async fn set_book_tags(
     tx.commit().await?;
 
     Ok(Json(ApiResponse::success(BookTagsResponse { tags })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_char_slice;
+
+    #[tokio::test]
+    async fn read_char_slice_handles_multibyte_boundary() {
+        // 构造一段含 ASCII / 中文 / emoji 的文本，emoji 是 4 字节 UTF-8
+        let mut content = String::new();
+        // 8KB ASCII（确保超过单次 fill_buf 边界，触发多块读取）
+        for _ in 0..8000 {
+            content.push('a');
+        }
+        content.push_str("世界🌍");
+        content.push('b');
+        let tmp = std::env::temp_dir().join("reader_test_read_char_slice.txt");
+        tokio::fs::write(&tmp, &content).await.unwrap();
+
+        let path = tmp.to_str().unwrap();
+
+        // 1) 从 emoji 起点（8002）开始取 2 个字符 → 应得 "🌍b"
+        let s = read_char_slice(path, 8002, 2).await.unwrap();
+        assert_eq!(s, "🌍b", "emoji boundary");
+
+        // 2) 从中文起点（8000）取 3 个字符 → "世界🌍"
+        let s = read_char_slice(path, 8000, 3).await.unwrap();
+        assert_eq!(s, "世界🌍");
+
+        // 3) 跨缓冲边界：从 7999 取 3 个字符 → "a世界"
+        let s = read_char_slice(path, 7999, 3).await.unwrap();
+        assert_eq!(s, "a世界");
+
+        // 4) 全文长度
+        let s = read_char_slice(path, 0, 10_000).await.unwrap();
+        assert_eq!(s.chars().count(), content.chars().count());
+
+        let _ = tokio::fs::remove_file(&tmp).await;
+    }
 }
