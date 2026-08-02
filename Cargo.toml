@@ -24,6 +24,7 @@ regex              = "1.12"
 scraper            = "0.27"
 serde              = { version = "1.0", features = ["derive"] }
 serde_json         = "1.0"
+sha2               = "0.10"
 sqlx               = { version = "0.9", features = ["runtime-tokio", "tls-rustls", "sqlite", "chrono", "migrate", "macros", "derive", "uuid"] }
 thiserror          = "2.0"
 tokio              = { version = "1", features = ["full"] }

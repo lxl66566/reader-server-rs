@@ -32,6 +32,21 @@ pub fn generate_uuid() -> String {
     Uuid::new_v4().to_string()
 }
 
+/// 计算数据的 SHA-256 hex（小写）
+pub fn sha256_hex(data: &[u8]) -> String {
+    use sha2::{Sha256, Digest};
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    let result = hasher.finalize();
+    // hex(lower)
+    let mut out = String::with_capacity(64);
+    for b in result {
+        use std::fmt::Write;
+        let _ = write!(out, "{b:02x}");
+    }
+    out
+}
+
 // 生成随机邀请码
 pub fn generate_invite_code() -> String {
     const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";

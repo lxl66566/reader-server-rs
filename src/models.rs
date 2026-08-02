@@ -154,6 +154,15 @@ pub struct UpdateSettingsRequest {
     pub invite_code_required: bool,
 }
 
+/// 上传来源格式：txt = 纯文本；epub = EPUB
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, sqlx::Type, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+#[sqlx(type_name = "TEXT", rename_all = "lowercase")]
+pub enum BookSourceFormat {
+    Txt,
+    Epub,
+}
+
 // 书籍模型
 #[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct Book {
@@ -164,6 +173,10 @@ pub struct Book {
     pub file_path: String,
     pub is_public: bool,
     pub cover_path: Option<String>,
+    pub total_chars: i64,
+    pub description: Option<String>,
+    pub source_format: BookSourceFormat,
+    pub content_hash: String,
     pub created_at: String,
 }
 
@@ -239,6 +252,9 @@ pub struct BookListItem {
     pub last_read_at: Option<String>,
     pub position: i64,
     pub reading_time: i64,
+    /// 全文字符数，前端可结合 position 计算阅读百分比
+    pub total_chars: i64,
+    pub description: Option<String>,
 }
 
 // 书籍详情响应
@@ -252,6 +268,8 @@ pub struct BookDetailResponse {
     pub last_read_at: Option<String>,
     pub position: i64,
     pub reading_time: i64,
+    pub total_chars: i64,
+    pub description: Option<String>,
     pub chapters: Vec<ChapterResponse>,
 }
 
@@ -263,6 +281,8 @@ pub struct PublicBookListItem {
     pub author: Option<String>,
     pub owner_username: String,
     pub created_at: String,
+    pub total_chars: i64,
+    pub description: Option<String>,
 }
 
 // 书籍内容响应

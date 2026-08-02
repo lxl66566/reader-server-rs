@@ -18,12 +18,12 @@ use crate::{
     error::{ApiResponse, AppError},
     models::{
         Book, BookContentResponse, BookDetailResponse, BookListItem, BookListResponse,
-        BookTagsResponse, ChapterResponse, JumpToChapterResponse, PublicBookListItem,
-        PublicBookListResponse, RandomPublicBooksResponse, SetBookTagsRequest, UpdateBookRequest,
-        UploadBookResponse,
+        BookSourceFormat, BookTagsResponse, ChapterResponse, JumpToChapterResponse,
+        PublicBookListItem, PublicBookListResponse, RandomPublicBooksResponse, SetBookTagsRequest,
+        UpdateBookRequest, UploadBookResponse,
     },
     routes::reading::etag_matches,
-    utils::{extract_chapters, generate_uuid, make_etag, parse_epub},
+    utils::{extract_chapters, generate_uuid, make_etag, parse_epub, sha256_hex},
 };
 
 // 分页查询参数
@@ -178,11 +178,13 @@ async fn upload_book(
     }
 
     // 基于文件内容（magic bytes）检测类型，不依赖客户端扩展名
-    let (content, chapters, file_ext_str) = if let Some(kind) = infer::get(&file_content) {
+    let (content, chapters, file_ext_str, source_format) = if let Some(kind) =
+        infer::get(&file_content)
+    {
         match kind.mime_type() {
             "application/epub+zip" => {
                 let result = parse_epub(&file_content)?;
-                (result.text_content, result.chapters, "txt")
+                (result.text_content, result.chapters, "txt", BookSourceFormat::Epub)
             }
             // 其他已知二进制格式（exe、pdf 等）一律拒绝
             _ => return Err(AppError::UnsupportedFileFormat),
@@ -193,11 +195,16 @@ async fn upload_book(
             Ok(s) => {
                 let text = s.to_string();
                 let chs = extract_chapters(&text);
-                (text, chs, "txt")
+                (text, chs, "txt", BookSourceFormat::Txt)
             }
             Err(_) => return Err(AppError::FileInvalidUtf8),
         }
     };
+
+    // 派生元数据：字符数（用于内容边界检查、阅读百分比）+ 内容 hash（去重 / 溯源）
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+    let total_chars = content.chars().count() as i64;
+    let content_hash = sha256_hex(content.as_bytes());
 
     // 生成唯一文件名
     let file_id = generate_uuid();
@@ -215,12 +222,15 @@ async fn upload_book(
     // 将书籍信息和章节写入数据库；失败时清理已写入的文件，避免孤儿文件
     let db_result: Result<(i64, Vec<ChapterResponse>), AppError> = async {
         let book_id = sqlx::query!(
-            "INSERT INTO books (user_id, title, author, file_path, is_public) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO books (user_id, title, author, file_path, is_public, total_chars, source_format, content_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             auth.user_id,
             title,
             author,
             file_path_string,
-            is_public
+            is_public,
+            total_chars,
+            source_format,
+            content_hash,
         )
         .execute(&pool)
         .await?
@@ -311,6 +321,7 @@ async fn list_books(
     let books = sqlx::query!(
         r#"
         SELECT b.id, b.title, b.author, b.is_public, b.created_at,
+               b.total_chars, b.description,
                rp.position, rp.reading_time, rp.last_read_at
         FROM books b
         LEFT JOIN reading_progress rp ON b.id = rp.book_id AND rp.user_id = ?
@@ -338,6 +349,8 @@ async fn list_books(
             last_read_at: book.last_read_at,
             position: book.position.unwrap_or(0),
             reading_time: book.reading_time.unwrap_or(0),
+            total_chars: book.total_chars,
+            description: book.description,
         })
         .collect();
 
@@ -423,6 +436,8 @@ async fn get_book_detail(
         last_read_at,
         position,
         reading_time,
+        total_chars: book.total_chars,
+        description: book.description,
         chapters: chapter_responses,
     };
 
@@ -652,7 +667,7 @@ async fn list_public_books(
     // 获取公开书籍列表
     let books = sqlx::query!(
         r#"
-        SELECT b.id, b.title, b.author, b.created_at, u.username as owner_username
+        SELECT b.id, b.title, b.author, b.created_at, b.total_chars, b.description, u.username as owner_username
         FROM books b
         JOIN users u ON b.user_id = u.id
         WHERE b.is_public = 1
@@ -674,6 +689,8 @@ async fn list_public_books(
             author: book.author,
             owner_username: book.owner_username,
             created_at: book.created_at,
+            total_chars: book.total_chars,
+            description: book.description,
         })
         .collect();
 
@@ -695,7 +712,7 @@ async fn get_random_public_books(
     // 获取所有公开书籍
     let books = sqlx::query!(
         r#"
-        SELECT b.id, b.title, b.author, b.created_at, u.username as owner_username
+        SELECT b.id, b.title, b.author, b.created_at, b.total_chars, b.description, u.username as owner_username
         FROM books b
         JOIN users u ON b.user_id = u.id
         WHERE b.is_public = 1
@@ -715,6 +732,8 @@ async fn get_random_public_books(
             author: book.author.clone(),
             owner_username: book.owner_username.clone(),
             created_at: book.created_at.clone(),
+            total_chars: book.total_chars,
+            description: book.description.clone(),
         })
         .collect();
 
@@ -746,6 +765,8 @@ struct SearchRow {
     author: Option<String>,
     is_public: bool,
     created_at: String,
+    total_chars: i64,
+    description: Option<String>,
     position: Option<i64>,
     reading_time: Option<i64>,
     last_read_at: Option<String>,
@@ -775,6 +796,7 @@ async fn search_books(
     // 使用 DISTINCT 因为 LEFT JOIN chapters 会让一本书出现多次
     let mut qb = sqlx::QueryBuilder::new(
         "SELECT DISTINCT b.id, b.title, b.author, b.is_public, b.created_at, \
+         b.total_chars AS total_chars, b.description AS description, \
          rp.position AS position, rp.reading_time AS reading_time, rp.last_read_at AS last_read_at \
          FROM books b \
          LEFT JOIN reading_progress rp ON rp.book_id = b.id AND rp.user_id = ",
@@ -806,6 +828,8 @@ async fn search_books(
             last_read_at: r.last_read_at,
             position: r.position.unwrap_or(0),
             reading_time: r.reading_time.unwrap_or(0),
+            total_chars: r.total_chars,
+            description: r.description,
         })
         .collect();
 

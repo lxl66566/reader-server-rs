@@ -81,6 +81,14 @@ CREATE TABLE
     file_path TEXT NOT NULL,
     is_public BOOLEAN NOT NULL DEFAULT 0,
     cover_path TEXT,
+    -- 全文字符数（chars().count()），用于内容接口边界检查、阅读百分比
+    total_chars INTEGER NOT NULL DEFAULT 0,
+    -- 简介 / 摘要
+    description TEXT,
+    -- 上传来源格式：'txt' / 'epub'；持久化便于后续重新分割或问题溯源
+    source_format TEXT NOT NULL CHECK (source_format IN ('txt', 'epub')),
+    -- 全文内容的 SHA-256（hex），用于跨用户去重、问题溯源
+    content_hash TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (
       strftime (
         '%Y-%m-%dT%H:%M:%S.' || substr (strftime ('%f'), 4, 6) || 'Z'
