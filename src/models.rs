@@ -154,13 +154,39 @@ pub struct UpdateSettingsRequest {
     pub invite_code_required: bool,
 }
 
-/// 上传来源格式：txt = 纯文本；epub = EPUB
+/// 书籍文件格式枚举
+///
+/// 决定前端渲染方式与 locator 语义：
+/// - `Txt`：纯文本，locator = 字符偏移字符串（数字）
+/// - `Epub`：EPUB，locator = `EpubCFI` 字符串
+/// - `Pdf`：PDF，locator = 页码字符串（"page:N"，从 0 起）
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, sqlx::Type, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 #[sqlx(type_name = "TEXT", rename_all = "lowercase")]
-pub enum BookSourceFormat {
+pub enum BookFormat {
     Txt,
     Epub,
+    Pdf,
+}
+
+impl BookFormat {
+    /// 文件扩展名（不含点）
+    pub fn ext(self) -> &'static str {
+        match self {
+            BookFormat::Txt => "txt",
+            BookFormat::Epub => "epub",
+            BookFormat::Pdf => "pdf",
+        }
+    }
+
+    /// 主要的 MIME 类型
+    pub fn mime_type(self) -> &'static str {
+        match self {
+            BookFormat::Txt => "text/plain; charset=utf-8",
+            BookFormat::Epub => "application/epub+zip",
+            BookFormat::Pdf => "application/pdf",
+        }
+    }
 }
 
 // 书籍模型
@@ -174,8 +200,9 @@ pub struct Book {
     pub is_public: bool,
     pub cover_path: Option<String>,
     pub total_chars: i64,
+    pub total_pages: i64,
     pub description: Option<String>,
-    pub source_format: BookSourceFormat,
+    pub format: BookFormat,
     pub content_hash: String,
     pub created_at: String,
 }
@@ -230,10 +257,14 @@ pub struct UploadBookResponse {
     pub book_id: i64,
     pub title: String,
     pub author: Option<String>,
+    pub format: BookFormat,
+    pub total_chars: i64,
+    pub total_pages: i64,
     pub chapters: Vec<ChapterResponse>,
 }
 
 // 章节响应
+// position 对 txt 是全文字符偏移；对 epub 是 spine 索引（0-based）
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct ChapterResponse {
     pub chapter_id: i64,
@@ -248,12 +279,16 @@ pub struct BookListItem {
     pub title: String,
     pub author: Option<String>,
     pub is_public: bool,
+    pub format: BookFormat,
     pub created_at: String,
     pub last_read_at: Option<String>,
-    pub position: i64,
+    pub locator: Option<String>,
+    pub percent: f64,
     pub reading_time: i64,
-    /// 全文字符数，前端可结合 position 计算阅读百分比
+    /// 全文字符数（txt/epub）；pdf 为 0
     pub total_chars: i64,
+    /// 总页数（pdf）；其它格式为 0
+    pub total_pages: i64,
     pub description: Option<String>,
 }
 
@@ -264,11 +299,14 @@ pub struct BookDetailResponse {
     pub title: String,
     pub author: Option<String>,
     pub is_public: bool,
+    pub format: BookFormat,
     pub created_at: String,
     pub last_read_at: Option<String>,
-    pub position: i64,
+    pub locator: Option<String>,
+    pub percent: f64,
     pub reading_time: i64,
     pub total_chars: i64,
+    pub total_pages: i64,
     pub description: Option<String>,
     pub chapters: Vec<ChapterResponse>,
 }
@@ -280,12 +318,14 @@ pub struct PublicBookListItem {
     pub title: String,
     pub author: Option<String>,
     pub owner_username: String,
+    pub format: BookFormat,
     pub created_at: String,
     pub total_chars: i64,
+    pub total_pages: i64,
     pub description: Option<String>,
 }
 
-// 书籍内容响应
+// txt 书籍内容响应（仅 txt 格式有意义）
 #[derive(Debug, Serialize)]
 pub struct BookContentResponse {
     pub content: String,
@@ -450,8 +490,10 @@ pub struct RandomPublicBooksResponse {
 }
 
 // 跳转章节查询参数响应
+// 返回该章节的起始位置（txt=字符偏移，epub=spine 索引字符串，pdf=未实现）
 #[derive(Debug, Serialize)]
 pub struct JumpToChapterResponse {
+    /// 章节首字符在全文字符流中的偏移（txt 用），epub 用 spine 索引
     pub position: i64,
 }
 
@@ -473,7 +515,10 @@ pub struct Bookmark {
     pub id: i64,
     pub user_id: i64,
     pub book_id: i64,
-    pub position: i64,
+    /// 与 format 相关的位置字符串（与 `reading_progress.locator` 同语义）
+    pub locator: String,
+    /// 进度（0-1），用于列表展示与排序
+    pub percent: f64,
     pub label: Option<String>,
     pub created_at: String,
 }
@@ -481,7 +526,9 @@ pub struct Bookmark {
 // 创建书签请求
 #[derive(Debug, Deserialize)]
 pub struct CreateBookmarkRequest {
-    pub position: i64,
+    pub locator: String,
+    /// 进度（0-1），由前端计算
+    pub percent: f64,
     pub label: Option<String>,
 }
 
@@ -492,8 +539,14 @@ pub struct Annotation {
     pub user_id: i64,
     pub book_id: i64,
     pub kind: AnnotationKind,
-    pub start_position: i64,
-    pub end_position: Option<i64>,
+    /// 起始位置（locator），与 format 相关
+    pub start_locator: String,
+    /// 结束位置（locator），仅 highlight 必填
+    pub end_locator: Option<String>,
+    /// 起始进度（0-1）
+    pub start_percent: f64,
+    /// 结束进度（0-1），仅 highlight 有
+    pub end_percent: Option<f64>,
     pub excerpt: Option<String>,
     pub content: Option<String>,
     pub created_at: String,
@@ -504,8 +557,11 @@ pub struct Annotation {
 #[derive(Debug, Deserialize)]
 pub struct CreateAnnotationRequest {
     pub kind: AnnotationKind,
-    pub start_position: i64,
-    pub end_position: Option<i64>,
+    pub start_locator: String,
+    pub end_locator: Option<String>,
+    /// 进度（0-1），由前端计算
+    pub start_percent: f64,
+    pub end_percent: Option<f64>,
     pub excerpt: Option<String>,
     pub content: Option<String>,
 }

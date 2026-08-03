@@ -222,21 +222,33 @@ async fn handle_text(
             session.subs.insert(book_id, device_id);
             let _ = out_tx.send(ServerMessage::Subscribed { book_id });
         }
-        ClientMessage::Heartbeat { book_id, position } => {
+        ClientMessage::Heartbeat {
+            book_id,
+            locator,
+            percent,
+        } => {
             let Some(device_id) = session.subs.get(&book_id).cloned() else {
                 let _ = out_tx.send(ServerMessage::error(
                     "not subscribed to this book; send subscribe first",
                 ));
                 return;
             };
-            match process_heartbeat_logic(&state.db, session.user_id, book_id, position, &device_id)
-                .await
+            match process_heartbeat_logic(
+                &state.db,
+                session.user_id,
+                book_id,
+                &locator,
+                percent,
+                &device_id,
+            )
+            .await
             {
                 Ok(result) => {
                     let _ = out_tx.send(ServerMessage::HeartbeatAck {
                         book_id,
                         synced: result.synced,
-                        position: result.position,
+                        locator: result.locator.clone(),
+                        percent: result.percent,
                         reading_time: result.reading_time,
                     });
                     // 仅当进度真正被更新时才广播给其他设备
@@ -249,7 +261,8 @@ async fn handle_text(
                                 Some(&device_id),
                                 ServerMessage::ProgressUpdate {
                                     book_id,
-                                    position: result.position,
+                                    locator: result.locator,
+                                    percent: result.percent,
                                     reading_time: result.reading_time,
                                     device_id: device_id.clone(),
                                 },

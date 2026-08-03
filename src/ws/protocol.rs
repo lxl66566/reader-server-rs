@@ -9,8 +9,19 @@ use serde::{Deserialize, Serialize};
 pub enum ClientMessage {
     /// 订阅某本书的进度更新；同时声明本连接的 `device_id`
     Subscribe { book_id: i64, device_id: String },
-    /// 心跳：上报当前阅读位置
-    Heartbeat { book_id: i64, position: i64 },
+    /// 心跳：上报当前阅读位置（locator + percent）
+    ///
+    /// `locator`：与书籍 format 相关的位置字符串
+    ///   - txt：字符偏移数字字符串（如 "1234"）
+    ///   - epub：EpubCFI 字符串
+    ///   - pdf：页码字符串（如 "page:42"，从 0 起）
+    ///
+    /// `percent`：0.0-1.0，前端计算的精确阅读进度，用于服务端列表展示
+    Heartbeat {
+        book_id: i64,
+        locator: String,
+        percent: f64,
+    },
     /// 退订（离开阅读页）
     Unsubscribe { book_id: i64 },
 }
@@ -25,14 +36,16 @@ pub enum ServerMessage {
     HeartbeatAck {
         book_id: i64,
         synced: bool,
-        position: i64,
+        locator: String,
+        percent: f64,
         reading_time: i64,
     },
     /// 进度更新广播：同账号下另一台设备刚刚更新了进度，
-    /// 本设备收到后应跳转到 `position` 以保持多端同步
+    /// 本设备收到后应跳转到 `locator` 以保持多端同步
     ProgressUpdate {
         book_id: i64,
-        position: i64,
+        locator: String,
+        percent: f64,
         reading_time: i64,
         device_id: String,
     },

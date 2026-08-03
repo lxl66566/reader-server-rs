@@ -491,31 +491,35 @@ async fn test_full_integration() {
         .unwrap();
 
     // G1: 首次心跳创建进度记录
-    let result =
-        crate::routes::reading::process_heartbeat_logic(&pool, user1_id, book1_id, 100, "device1")
-            .await
-            .unwrap();
+    let result = crate::routes::reading::process_heartbeat_logic(
+        &pool, user1_id, book1_id, "100", 0.05, "device1",
+    )
+    .await
+    .unwrap();
     assert!(result.synced);
-    assert_eq!(result.position, 100);
+    assert_eq!(result.locator, "100");
+    assert_eq!((result.percent * 100.0) as i64, 5);
     assert_eq!(result.reading_time, 0);
     assert!(result.updated);
 
     // G2: 同设备再次心跳，进度更新（updated=true）
-    let result =
-        crate::routes::reading::process_heartbeat_logic(&pool, user1_id, book1_id, 200, "device1")
-            .await
-            .unwrap();
+    let result = crate::routes::reading::process_heartbeat_logic(
+        &pool, user1_id, book1_id, "200", 0.10, "device1",
+    )
+    .await
+    .unwrap();
     assert!(result.synced);
-    assert_eq!(result.position, 200);
+    assert_eq!(result.locator, "200");
     assert!(result.updated);
 
     // G3: 不同设备心跳：返回服务端进度（synced=false），不更新（updated=false）
-    let result =
-        crate::routes::reading::process_heartbeat_logic(&pool, user1_id, book1_id, 999, "device2")
-            .await
-            .unwrap();
+    let result = crate::routes::reading::process_heartbeat_logic(
+        &pool, user1_id, book1_id, "999", 0.99, "device2",
+    )
+    .await
+    .unwrap();
     assert!(!result.synced);
-    assert_eq!(result.position, 200); // server's saved progress
+    assert_eq!(result.locator, "200"); // server's saved progress
     assert!(!result.updated);
 
     // G4: user2 accesses user1's public book
@@ -682,14 +686,15 @@ async fn test_bookmarks_and_annotations() {
         &app,
         Method::POST,
         &format!("/api/v1/books/{book_id}/bookmarks"),
-        &serde_json::json!({"position": 100, "label": "第一章末尾"}),
+        &serde_json::json!({"locator": "100", "percent": 0.1, "label": "第一章末尾"}),
         Some(&token),
     )
     .await;
     assert_eq!(resp.status(), StatusCode::OK);
     let json = response_json(resp).await;
     let bookmark_id = json["data"]["id"].as_i64().unwrap();
-    assert_eq!(json["data"]["position"], 100);
+    assert_eq!(json["data"]["locator"], "100");
+    assert_eq!(json["data"]["percent"], 0.1);
 
     // 列出书签
     let resp = make_request(
@@ -736,7 +741,8 @@ async fn test_bookmarks_and_annotations() {
         &format!("/api/v1/books/{book_id}/annotations"),
         &serde_json::json!({
             "kind": "note",
-            "start_position": 50,
+            "start_locator": "50",
+            "start_percent": 0.05,
             "content": "这段写得好"
         }),
         Some(&token),
@@ -746,15 +752,17 @@ async fn test_bookmarks_and_annotations() {
     let json = response_json(resp).await;
     let note_id = json["data"]["id"].as_i64().unwrap();
 
-    // 创建高亮：必须带 end_position > start_position
+    // 创建高亮：必须带 end_locator + end_percent > start_percent
     let resp = super::make_json_request(
         &app,
         Method::POST,
         &format!("/api/v1/books/{book_id}/annotations"),
         &serde_json::json!({
             "kind": "highlight",
-            "start_position": 200,
-            "end_position": 250,
+            "start_locator": "200",
+            "end_locator": "250",
+            "start_percent": 0.2,
+            "end_percent": 0.25,
             "excerpt": "..."
         }),
         Some(&token),
@@ -769,7 +777,7 @@ async fn test_bookmarks_and_annotations() {
         &app,
         Method::POST,
         &format!("/api/v1/books/{book_id}/annotations"),
-        &serde_json::json!({"kind": "highlight", "start_position": 10}),
+        &serde_json::json!({"kind": "highlight", "start_locator": "10", "start_percent": 0.01}),
         Some(&token),
     )
     .await;
@@ -1170,13 +1178,14 @@ async fn test_ws_reading_session() {
 
     send_json(
         &mut ws_a,
-        &serde_json::json!({"type":"heartbeat","book_id":book_id,"position":100}),
+        &serde_json::json!({"type":"heartbeat","book_id":book_id,"locator":"100","percent":0.05}),
     )
     .await;
     let v = recv_json(&mut ws_a).await;
     assert_eq!(v["type"], "heartbeat_ack");
     assert_eq!(v["synced"], true);
-    assert_eq!(v["position"], 100);
+    assert_eq!(v["locator"], "100");
+    assert_eq!(v["percent"], 0.05);
     assert_eq!(v["reading_time"], 0); // 首次心跳不累加
 
     // 设备 2 建连、订阅；心跳时检测到 last_device=device1 → synced=false
@@ -1191,27 +1200,27 @@ async fn test_ws_reading_session() {
 
     send_json(
         &mut ws_b,
-        &serde_json::json!({"type":"heartbeat","book_id":book_id,"position":999}),
+        &serde_json::json!({"type":"heartbeat","book_id":book_id,"locator":"999","percent":0.99}),
     )
     .await;
     let v = recv_json(&mut ws_b).await;
     assert_eq!(v["type"], "heartbeat_ack");
     assert_eq!(v["synced"], false);
-    assert_eq!(v["position"], 100); // 服务端进度（来自 device1）
+    assert_eq!(v["locator"], "100"); // 服务端进度（来自 device1）
 
     // 设备 1 再次心跳：广播 progress_update 给设备 2
     send_json(
         &mut ws_a,
-        &serde_json::json!({"type":"heartbeat","book_id":book_id,"position":150}),
+        &serde_json::json!({"type":"heartbeat","book_id":book_id,"locator":"150","percent":0.08}),
     )
     .await;
     let v = recv_json(&mut ws_a).await;
     assert_eq!(v["type"], "heartbeat_ack");
-    assert_eq!(v["position"], 150);
+    assert_eq!(v["locator"], "150");
 
     let v = recv_json(&mut ws_b).await;
     assert_eq!(v["type"], "progress_update");
-    assert_eq!(v["position"], 150);
+    assert_eq!(v["locator"], "150");
     assert_eq!(v["device_id"], "device1");
 
     // unsubscribe
@@ -1226,7 +1235,7 @@ async fn test_ws_reading_session() {
     // 退订后再心跳应得到 error（设备 2）
     send_json(
         &mut ws_b,
-        &serde_json::json!({"type":"heartbeat","book_id":book_id,"position":1}),
+        &serde_json::json!({"type":"heartbeat","book_id":book_id,"locator":"1","percent":0.0}),
     )
     .await;
     let v = recv_json(&mut ws_b).await;
@@ -1292,7 +1301,10 @@ async fn test_ws_annotation_bookmark_sync() {
         .header("X-Device-Id", "deviceB")
         .header("X-Forwarded-For", "127.0.0.1")
         .body(Body::from(
-            serde_json::to_vec(&serde_json::json!({"position": 50, "label": "标记"})).unwrap(),
+            serde_json::to_vec(
+                &serde_json::json!({"locator": "50", "percent": 0.05, "label": "标记"}),
+            )
+            .unwrap(),
         ))
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
@@ -1307,7 +1319,8 @@ async fn test_ws_annotation_bookmark_sync() {
     assert_eq!(v["action"], "created");
     assert_eq!(v["bookmark_id"], created_id);
 
-    // 设备 A 通过 HTTP 创建批注（无 X-Device-Id，所以设备 B 也应收到，包括设备 A 自己）
+    // 设备 A 通过 HTTP 创建批注（无 X-Device-Id，所以设备 B 也应收到，包括设备 A
+    // 自己）
     let req = Request::builder()
         .method(Method::POST)
         .uri(format!("/api/v1/books/{book_id}/annotations"))
@@ -1317,7 +1330,8 @@ async fn test_ws_annotation_bookmark_sync() {
         .body(Body::from(
             serde_json::to_vec(&serde_json::json!({
                 "kind": "note",
-                "start_position": 10,
+                "start_locator": "10",
+                "start_percent": 0.01,
                 "content": "笔记"
             }))
             .unwrap(),
@@ -1359,4 +1373,225 @@ async fn test_ws_annotation_bookmark_sync() {
 
     let _ = ws_a.close(None).await;
     let _ = ws_b.close(None).await;
+}
+
+// ----------------------------------------------------------------
+//  多格式书籍上传 / 下载 / 元数据
+// ----------------------------------------------------------------
+
+/// 构造一个最小合法的 PDF（1 页空白页），用于上传测试
+///
+/// 使用 lopdf 直接生成，确保结构合法；手工拼装 PDF 字节流的话 xref
+/// 偏移很难对齐，lopdf 会拒绝。
+fn minimal_pdf_bytes() -> Vec<u8> {
+    use lopdf::{Dictionary, Document, Object, StringFormat, dictionary};
+
+    let mut doc = Document::with_version("1.4");
+
+    // Page tree：先创建空的 Pages 字典，再创建 Page，最后用 Reference 互联
+    let pages_id = doc.add_object(Dictionary::from_iter([
+        ("Type", "Pages".into()),
+        ("Count", 1u32.into()),
+    ]));
+    let page_id = doc.add_object(Dictionary::from_iter([
+        ("Type", "Page".into()),
+        ("Parent", Object::Reference(pages_id)),
+        (
+            "MediaBox",
+            vec![0.into(), 0.into(), 200.into(), 200.into()].into(),
+        ),
+    ]));
+    doc.get_object_mut(pages_id)
+        .unwrap()
+        .as_dict_mut()
+        .unwrap()
+        .set("Kids", vec![Object::Reference(page_id)]);
+
+    let catalog_id = doc.add_object(Dictionary::from_iter([
+        ("Type", "Catalog".into()),
+        ("Pages", Object::Reference(pages_id)),
+    ]));
+    doc.trailer.set("Root", Object::Reference(catalog_id));
+
+    // Info 字典：标题/作者
+    let mut info = Dictionary::new();
+    info.set(
+        "Title",
+        Object::String(b"Test PDF".to_vec(), StringFormat::Literal),
+    );
+    info.set(
+        "Author",
+        Object::String(b"Tester".to_vec(), StringFormat::Literal),
+    );
+    let info_id = doc.add_object(info);
+    doc.trailer.set("Info", Object::Reference(info_id));
+
+    // 避免未使用 import 警告
+    let _ = dictionary! {};
+
+    let mut buf = Vec::new();
+    doc.save_to(&mut buf).expect("failed to serialize PDF");
+    buf
+}
+
+#[tokio::test]
+async fn test_pdf_upload_and_download() {
+    let (app, _pool) = setup_test_app().await.unwrap();
+    let token = register_and_login(&app, "pdfuser", "password1").await;
+
+    let pdf = minimal_pdf_bytes();
+
+    let resp = make_multipart_request(
+        &app,
+        "/api/v1/books/upload",
+        vec![("title", "PDF测试"), ("is_public", "false")],
+        Some(("file", "test.pdf", &pdf)),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK, "PDF upload failed");
+    let json = response_json(resp).await;
+    assert_eq!(json["code"], 0, "upload error: {json:?}");
+    assert_eq!(json["data"]["format"], "pdf");
+    assert!(
+        json["data"]["total_pages"].as_i64().unwrap_or(0) >= 1,
+        "PDF should have at least 1 page"
+    );
+    assert_eq!(json["data"]["total_chars"], 0); // pdf 不计算字符数
+    let book_id = json["data"]["book_id"].as_i64().unwrap();
+
+    // 详情接口应反映 pdf 格式与 total_pages
+    let resp = make_request(
+        &app,
+        Method::GET,
+        &format!("/api/v1/books/{book_id}"),
+        Body::empty(),
+        Some(&token),
+    )
+    .await;
+    let json = response_json(resp).await;
+    assert_eq!(json["data"]["format"], "pdf");
+    assert!(json["data"]["total_pages"].as_i64().unwrap() >= 1);
+
+    // 下载原文件：应返回 application/pdf + ETag
+    let resp = make_request(
+        &app,
+        Method::GET,
+        &format!("/api/v1/books/{book_id}/file"),
+        Body::empty(),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let etag = resp
+        .headers()
+        .get("etag")
+        .expect("ETag should be set")
+        .to_str()
+        .unwrap()
+        .to_string();
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(content_type.starts_with("application/pdf"));
+
+    // 第二次带 If-None-Match：应返回 304
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri(format!("/api/v1/books/{book_id}/file"))
+        .header("Authorization", format!("Bearer {token}"))
+        .header("If-None-Match", &etag)
+        .header("X-Forwarded-For", "127.0.0.1")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
+
+    // /content 接口对 pdf 应拒绝（400）
+    let resp = make_request(
+        &app,
+        Method::GET,
+        &format!("/api/v1/books/{book_id}/content?position=0"),
+        Body::empty(),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    println!("\n===== PDF upload/download tests passed! =====");
+}
+
+#[tokio::test]
+async fn test_txt_download_endpoint() {
+    let (app, _pool) = setup_test_app().await.unwrap();
+    let token = register_and_login(&app, "txtuser", "password1").await;
+
+    let book = upload_test_book(&app, &token, "下载测试", TEST_BOOK_CONTENT, false).await;
+    let book_id = book["book_id"].as_i64().unwrap();
+
+    // txt 也支持 /file 下载
+    let resp = make_request(
+        &app,
+        Method::GET,
+        &format!("/api/v1/books/{book_id}/file"),
+        Body::empty(),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(content_type.starts_with("text/plain"));
+
+    println!("\n===== TXT download endpoint tests passed! =====");
+}
+
+#[tokio::test]
+async fn test_percent_validation_in_heartbeat() {
+    let (app, pool) = setup_test_app().await.unwrap();
+    let token = register_and_login(&app, "valid", "password1").await;
+    let book = upload_test_book(&app, &token, "校验", TEST_BOOK_CONTENT, false).await;
+    let book_id = book["book_id"].as_i64().unwrap();
+
+    let user_id: i64 = sqlx::query_scalar("SELECT id FROM users WHERE username = 'valid'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    // percent 越界：1.5 应失败
+    let result = crate::routes::reading::process_heartbeat_logic(
+        &pool, user_id, book_id, "0", 1.5, "device1",
+    )
+    .await;
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("Percent"), "unexpected error: {msg}");
+
+    // locator 为空应失败
+    let result = crate::routes::reading::process_heartbeat_logic(
+        &pool, user_id, book_id, "", 0.0, "device1",
+    )
+    .await;
+    assert!(result.is_err());
+
+    // 合法值应通过
+    let result = crate::routes::reading::process_heartbeat_logic(
+        &pool, user_id, book_id, "0", 0.0, "device1",
+    )
+    .await
+    .unwrap();
+    assert!(result.synced);
+    assert_eq!(result.percent, 0.0);
+
+    println!("\n===== Percent validation tests passed! =====");
 }

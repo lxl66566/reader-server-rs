@@ -9,7 +9,7 @@ use crate::error::AppError;
 
 static CHAPTER_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"^[　\s](序章|序言|卷首语|扉页|楔子|正文(?!完|结)|终章|后记|尾声|番外|第?\s{0,4}[\d〇零一二两三四五六七八九十百千万壹贰叁肆伍陆柒捌玖拾佰仟]+?\s{0,4}(?:章|节(?!课)|卷|集(?![合和])|部(?![分赛游])|篇(?!张))).{0,30}$"
+        r"^[　\s]*(序章|序言|卷首语|扉页|楔子|正文(?!完|结)|终章|后记|尾声|番外|第?\s{0,4}[\d〇零一二两三四五六七八九十百千万壹贰叁肆伍陆柒捌玖拾佰仟]+?\s{0,4}(?:章|节(?!课)|卷|集(?![合和])|部(?![分赛游])|篇(?!张))).{0,30}$"
     ).expect("invalid chapter regex")
 });
 
@@ -34,7 +34,7 @@ pub fn generate_uuid() -> String {
 
 /// 计算数据的 SHA-256 hex（小写）
 pub fn sha256_hex(data: &[u8]) -> String {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(data);
     let result = hasher.finalize();
@@ -99,7 +99,7 @@ pub fn verify_password(password: &str, hash: &str) -> Result<bool, AppError> {
 ///
 /// 返回 `(章节标题, 章节首字符在全文字符流中的偏移)` 列表。
 /// 偏移量统一以"字符"（`chars().count()`）为单位，与
-/// `reading_progress.position`、`bookmarks.position`、`get_book_content`
+/// `reading_progress.locator`、`bookmarks.locator`、`get_book_content`
 /// 的 `position` 参数保持一致——章节跳转、内容切片才能对齐。
 #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
 pub fn extract_chapters(content: &str) -> Vec<(String, i64)> {
@@ -127,13 +127,35 @@ pub fn extract_chapters(content: &str) -> Vec<(String, i64)> {
     chapters
 }
 
-/// EPUB 书籍解析结果
-pub struct EpubParseResult {
-    pub text_content: String,
-    pub chapters: Vec<(String, i64)>,
+// ============ EPUB ============
+
+/// EPUB 章节信息（与格式无关的中间结构）
+#[derive(Debug, Clone)]
+pub struct EpubChapter {
+    /// 章节标题（取自 TOC 或首个 heading）
+    pub title: String,
+    /// spine 索引（0-based），与 epub.js reader.chapter(i) 对齐
+    pub spine_index: i64,
+    /// 该章节首字符在全文拼接序列中的字符偏移（仅供搜索边界使用）
+    #[allow(dead_code)]
+    pub char_offset: i64,
 }
 
-/// 从 EPUB 字节数据中提取纯文本和章节信息
+/// EPUB 解析结果
+pub struct EpubParseResult {
+    /// 拼接后的全文纯文本（用于搜索、章节字数）
+    pub text_content: String,
+    pub chapters: Vec<EpubChapter>,
+    pub title: Option<String>,
+    pub author: Option<String>,
+}
+
+/// 从 EPUB 字节数据中提取章节列表与拼接全文
+///
+/// 设计：
+/// - 章节顺序按 spine 排列（与 epub.js / foliate 等渲染器一致）
+/// - 每个章节的 `char_offset` 是拼接全文的字符偏移，仅供服务端搜索/边界使用
+/// - `spine_index` 是前端 `EpubCFI` / 渲染时的章节序号
 pub fn parse_epub(data: &[u8]) -> Result<EpubParseResult, AppError> {
     use epub::doc::EpubDoc;
     use scraper::{Html, Selector};
@@ -146,9 +168,12 @@ pub fn parse_epub(data: &[u8]) -> Result<EpubParseResult, AppError> {
     let heading_selector = Selector::parse("h1, h2, h3, h4, h5, h6")
         .map_err(|e| AppError::Internal(format!("CSS selector error: {e:?}")))?;
 
+    let title = doc.mdata("title").map(|item| item.value.clone());
+    let author = doc.mdata("creator").map(|item| item.value.clone());
+
     let num_chapters = doc.get_num_chapters();
     let mut full_text = String::new();
-    let mut chapters: Vec<(String, i64)> = Vec::new();
+    let mut chapters: Vec<EpubChapter> = Vec::new();
 
     for i in 0..num_chapters {
         doc.set_current_chapter(i);
@@ -158,43 +183,170 @@ pub fn parse_epub(data: &[u8]) -> Result<EpubParseResult, AppError> {
 
         let html = Html::parse_document(&content);
 
-        // 提取标题作为章节名
+        // 章节标题优先级：首个 heading > spine toc 标题 > "未命名章节 N"
         let chapter_title = html
             .select(&heading_selector)
             .next()
             .map(|el| el.text().collect::<String>().trim().to_string())
-            .filter(|t| !t.is_empty());
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| format!("Chapter {}", i + 1));
 
-        if let Some(title) = chapter_title {
+        #[allow(clippy::cast_possible_wrap)]
+        let char_offset = full_text.chars().count() as i64;
+        chapters.push(EpubChapter {
+            title: chapter_title,
             #[allow(clippy::cast_possible_wrap)]
-            let pos = full_text.chars().count() as i64;
-            chapters.push((title, pos));
-        }
+            spine_index: i as i64,
+            char_offset,
+        });
 
-        // 提取段落文本
-        let mut chapter_parts: Vec<String> = Vec::new();
+        // 提取段落文本，用于全文搜索
         for p in html.select(&p_selector) {
             let text: String = p.text().collect::<Vec<_>>().join("").trim().to_string();
             if !text.is_empty() {
-                chapter_parts.push(text);
+                if !full_text.is_empty() {
+                    full_text.push('\n');
+                }
+                full_text.push_str(&text);
             }
         }
-
-        if !chapter_parts.is_empty() {
-            if !full_text.is_empty() {
-                full_text.push('\n');
-            }
-            full_text.push_str(&chapter_parts.join("\n"));
-        }
-    }
-
-    // 如果 EPUB 的 TOC 没有提供章节，尝试用正则从文本中提取
-    if chapters.is_empty() {
-        chapters = extract_chapters(&full_text);
     }
 
     Ok(EpubParseResult {
         text_content: full_text,
         chapters,
+        title,
+        author,
     })
+}
+
+// ============ PDF ============
+
+/// PDF 解析结果
+pub struct PdfParseResult {
+    pub num_pages: i64,
+    pub title: Option<String>,
+    pub author: Option<String>,
+}
+
+/// 解析 PDF 字节数据，提取页数与元数据
+///
+/// 使用 lopdf；只读取 Catalog 中的 Page tree 大小与 Info 字典，
+/// 不渲染内容（PDF 渲染由前端 pdf.js 完成）
+pub fn parse_pdf(data: &[u8]) -> Result<PdfParseResult, AppError> {
+    use lopdf::Document;
+
+    let doc = Document::load_mem(data)
+        .map_err(|e| AppError::Internal(format!("PDF parsing failed: {e}")))?;
+
+    let num_pages = doc.get_pages().len();
+
+    // 从 Info 字典读取标题/作者；忽略解析失败（容错优先）
+    let (title, author) = doc
+        .trailer
+        .get(b"Info")
+        .and_then(lopdf::Object::as_reference)
+        .and_then(|id| doc.get_object(id))
+        .and_then(lopdf::Object::as_dict)
+        .map_or((None, None), |dict| {
+            let title = pdf_string(dict.get(b"Title").ok());
+            let author = pdf_string(dict.get(b"Author").ok());
+            (title, author)
+        });
+
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_possible_wrap
+    )]
+    Ok(PdfParseResult {
+        num_pages: num_pages as i64,
+        title,
+        author,
+    })
+}
+
+/// 从 PDF Object 取出字符串值（处理 Hexadecimal/Literal 两种编码）
+fn pdf_string(obj: Option<&lopdf::Object>) -> Option<String> {
+    use lopdf::{Object, StringFormat};
+    let obj = obj?;
+    match obj {
+        Object::String(bytes, fmt) => match fmt {
+            StringFormat::Literal => {
+                // PDFDocEncoding 子集 ≈ Latin-1；常见 ASCII 文本可直读
+                String::from_utf8(bytes.clone())
+                    .ok()
+                    .or_else(|| Some(iso8859_1_to_string(bytes)))
+            }
+            StringFormat::Hexadecimal => String::from_utf8(bytes.clone()).ok(),
+        },
+        Object::Name(bytes) => String::from_utf8(bytes.clone()).ok(),
+        _ => None,
+    }
+}
+
+/// 将 Latin-1 (ISO-8859-1) 字节序列解释为字符串
+/// PDF 文本字符串常用 Latin-1 编码（非 UTF-8），此为兜底解码
+fn iso8859_1_to_string(bytes: &[u8]) -> String {
+    bytes.iter().map(|&b| b as char).collect()
+}
+
+// ============ 文件类型检测 ============
+
+/// 检测上传文件的格式（基于内容签名，不依赖扩展名）
+///
+/// 检测顺序：
+/// 1. `%PDF-` 前缀 → PDF
+/// 2. infer 识别 `application/epub+zip` → EPUB
+/// 3. UTF-8 解码成功 → TXT
+/// 4. 否则 → 不支持
+pub fn detect_format(content: &[u8]) -> Result<crate::models::BookFormat, AppError> {
+    // PDF 是文本签名（%PDF-），infer crate 不识别，需手工判断
+    if content.starts_with(b"%PDF-") {
+        return Ok(crate::models::BookFormat::Pdf);
+    }
+
+    if let Some(kind) = infer::get(content) {
+        if kind.mime_type() == "application/epub+zip" {
+            return Ok(crate::models::BookFormat::Epub);
+        }
+        // 其它二进制格式（exe、docx 等）一律拒绝
+        return Err(AppError::UnsupportedFileFormat);
+    }
+
+    // infer 无法识别（通常是纯文本）：尝试 UTF-8 解码
+    if std::str::from_utf8(content).is_ok() {
+        Ok(crate::models::BookFormat::Txt)
+    } else {
+        Err(AppError::FileInvalidUtf8)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detect_format_pdf() {
+        let pdf = b"%PDF-1.4\n...";
+        assert_eq!(detect_format(pdf).unwrap(), crate::models::BookFormat::Pdf);
+    }
+
+    #[test]
+    fn detect_format_txt() {
+        let txt = "中文测试 content".as_bytes();
+        assert_eq!(detect_format(txt).unwrap(), crate::models::BookFormat::Txt);
+    }
+
+    #[test]
+    fn detect_format_invalid_utf8() {
+        let bad = &[0xFF, 0xFE, 0xFD];
+        assert!(detect_format(bad).is_err());
+    }
+
+    #[test]
+    fn detect_format_exe_rejected() {
+        let exe: &[u8] = &[0x4D, 0x5A, 0x90, 0x00];
+        assert!(detect_format(exe).is_err());
+    }
 }

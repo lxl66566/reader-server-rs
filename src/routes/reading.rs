@@ -26,7 +26,7 @@ fn parse_tz(s: &str) -> chrono_tz::Tz {
     s.parse().unwrap_or(DEFAULT_TZ)
 }
 
-/// 返回用户本地"现在"；读不到 reading_settings 时按 UTC
+/// 返回用户本地"现在"；读不到 `reading_settings` 时按 UTC
 async fn user_local_now(pool: &Pool<Sqlite>, user_id: i64) -> DateTime<chrono_tz::Tz> {
     let tz_str: Option<String> =
         sqlx::query_scalar("SELECT timezone FROM reading_settings WHERE user_id = ?")
@@ -35,7 +35,7 @@ async fn user_local_now(pool: &Pool<Sqlite>, user_id: i64) -> DateTime<chrono_tz
             .await
             .ok()
             .flatten();
-    let tz = tz_str.as_deref().map(parse_tz).unwrap_or(DEFAULT_TZ);
+    let tz = tz_str.as_deref().map_or(DEFAULT_TZ, parse_tz);
     Utc::now().with_timezone(&tz)
 }
 
@@ -244,7 +244,8 @@ async fn update_reading_settings(
 #[derive(Debug, Clone)]
 pub struct HeartbeatResult {
     pub synced: bool,
-    pub position: i64,
+    pub locator: String,
+    pub percent: f64,
     pub reading_time: i64,
     /// 本次心跳是否实际更新了服务端进度
     /// （WS 据此决定是否向其他设备广播进度更新）
@@ -258,16 +259,26 @@ pub struct HeartbeatResult {
 /// - 若 `last_device_id` 与本次不同，返回服务器进度（让新设备同步），不更新
 /// - 同设备正常更新进度，累加阅读时间（与上次间隔 < 30s 才计入）
 /// - 使用乐观锁：若并发心跳抢先更新，本次视为未更新但返回最新进度
+///
+/// `locator` 是与书籍格式相关的位置字符串（txt=字符偏移、epub=EpubCFI、
+/// pdf=页码）； `percent` 是前端计算的精确进度（0-1），后端不做语义解析，
+/// 只持久化+广播。
 pub async fn process_heartbeat_logic(
     pool: &Pool<Sqlite>,
     user_id: i64,
     book_id: i64,
-    position: i64,
+    locator: &str,
+    percent: f64,
     device_id: &str,
 ) -> Result<HeartbeatResult, AppError> {
-    // 校验 position 非负
-    if position < 0 {
-        return Err(AppError::InvalidPosition);
+    // 校验 locator 非空（避免空字符串污染进度）
+    if locator.is_empty() {
+        return Err(AppError::EmptyLocator);
+    }
+
+    // 校验 percent 范围（服务端不解析 locator，但需要可靠的进度展示）
+    if !(0.0..=1.0).contains(&percent) {
+        return Err(AppError::InvalidPercent);
     }
 
     // 检查书籍是否存在
@@ -283,7 +294,7 @@ pub async fn process_heartbeat_logic(
 
     // 获取当前进度
     let progress = sqlx::query!(
-        "SELECT position, reading_time, last_read_at, last_device_id 
+        "SELECT locator, percent, reading_time, last_read_at, last_device_id 
          FROM reading_progress 
          WHERE user_id = ? AND book_id = ?",
         user_id,
@@ -299,11 +310,12 @@ pub async fn process_heartbeat_logic(
     if progress.is_none() {
         sqlx::query!(
             "INSERT INTO reading_progress 
-             (user_id, book_id, position, last_read_at, last_device_id) 
-             VALUES (?, ?, ?, ?, ?)",
+             (user_id, book_id, locator, percent, last_read_at, last_device_id) 
+             VALUES (?, ?, ?, ?, ?, ?)",
             user_id,
             book_id,
-            position,
+            locator,
+            percent,
             now_str,
             device_id
         )
@@ -312,7 +324,8 @@ pub async fn process_heartbeat_logic(
 
         return Ok(HeartbeatResult {
             synced: true,
-            position,
+            locator: locator.to_string(),
+            percent,
             reading_time: 0,
             updated: true,
         });
@@ -329,7 +342,8 @@ pub async fn process_heartbeat_logic(
     if !is_same_device {
         return Ok(HeartbeatResult {
             synced: false,
-            position: progress.position,
+            locator: progress.locator,
+            percent: progress.percent,
             reading_time: progress.reading_time,
             updated: false,
         });
@@ -350,8 +364,10 @@ pub async fn process_heartbeat_logic(
     // 使用乐观锁更新阅读进度：WHERE 条件包含 last_read_at 原始值，
     // 若在此期间被其他并发心跳修改，rows_affected == 0。
     // 使用 reading_time = reading_time + ? 确保原子累加。
-    let mut qb = sqlx::QueryBuilder::new("UPDATE reading_progress SET position = ");
-    qb.push_bind(position);
+    let mut qb = sqlx::QueryBuilder::new("UPDATE reading_progress SET locator = ");
+    qb.push_bind(locator);
+    qb.push(", percent = ");
+    qb.push_bind(percent);
     qb.push(", reading_time = reading_time + ");
     qb.push_bind(reading_time_increment);
     qb.push(", last_read_at = ");
@@ -379,7 +395,7 @@ pub async fn process_heartbeat_logic(
     // synced=true，但未广播）
     if result.rows_affected() == 0 {
         let current = sqlx::query!(
-            "SELECT position, reading_time FROM reading_progress WHERE user_id = ? AND book_id = ?",
+            "SELECT locator, percent, reading_time FROM reading_progress WHERE user_id = ? AND book_id = ?",
             user_id,
             book_id
         )
@@ -388,7 +404,8 @@ pub async fn process_heartbeat_logic(
 
         return Ok(HeartbeatResult {
             synced: true,
-            position: current.position,
+            locator: current.locator,
+            percent: current.percent,
             reading_time: current.reading_time,
             updated: false,
         });
@@ -425,7 +442,8 @@ pub async fn process_heartbeat_logic(
 
     Ok(HeartbeatResult {
         synced: true,
-        position,
+        locator: locator.to_string(),
+        percent,
         reading_time: new_reading_time,
         updated: true,
     })

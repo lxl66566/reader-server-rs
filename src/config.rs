@@ -70,7 +70,9 @@ impl Default for Config {
             },
             storage: StorageConfig {
                 book_dir: PathBuf::from("books"),
-                max_file_size: 10 * 1024 * 1024, // 10MB
+                // 50MB：覆盖常见 txt / epub / pdf；
+                // 在线上传超时与内存压力可控
+                max_file_size: 50 * 1024 * 1024,
             },
             jwt: JwtConfig {
                 secret: String::new(),              // load_config 首次运行时会生成随机值

@@ -390,7 +390,7 @@ async fn export_data(
 
     // 进度
     let progress_rows = sqlx::query!(
-        "SELECT book_id, position, reading_time, last_read_at FROM reading_progress WHERE user_id = ?",
+        "SELECT book_id, locator, percent, reading_time, last_read_at FROM reading_progress WHERE user_id = ?",
         auth.user_id
     )
     .fetch_all(&pool)
@@ -400,7 +400,8 @@ async fn export_data(
         .map(|p| {
             serde_json::json!({
                 "book_id": p.book_id,
-                "position": p.position,
+                "locator": p.locator,
+                "percent": p.percent,
                 "reading_time": p.reading_time,
                 "last_read_at": p.last_read_at,
             })

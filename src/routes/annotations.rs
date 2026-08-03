@@ -15,18 +15,25 @@ use crate::{
         Annotation, AnnotationKind, Bookmark, CreateAnnotationRequest, CreateBookmarkRequest,
         ListAnnotationsResponse, ListBookmarksResponse, UpdateAnnotationRequest,
     },
-    ws::manager::ConnectionRegistry,
-    ws::protocol::ServerMessage,
+    ws::{manager::ConnectionRegistry, protocol::ServerMessage},
 };
 
-/// 从请求头中提取可选的 device_id（用于 ws 广播时排除发起方设备）。
+/// 从请求头中提取可选的 `device_id`（用于 ws 广播时排除发起方设备）。
 /// 客户端在 POST/PUT/DELETE 时可附带 `X-Device-Id` 头来精确避免回环通知。
 fn device_id_from_headers(headers: &HeaderMap) -> Option<&str> {
     headers.get("x-device-id").and_then(|v| v.to_str().ok())
 }
 
+/// 校验进度值在 [0, 1]，否则返回错误
+fn validate_percent(p: f64) -> Result<(), AppError> {
+    if !(0.0..=1.0).contains(&p) {
+        return Err(AppError::InvalidPercent);
+    }
+    Ok(())
+}
+
 /// 广播书签变更给订阅了同 (user, book) 的其它设备。
-/// `exclude_device` 通常是发起本次 HTTP 请求的 device_id（可选）。
+/// `exclude_device` 通常是发起本次 HTTP 请求的 `device_id`（可选）。
 async fn broadcast_bookmark_changed(
     ws: &Arc<ConnectionRegistry>,
     user_id: i64,
@@ -97,7 +104,7 @@ pub async fn list_bookmarks(
     check_book_access(&pool, &auth, book_id).await?;
 
     let bookmarks = sqlx::query_as::<_, Bookmark>(
-        "SELECT * FROM bookmarks WHERE user_id = ? AND book_id = ? ORDER BY position ASC",
+        "SELECT * FROM bookmarks WHERE user_id = ? AND book_id = ? ORDER BY percent ASC, id ASC",
     )
     .bind(auth.user_id)
     .bind(book_id)
@@ -117,17 +124,19 @@ pub async fn create_bookmark(
     headers: HeaderMap,
     Json(req): Json<CreateBookmarkRequest>,
 ) -> Result<Json<ApiResponse<Bookmark>>, AppError> {
-    if req.position < 0 {
-        return Err(AppError::InvalidPosition);
+    if req.locator.trim().is_empty() {
+        return Err(AppError::EmptyLocator);
     }
+    validate_percent(req.percent)?;
     check_book_access(&pool, &auth, book_id).await?;
 
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     let id = sqlx::query!(
-        "INSERT INTO bookmarks (user_id, book_id, position, label, created_at) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO bookmarks (user_id, book_id, locator, percent, label, created_at) VALUES (?, ?, ?, ?, ?, ?)",
         auth.user_id,
         book_id,
-        req.position,
+        req.locator,
+        req.percent,
         req.label,
         now,
     )
@@ -197,7 +206,7 @@ pub async fn list_annotations(
     check_book_access(&pool, &auth, book_id).await?;
 
     let annotations = sqlx::query_as::<_, Annotation>(
-        "SELECT * FROM annotations WHERE user_id = ? AND book_id = ? ORDER BY start_position ASC",
+        "SELECT * FROM annotations WHERE user_id = ? AND book_id = ? ORDER BY start_percent ASC, id ASC",
     )
     .bind(auth.user_id)
     .bind(book_id)
@@ -217,28 +226,40 @@ pub async fn create_annotation(
     headers: HeaderMap,
     Json(req): Json<CreateAnnotationRequest>,
 ) -> Result<Json<ApiResponse<Annotation>>, AppError> {
-    if req.start_position < 0 {
-        return Err(AppError::InvalidPosition);
+    if req.start_locator.trim().is_empty() {
+        return Err(AppError::EmptyLocator);
     }
-    // 高亮必须�?end_position，且 end > start
+    validate_percent(req.start_percent)?;
+
+    // 高亮必须有 end_locator 与 end_percent，且 end > start
     if req.kind == AnnotationKind::Highlight {
-        match req.end_position {
-            Some(end) if end > req.start_position => {}
-            _ => return Err(AppError::AnnotationRangeInvalid),
+        let end_ok = match (&req.end_locator, req.end_percent) {
+            (Some(end), Some(ep)) if !end.trim().is_empty() && ep > req.start_percent => {
+                validate_percent(ep)?;
+                true
+            }
+            _ => false,
+        };
+        if !end_ok {
+            return Err(AppError::AnnotationRangeInvalid);
         }
+    } else if let Some(ep) = req.end_percent {
+        validate_percent(ep)?;
     }
 
     check_book_access(&pool, &auth, book_id).await?;
 
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     let id = sqlx::query!(
-        "INSERT INTO annotations (user_id, book_id, kind, start_position, end_position, excerpt, content, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO annotations (user_id, book_id, kind, start_locator, end_locator, start_percent, end_percent, excerpt, content, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         auth.user_id,
         book_id,
         req.kind,
-        req.start_position,
-        req.end_position,
+        req.start_locator,
+        req.end_locator,
+        req.start_percent,
+        req.end_percent,
         req.excerpt,
         req.content,
         now,

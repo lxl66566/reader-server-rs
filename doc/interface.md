@@ -4,20 +4,37 @@
 
 | HTTP status | 触发场景（典型） |
 |---|---|
-| 400 | 参数校验失败（用户名长度、密码长度、邀请码、上传文件格式/大小、批注范围、位置越界、无效时区、无效搜索 scope 等） |
+| 400 | 参数校验失败（用户名长度、密码长度、邀请码、上传文件格式/大小、批注范围、locator 为空、percent 越界、无效时区、无效搜索 scope、对非 txt 书调用 `/content` 等） |
 | 401 | 未登录 / token 过期 / 账户被锁定 / 账户被ban / token 角色不匹配 |
 | 403 | 无权限访问 / 修改 / 删除目标资源（如非 owner 操作他人书） |
-| 404 | 资源不存在（书 / 章节 / 用户 / 书签 / 批注 / 管理员） |
+| 404 | 资源不存在（书 / 章节 / 用户 / 书签 / 批注 / 管理员 / 书籍原文件在磁盘上丢失） |
 | 429 | 限流（按 IP，默认 10 rps / burst 30） |
 | 500 | 数据库 / IO / 内部错误（响应文案统一为 "Internal server error"，详情见服务端日志） |
 
 > 所有业务接口前缀统一为 `/api/v1`；健康检查 `/health` 不在版本前缀下。
-> 文中所有 `position` / `start_position` / `end_position` / 章节 `position` / `next_position` 单位均为"全文字符偏移（`chars().count()`）"，与上传时持久化的 `total_chars` 保持一致，前端可据此计算阅读百分比（`position / total_chars`）。
+
+## 重要概念：locator 与 percent
+
+为了支持多种书籍格式（txt / epub / pdf），所有"位置"统一抽象为 `locator`（字符串）+ `percent`（0.0–1.0 浮点）。
+
+### `locator` 的语义（按书籍 `format` 不同）
+
+| format | locator 示例 | 含义 |
+|---|---|---|
+| `txt` | `"1234"` | 全文字符偏移（`chars().count()`），与 `total_chars` 对齐；可直接用于 `/content?position=...` |
+| `epub` | `"epubcfi(/6/4[chap01ref]!/4[body01]/10[para05]/3:10)"` | EpubCFI 字符串（IDPF 标准），由前端阅读器（epub.js / foliate）生成 |
+| `pdf` | `"page:42"` | 页码（从 0 起）；`/^[1-9][0-9]*$/` 算作兼容旧格式，但推荐使用 `page:` 前缀 |
+
+### `percent` 的来源
+
+**进度（percent）由前端计算**（前端在渲染上下文中最准确），后端只持久化 + 多端同步 + 列表展示。后端会校验 `0.0 ≤ percent ≤ 1.0`，但不解析 locator 内容。
 
 # 通用类型与认证
 
 ```
 type ApiResponse<T> = { code: number; message: string; data: T }
+
+type BookFormat = 'txt' | 'epub' | 'pdf'
 
 type ReadingSettings = {
   font_size: number; background_color: string; text_color: string;
@@ -31,23 +48,36 @@ type ReadingSettings = {
 
 type Book = {
   book_id: number; title: string; author: string | null; is_public: boolean;
-  created_at: string; last_read_at: string | null; position: number; reading_time: number;
-  total_chars: number; description: string | null
+  format: BookFormat;
+  created_at: string; last_read_at: string | null;
+  locator: string | null; percent: number; reading_time: number;
+  total_chars: number;   // txt/epub 有效；pdf 为 0
+  total_pages: number;   // pdf 有效；txt/epub 为 0
+  description: string | null
 }
 type BookDetail = Book & { chapters: { chapter_id: number; title: string; position: number }[] }
+// position 字段：txt = 全文字符偏移；epub = spine 索引（0-based，与 epub.js 对齐）；pdf 通常无章节
 type PublicBook = {
   book_id: number; title: string; author: string | null; owner_username: string;
-  created_at: string; total_chars: number; description: string | null
+  format: BookFormat;
+  created_at: string; total_chars: number; total_pages: number; description: string | null
 }
 type InviteCodeItem = { id: number; invite_code: string; limit_times: number; used_times: number; description: string | null; created_at: string }
 type UserItem = { user_id: number; username: string; created_at: string; book_count: number; total_reading_time: number; status: 'active' | 'banned'; banned_at: string | null }
 type AdminItem = { admin_id: number; username: string; created_at: string }
 type AuditLogItem = { id: number; admin_id: number; admin_username: string; action: string; target_type: string | null; target_id: number | null; detail: string | null; created_at: string }
-type Bookmark = { id: number; user_id: number; book_id: number; position: number; label: string | null; created_at: string }
+
+type Bookmark = {
+  id: number; user_id: number; book_id: number;
+  locator: string; percent: number;
+  label: string | null; created_at: string
+}
 type Annotation = {
   id: number; user_id: number; book_id: number; kind: 'note' | 'highlight';
-  start_position: number; end_position: number | null; excerpt: string | null;
-  content: string | null; created_at: string; updated_at: string
+  start_locator: string; end_locator: string | null;
+  start_percent: number; end_percent: number | null;
+  excerpt: string | null; content: string | null;
+  created_at: string; updated_at: string
 }
 ```
 
@@ -69,7 +99,7 @@ type Annotation = {
 | GET | /api/v1/auth/user_info | Auth | - | { user_id: number; username: string; total_reading_time: number; book_count: number; status: 'active' \| 'banned' } |
 | POST | /api/v1/auth/change_password | Auth | Body: { old_password: string; new_password: string } | {} |
 | DELETE | /api/v1/auth/account | Auth | Body: { password: string } | {} |
-| GET | /api/v1/auth/export | Auth | - | application/zip 流，文件名 `<username>_<timestamp>.zip`，内含 metadata.json（书/章节/进度/设置/书签/批注）+ 所有原始 txt 文件 |
+| GET | /api/v1/auth/export | Auth | - | application/zip 流，文件名 `<username>_<timestamp>.zip`，内含 metadata.json（书/章节/进度/设置/书签/批注）+ 所有原始书籍文件（保留原格式） |
 | POST | /api/v1/auth/admin/setup | - | Body: { username: string; password: string } | { admin_token: string } |
 | POST | /api/v1/auth/admin/login | - | Body: { username: string; password: string } | { admin_token: string } |
 
@@ -94,14 +124,18 @@ type Annotation = {
 
 ### 书籍管理
 
+> 文件大小上限默认 50MB（可在 config.json 的 `storage.max_file_size` 调整）。
+> 上传时服务端基于内容签名（`%PDF-`、zip magic、UTF-8 解码）自动识别格式，不依赖客户端扩展名。
+
 | 方法 | URL | 权限 | 请求参数 | 响应 data |
 |---|---|---|---|---|
-| POST | /api/v1/books/upload | Auth | FormData: file (txt/epub), title: string, author?: string, is_public: boolean | { book_id: number; title: string; author: string \| null; chapters: { chapter_id: number; title: string; position: number }[] } |
+| POST | /api/v1/books/upload | Auth | FormData: file (txt/epub/pdf), title: string, author?: string, is_public: boolean | { book_id: number; title: string; author: string \| null; format: BookFormat; total_chars: number; total_pages: number; chapters: { chapter_id: number; title: string; position: number }[] } |
 | GET | /api/v1/books?page=number&limit=number | Auth | - | { total: number; books: Book[] } |
 | GET | /api/v1/books/search?q=string&scope=mine\|public\|all&page=number&limit=number | Auth | - | { total: number; books: Book[] } |
 | GET | /api/v1/books/:book_id | Auth | - | BookDetail |
-| GET | /api/v1/books/:book_id/content?position=number&length=number | Auth | Header: If-None-Match? | 200 + ETag：{ content: string; next_position: number }；ETag 命中返回 304 |
-| GET | /api/v1/books/:book_id/jump_to_chapter?chapter_id=number | Auth | - | { position: number } |
+| GET | /api/v1/books/:book_id/file | Auth | Header: If-None-Match? | 200 + ETag：原文件字节流（Content-Type 按 format：text/plain; application/epub+zip; application/pdf）；ETag 命中返回 304。epub/pdf 客户端渲染时使用，txt 也可用 |
+| GET | /api/v1/books/:book_id/content?position=number&length=number | Auth | Header: If-None-Match? | **仅 txt 格式可用**；epub/pdf 调用返回 400。200 + ETag：{ content: string; next_position: number }；ETag 命中返回 304 |
+| GET | /api/v1/books/:book_id/jump_to_chapter?chapter_id=number | Auth | - | { position: number }（txt=字符偏移；epub=spine 索引；pdf 通常无章节） |
 | PUT | /api/v1/books/:book_id | Auth | Body: { title?: string; author?: string; is_public?: boolean } | {} |
 | DELETE | /api/v1/books/:book_id | Auth | - | {} |
 | GET | /api/v1/books/public?page=number&limit=number | Auth | - | { total: number; books: PublicBook[] } |
@@ -110,13 +144,16 @@ type Annotation = {
 
 ### 书签 / 批注
 
+> 创建 / 更新时，`locator` 与 `percent` 由前端在阅读上下文中计算后上报。
+> 服务端会校验 `percent` ∈ [0, 1]，但不解析 locator 语义。
+
 | 方法 | URL | 权限 | 请求参数 | 响应 data |
 |---|---|---|---|---|
 | GET | /api/v1/books/:book_id/bookmarks | Auth | - | { bookmarks: Bookmark[] } |
-| POST | /api/v1/books/:book_id/bookmarks | Auth | Body: { position: number; label?: string }; 可选请求头 `X-Device-Id` 用于排除 ws 回环 | Bookmark |
+| POST | /api/v1/books/:book_id/bookmarks | Auth | Body: { locator: string; percent: number; label?: string }; 可选请求头 `X-Device-Id` 用于排除 ws 回环 | Bookmark |
 | DELETE | /api/v1/books/:book_id/bookmarks/:bookmark_id | Auth | 可选请求头 `X-Device-Id` | {} |
 | GET | /api/v1/books/:book_id/annotations | Auth | - | { annotations: Annotation[] } |
-| POST | /api/v1/books/:book_id/annotations | Auth | Body: { kind: 'note' \| 'highlight'; start_position: number; end_position?: number; excerpt?: string; content?: string }; 可选请求头 `X-Device-Id` | Annotation |
+| POST | /api/v1/books/:book_id/annotations | Auth | Body: { kind: 'note' \| 'highlight'; start_locator: string; start_percent: number; end_locator?: string; end_percent?: number; excerpt?: string; content?: string }; 可选请求头 `X-Device-Id`。highlight 必须带 end_locator + end_percent > start_percent | Annotation |
 | PUT | /api/v1/books/:book_id/annotations/:annotation_id | Auth | Body: { excerpt?: string; content?: string }; 可选请求头 `X-Device-Id` | {} |
 | DELETE | /api/v1/books/:book_id/annotations/:annotation_id | Auth | 可选请求头 `X-Device-Id` | {} |
 
@@ -144,7 +181,7 @@ type Annotation = {
 | type | 字段 | 说明 |
 |---|---|---|
 | `subscribe` | `book_id: number`, `device_id: string` | 进入阅读页面时调用，声明本连接的设备标识并开始接收该书进度广播；同一连接再次 subscribe 同一本书会以新 `device_id` 覆盖旧订阅 |
-| `heartbeat` | `book_id: number`, `position: number` | 上报阅读位置；服务端据此累加阅读时间并广播进度。必须先 subscribe 才能心跳 |
+| `heartbeat` | `book_id: number`, `locator: string`, `percent: number` | 上报阅读位置 + 进度（前端计算）；服务端据此累加阅读时间并广播进度。必须先 subscribe 才能心跳。locator/percent 语义见上方"重要概念"小节 |
 | `unsubscribe` | `book_id: number` | 离开阅读页面时调用 |
 
 #### 服务端 → 客户端（JSON 文本帧，`type` 取值如下）
@@ -152,8 +189,8 @@ type Annotation = {
 | type | 字段 | 说明 |
 |---|---|---|
 | `subscribed` | `book_id` | 订阅成功 |
-| `heartbeat_ack` | `book_id`, `synced: boolean`, `position: number`, `reading_time: number` | 心跳响应。`synced=false` 表示检测到其他设备正在阅读，客户端应跳转到返回的 `position` |
-| `progress_update` | `book_id`, `position: number`, `reading_time: number`, `device_id: string` | 广播：同账号下另一台设备刚刚更新了进度，本设备应跳转以保持多端同步 |
+| `heartbeat_ack` | `book_id`, `synced: boolean`, `locator: string`, `percent: number`, `reading_time: number` | 心跳响应。`synced=false` 表示检测到其他设备正在阅读，客户端应跳转到返回的 `locator` 以保持多端同步 |
+| `progress_update` | `book_id`, `locator: string`, `percent: number`, `reading_time: number`, `device_id: string` | 广播：同账号下另一台设备刚刚更新了进度，本设备应跳转以保持多端同步 |
 | `bookmark_changed` | `book_id`, `action: 'created' \| 'deleted'`, `bookmark_id: number` | 广播：另一端刚增删了书签；客户端收到后应重新拉取书签列表 |
 | `annotation_changed` | `book_id`, `action: 'created' \| 'updated' \| 'deleted'`, `annotation_id: number` | 广播：另一端刚增改删了批注；客户端收到后应重新拉取批注列表 |
 | `unsubscribed` | `book_id` | 退订成功 |
@@ -166,3 +203,11 @@ type Annotation = {
 - 阅读时长 / 连续阅读天数按用户的 `reading_settings.timezone` 归算（默认 UTC），避免跨时区用户在日期边界错位。
 - 当某次心跳与 `last_device_id` 不一致时（用户在另一台设备阅读中），返回服务端最新进度并 `synced=false`，**不广播**。
 - 书签 / 批注的 HTTP 写接口会向订阅同 (user, book) 的其它 ws 连接广播 `bookmark_changed` / `annotation_changed`；请求头 `X-Device-Id` 可用于让服务端排除发起方连接，避免回环通知。
+
+## 前端实现指引（按 format）
+
+| 格式 | 渲染方式 | 进度计算 | 章节导航 |
+|---|---|---|---|
+| `txt` | 后端 `/content` 分页拉取纯文本 | `position / total_chars` | `/jump_to_chapter` 返回字符偏移，前端用相同单位滚动 |
+| `epub` | 前端 fetch `/file` 后用 [epub.js](https://github.com/futurepress/epub.js) / [foliate-js](https://github.com/johnfactotum/foliate-js) 渲染 | 渲染器原生支持 EpubCFI，从中算出 `percent = cfi_index / total_cfi_steps` | 渲染器提供 TOC；后端预解析的章节列表用于离线展示 |
+| `pdf` | 前端 fetch `/file` 后用 [pdf.js](https://github.com/mozilla/pdf.js) 渲染 | `current_page / total_pages`，对应 locator `"page:N"` | pdf.js 提供 outline；如需后端 outline 后续可扩展 |

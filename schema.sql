@@ -72,22 +72,29 @@ CREATE TABLE
   );
 
 -- 书籍表
+-- 设计要点：
+-- - 所有书籍本体（原文件）存储在文件系统，DB 只存路径与派生元数据
+-- - format 决定 locator 的语义：txt=字符偏移字符串、epub=EpubCFI、pdf=页码字符串
+-- - total_chars 仅 txt/epub 有意义（用于章节搜索边界）；total_pages 仅 pdf 有意义
 CREATE TABLE
   IF NOT EXISTS books (
     id INTEGER PRIMARY KEY,
     user_id INTEGER NOT NULL,
     title TEXT NOT NULL,
     author TEXT,
+    -- 原文件存储路径（绝对或相对 book_dir）
     file_path TEXT NOT NULL,
     is_public BOOLEAN NOT NULL DEFAULT 0,
     cover_path TEXT,
-    -- 全文字符数（chars().count()），用于内容接口边界检查、阅读百分比
+    -- 章节内容总字数（chars().count()）；txt/epub 在上传时计算，pdf 为 0
     total_chars INTEGER NOT NULL DEFAULT 0,
+    -- 总页数；仅 pdf 有意义，其它格式为 0
+    total_pages INTEGER NOT NULL DEFAULT 0,
     -- 简介 / 摘要
     description TEXT,
-    -- 上传来源格式：'txt' / 'epub'；持久化便于后续重新分割或问题溯源
-    source_format TEXT NOT NULL CHECK (source_format IN ('txt', 'epub')),
-    -- 全文内容的 SHA-256（hex），用于跨用户去重、问题溯源
+    -- 文件格式：'txt' / 'epub' / 'pdf'，决定前端渲染方式与 locator 语义
+    format TEXT NOT NULL CHECK (format IN ('txt', 'epub', 'pdf')),
+    -- 原始文件的 SHA-256（hex），用于跨用户去重、问题溯源
     content_hash TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (
       strftime (
@@ -115,6 +122,8 @@ CREATE TABLE
   );
 
 -- 章节表
+-- position 字段对 txt 是全文字符偏移；对 epub 是 spine 索引（解析后的章节顺序）；
+-- pdf 通常没有章节概念（如有 outline 可后续扩展），目前不写
 CREATE TABLE
   IF NOT EXISTS chapters (
     id INTEGER PRIMARY KEY,
@@ -124,13 +133,16 @@ CREATE TABLE
     FOREIGN KEY (book_id) REFERENCES books (id) ON DELETE CASCADE
   );
 
--- 书签：用户在书中的位置标记（轻量，仅记录位置）
+-- 书签：用户在书中的位置标记
+-- locator 是与 format 相关的位置字符串（与 reading_progress.locator 同语义）
+-- percent 是该位置的进度（0-1），便于列表展示，由前端上报
 CREATE TABLE
   IF NOT EXISTS bookmarks (
     id INTEGER PRIMARY KEY,
     user_id INTEGER NOT NULL,
     book_id INTEGER NOT NULL,
-    position INTEGER NOT NULL,
+    locator TEXT NOT NULL,
+    percent REAL NOT NULL DEFAULT 0 CHECK (percent >= 0.0 AND percent <= 1.0),
     label TEXT,
     created_at TEXT NOT NULL DEFAULT (
       strftime (
@@ -143,14 +155,18 @@ CREATE TABLE
 
 -- 批注：用户在书中的笔记 / 高亮，按 kind 枚举区分
 -- kind 取值：'note'（纯笔记）、'highlight'（高亮，需带内容片段）
+-- start_locator / end_locator 是与 format 相关的位置字符串
+-- start_percent / end_percent 用于列表/统计
 CREATE TABLE
   IF NOT EXISTS annotations (
     id INTEGER PRIMARY KEY,
     user_id INTEGER NOT NULL,
     book_id INTEGER NOT NULL,
     kind TEXT NOT NULL CHECK (kind IN ('note', 'highlight')),
-    start_position INTEGER NOT NULL,
-    end_position INTEGER,
+    start_locator TEXT NOT NULL,
+    end_locator TEXT,
+    start_percent REAL NOT NULL DEFAULT 0 CHECK (start_percent >= 0.0 AND start_percent <= 1.0),
+    end_percent REAL CHECK (end_percent IS NULL OR (end_percent >= 0.0 AND end_percent <= 1.0)),
     excerpt TEXT,
     content TEXT,
     created_at TEXT NOT NULL DEFAULT (
@@ -168,12 +184,15 @@ CREATE TABLE
   );
 
 -- 阅读进度表
+-- locator：与 format 相关的位置字符串（txt=数字字符偏移、epub=EpubCFI、pdf=页码）
+-- percent：阅读进度（0-1），由前端计算并上报；后端不解析 locator，仅持久化+广播+列表展示
 CREATE TABLE
   IF NOT EXISTS reading_progress (
     id INTEGER PRIMARY KEY,
     user_id INTEGER NOT NULL,
     book_id INTEGER NOT NULL,
-    position INTEGER NOT NULL DEFAULT 0,
+    locator TEXT NOT NULL DEFAULT '',
+    percent REAL NOT NULL DEFAULT 0.0 CHECK (percent >= 0.0 AND percent <= 1.0),
     reading_time INTEGER NOT NULL DEFAULT 0,
     last_read_at TEXT,
     last_device_id TEXT,

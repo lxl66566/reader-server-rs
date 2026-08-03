@@ -2,8 +2,9 @@ use std::path::PathBuf;
 
 use axum::{
     Json, Router,
+    body::Body,
     extract::{Path, Query, State, multipart::Multipart},
-    http::{HeaderMap, header},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
 };
@@ -17,13 +18,16 @@ use crate::{
     config::Config,
     error::{ApiResponse, AppError},
     models::{
-        Book, BookContentResponse, BookDetailResponse, BookListItem, BookListResponse,
-        BookSourceFormat, BookTagsResponse, ChapterResponse, JumpToChapterResponse,
-        PublicBookListItem, PublicBookListResponse, RandomPublicBooksResponse, SetBookTagsRequest,
-        UpdateBookRequest, UploadBookResponse,
+        Book, BookContentResponse, BookDetailResponse, BookFormat, BookListItem, BookListResponse,
+        BookTagsResponse, ChapterResponse, JumpToChapterResponse, PublicBookListItem,
+        PublicBookListResponse, RandomPublicBooksResponse, SetBookTagsRequest, UpdateBookRequest,
+        UploadBookResponse,
     },
     routes::reading::etag_matches,
-    utils::{extract_chapters, generate_uuid, make_etag, parse_epub, sha256_hex},
+    utils::{
+        detect_format, extract_chapters, generate_uuid, make_etag, parse_epub, parse_pdf,
+        sha256_hex,
+    },
 };
 
 // 分页查询参数
@@ -33,7 +37,7 @@ pub struct PaginationParams {
     pub limit: Option<u32>,
 }
 
-// 获取内容查询参数
+// 获取内容查询参数（仅 txt 格式有意义）
 #[derive(Debug, Deserialize)]
 pub struct ContentParams {
     pub position: i64,
@@ -95,6 +99,9 @@ pub fn routes() -> Router<crate::app::AppState> {
             "/{book_id}",
             get(get_book_detail).put(update_book).delete(delete_book),
         )
+        // 原文件下载：epub / pdf 客户端渲染时使用；txt 也可用
+        .route("/{book_id}/file", get(download_book_file))
+        // 内容切片：仅 txt 有意义；epub/pdf 走 /file
         .route("/{book_id}/content", get(get_book_content))
         .route("/{book_id}/jump_to_chapter", get(jump_to_chapter))
         .route(
@@ -177,59 +184,92 @@ async fn upload_book(
         return Err(AppError::FileTooLarge);
     }
 
-    // 基于文件内容（magic bytes）检测类型，不依赖客户端扩展名
-    let (content, chapters, file_ext_str, source_format) = if let Some(kind) =
-        infer::get(&file_content)
-    {
-        match kind.mime_type() {
-            "application/epub+zip" => {
-                let result = parse_epub(&file_content)?;
-                (result.text_content, result.chapters, "txt", BookSourceFormat::Epub)
-            }
-            // 其他已知二进制格式（exe、pdf 等）一律拒绝
-            _ => return Err(AppError::UnsupportedFileFormat),
+    // 检测格式（同时校验内容签名，拒绝未知/二进制格式）
+    let format = detect_format(&file_content)?;
+
+    // 根据格式派生元数据 + 提取章节
+    let (total_chars, total_pages, chapters, final_title, final_author): (
+        i64,
+        i64,
+        Vec<(String, i64)>,
+        String,
+        Option<String>,
+    ) = match format {
+        BookFormat::Txt => {
+            let text = std::str::from_utf8(&file_content)
+                .map_err(|_| AppError::FileInvalidUtf8)?
+                .to_string();
+            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+            let tc = text.chars().count() as i64;
+            let chs = extract_chapters(&text);
+            // txt 元数据全部来自用户输入
+            (tc, 0i64, chs, title, author)
         }
-    } else {
-        // infer 无法识别（通常是纯文本）：尝试 UTF-8 解码
-        match std::str::from_utf8(&file_content) {
-            Ok(s) => {
-                let text = s.to_string();
-                let chs = extract_chapters(&text);
-                (text, chs, "txt", BookSourceFormat::Txt)
-            }
-            Err(_) => return Err(AppError::FileInvalidUtf8),
+        BookFormat::Epub => {
+            let parsed = parse_epub(&file_content)?;
+            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+            let tc = parsed.text_content.chars().count() as i64;
+            // 章节：用 spine_index 作为 position（前端按 spine 渲染）
+            let chs: Vec<(String, i64)> = parsed
+                .chapters
+                .iter()
+                .map(|c| (c.title.clone(), c.spine_index))
+                .collect();
+            // EPUB 解析出的 title/author 优先级低于用户上传时的显式输入
+            let final_title = if title.trim().is_empty() {
+                parsed.title.unwrap_or(title)
+            } else {
+                title
+            };
+            let final_author = author.or(parsed.author);
+            (tc, 0i64, chs, final_title, final_author)
+        }
+        BookFormat::Pdf => {
+            let parsed = parse_pdf(&file_content)?;
+            // PDF 不做章节提取（暂不解析 outline），前端用页码导航
+            let final_title = if title.trim().is_empty() {
+                parsed.title.unwrap_or(title)
+            } else {
+                title
+            };
+            let final_author = author.or(parsed.author);
+            (
+                0i64,
+                parsed.num_pages,
+                Vec::new(),
+                final_title,
+                final_author,
+            )
         }
     };
 
-    // 派生元数据：字符数（用于内容边界检查、阅读百分比）+ 内容 hash（去重 / 溯源）
-    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-    let total_chars = content.chars().count() as i64;
-    let content_hash = sha256_hex(content.as_bytes());
+    // 文件 hash（用原文件字节，不依赖格式）
+    let content_hash = sha256_hex(&file_content);
 
-    // 生成唯一文件名
+    // 生成唯一文件名（保留原格式扩展名）
     let file_id = generate_uuid();
     let file_path =
-        PathBuf::from(&config.storage.book_dir).join(format!("{file_id}.{file_ext_str}"));
+        PathBuf::from(&config.storage.book_dir).join(format!("{file_id}.{}", format.ext()));
     let file_path_string = file_path.to_string_lossy().into_owned();
 
-    // 先写入文件
+    // 先写入原文件
     let mut file = fs::File::create(&file_path).await.map_err(AppError::Io)?;
-    file.write_all(content.as_bytes())
-        .await
-        .map_err(AppError::Io)?;
+    file.write_all(&file_content).await.map_err(AppError::Io)?;
+    file.flush().await.map_err(AppError::Io)?;
     drop(file); // 确保文件句柄关闭
 
     // 将书籍信息和章节写入数据库；失败时清理已写入的文件，避免孤儿文件
     let db_result: Result<(i64, Vec<ChapterResponse>), AppError> = async {
         let book_id = sqlx::query!(
-            "INSERT INTO books (user_id, title, author, file_path, is_public, total_chars, source_format, content_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO books (user_id, title, author, file_path, is_public, total_chars, total_pages, format, content_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             auth.user_id,
-            title,
-            author,
+            final_title,
+            final_author,
             file_path_string,
             is_public,
             total_chars,
-            source_format,
+            total_pages,
+            format,
             content_hash,
         )
         .execute(&pool)
@@ -292,8 +332,11 @@ async fn upload_book(
     // 返回响应
     let response = UploadBookResponse {
         book_id,
-        title,
-        author,
+        title: final_title,
+        author: final_author,
+        format,
+        total_chars,
+        total_pages,
         chapters: chapter_responses,
     };
 
@@ -321,8 +364,8 @@ async fn list_books(
     let books = sqlx::query!(
         r#"
         SELECT b.id, b.title, b.author, b.is_public, b.created_at,
-               b.total_chars, b.description,
-               rp.position, rp.reading_time, rp.last_read_at
+               b.total_chars, b.total_pages, b.description, b.format AS "format!: BookFormat",
+               rp.locator, rp.percent, rp.reading_time, rp.last_read_at
         FROM books b
         LEFT JOIN reading_progress rp ON b.id = rp.book_id AND rp.user_id = ?
         WHERE b.user_id = ?
@@ -345,11 +388,14 @@ async fn list_books(
             title: book.title,
             author: book.author,
             is_public: book.is_public,
+            format: book.format,
             created_at: book.created_at,
             last_read_at: book.last_read_at,
-            position: book.position.unwrap_or(0),
+            locator: book.locator,
+            percent: book.percent.unwrap_or(0.0),
             reading_time: book.reading_time.unwrap_or(0),
             total_chars: book.total_chars,
+            total_pages: book.total_pages,
             description: book.description,
         })
         .collect();
@@ -391,7 +437,7 @@ async fn get_book_detail(
 
     // 查询阅读进度
     let progress = sqlx::query!(
-        r#"SELECT position, reading_time, last_read_at FROM reading_progress 
+        r#"SELECT locator, percent, reading_time, last_read_at FROM reading_progress 
          WHERE user_id = ? AND book_id = ?"#,
         auth.user_id,
         book_id
@@ -400,8 +446,8 @@ async fn get_book_detail(
     .await?;
 
     // 如果没有阅读进度，创建一个
-    let (position, reading_time, last_read_at) = if let Some(p) = progress {
-        (p.position, p.reading_time, p.last_read_at)
+    let (locator, percent, reading_time, last_read_at) = if let Some(p) = progress {
+        (Some(p.locator), p.percent, p.reading_time, p.last_read_at)
     } else {
         // 如果是公开书籍，为当前用户创建进度记录
         if book.user_id != auth.user_id {
@@ -413,7 +459,7 @@ async fn get_book_detail(
             .execute(&pool)
             .await?;
         }
-        (0, 0, None)
+        (None, 0.0, 0, None)
     };
 
     // 构建章节响应
@@ -432,11 +478,14 @@ async fn get_book_detail(
         title: book.title,
         author: book.author,
         is_public: book.is_public,
+        format: book.format,
         created_at: book.created_at,
         last_read_at,
-        position,
+        locator,
+        percent,
         reading_time,
         total_chars: book.total_chars,
+        total_pages: book.total_pages,
         description: book.description,
         chapters: chapter_responses,
     };
@@ -534,7 +583,70 @@ async fn delete_book(
     Ok(Json(ApiResponse::<()>::message("Deleted successfully")))
 }
 
-// 获取书籍内容
+/// 下载书籍原始文件
+///
+/// 用途：
+/// - epub / pdf：前端 fetch 后用 epub.js / pdf.js 客户端渲染
+/// - txt：可选，前端通常走 /content 分页拉取
+///
+/// 响应：
+/// - 200 + 文件字节流（带 Content-Type、Content-Disposition: inline、ETag）
+/// - 客户端可带 If-None-Match 命中 304
+///
+/// 不实现 HTTP Range：浏览器/CDN 自动处理缓冲；如需 Range 后续可加。
+async fn download_book_file(
+    auth: AuthUser,
+    State(pool): State<Pool<Sqlite>>,
+    Path(book_id): Path<i64>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    let book = sqlx::query!(
+        r#"SELECT user_id, file_path, is_public, content_hash, format AS "format!: BookFormat" FROM books WHERE id = ?"#,
+        book_id
+    )
+    .fetch_optional(&pool)
+    .await?
+    .ok_or_else(|| AppError::BookNotFound)?;
+
+    // 权限：所有者或公开书
+    if book.user_id != auth.user_id && !book.is_public {
+        return Err(AppError::BookAccessDenied);
+    }
+
+    // 文件可能被外部清理；缺失时返回 404 而不是 500
+    let path = PathBuf::from(&book.file_path);
+    if !path.exists() {
+        tracing::error!(book_id, file_path = %book.file_path, "book file missing on disk");
+        return Err(AppError::BookNotFound);
+    }
+
+    let bytes = fs::read(&path).await.map_err(AppError::Io)?;
+
+    // ETag 基于内容 hash（上传时计算并持久化），稳定可缓存
+    let etag = format!("\"{}\"", book.content_hash);
+    if let Some(if_none) = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        && etag_matches(if_none, &etag)
+    {
+        return Ok(StatusCode::NOT_MODIFIED.into_response());
+    }
+
+    let format = book.format;
+
+    // inline 让浏览器内联展示（pdf 可直接预览，epub 会被下载）
+    let disposition = format!("inline; filename=\"book_{book_id}.{}\"", format.ext());
+
+    Ok(Response::builder()
+        .header(header::CONTENT_TYPE, format.mime_type())
+        .header(header::ETAG, etag.as_str())
+        .header(header::CONTENT_DISPOSITION, disposition)
+        .header(header::CACHE_CONTROL, "private, no-cache")
+        .body(Body::from(bytes))
+        .unwrap())
+}
+
+// 获取书籍内容（仅 txt 格式）
 async fn get_book_content(
     auth: AuthUser,
     State(pool): State<Pool<Sqlite>>,
@@ -544,7 +656,7 @@ async fn get_book_content(
 ) -> Result<Response, AppError> {
     // 查询书籍信息
     let book = sqlx::query!(
-        "SELECT user_id, file_path, is_public, total_chars FROM books WHERE id = ?",
+        r#"SELECT user_id, file_path, is_public, total_chars, format AS "format!: BookFormat" FROM books WHERE id = ?"#,
         book_id
     )
     .fetch_optional(&pool)
@@ -554,6 +666,11 @@ async fn get_book_content(
     // 检查权限
     if book.user_id != auth.user_id && !book.is_public {
         return Err(AppError::BookAccessDenied);
+    }
+
+    // 仅 txt 支持；epub/pdf 应该走 /file 下载原文件后客户端渲染
+    if book.format != BookFormat::Txt {
+        return Err(AppError::ContentEndpointNotSupported);
     }
 
     let content_length = book.total_chars.max(0);
@@ -570,6 +687,7 @@ async fn get_book_content(
     let length = params.length.unwrap_or(4000).clamp(100, 10000) as usize;
 
     // 计算结束位置（基于已持久化的全文字符数，无需读全文）
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     let end_pos = (position + length).min(content_length as usize);
 
     // 流式读取：避免大书全量进内存
@@ -705,6 +823,7 @@ async fn jump_to_chapter(
     .ok_or_else(|| AppError::ChapterNotFound)?;
 
     // 返回章节位置
+    // 注意：position 字段对 txt 是字符偏移；对 epub 是 spine 索引
     Ok(Json(ApiResponse::success(JumpToChapterResponse {
         position: chapter.position,
     })))
@@ -729,7 +848,9 @@ async fn list_public_books(
     // 获取公开书籍列表
     let books = sqlx::query!(
         r#"
-        SELECT b.id, b.title, b.author, b.created_at, b.total_chars, b.description, u.username as owner_username
+        SELECT b.id, b.title, b.author, b.created_at, b.total_chars, b.total_pages,
+               b.description, b.format AS "format!: BookFormat",
+               u.username as owner_username
         FROM books b
         JOIN users u ON b.user_id = u.id
         WHERE b.is_public = 1
@@ -750,8 +871,10 @@ async fn list_public_books(
             title: book.title,
             author: book.author,
             owner_username: book.owner_username,
+            format: book.format,
             created_at: book.created_at,
             total_chars: book.total_chars,
+            total_pages: book.total_pages,
             description: book.description,
         })
         .collect();
@@ -774,7 +897,9 @@ async fn get_random_public_books(
     // 获取所有公开书籍
     let books = sqlx::query!(
         r#"
-        SELECT b.id, b.title, b.author, b.created_at, b.total_chars, b.description, u.username as owner_username
+        SELECT b.id, b.title, b.author, b.created_at, b.total_chars, b.total_pages,
+               b.description, b.format AS "format!: BookFormat",
+               u.username as owner_username
         FROM books b
         JOIN users u ON b.user_id = u.id
         WHERE b.is_public = 1
@@ -793,8 +918,10 @@ async fn get_random_public_books(
             title: book.title.clone(),
             author: book.author.clone(),
             owner_username: book.owner_username.clone(),
+            format: book.format,
             created_at: book.created_at.clone(),
             total_chars: book.total_chars,
+            total_pages: book.total_pages,
             description: book.description.clone(),
         })
         .collect();
@@ -828,14 +955,17 @@ struct SearchRow {
     is_public: bool,
     created_at: String,
     total_chars: i64,
+    total_pages: i64,
     description: Option<String>,
-    position: Option<i64>,
+    format: BookFormat,
+    locator: Option<String>,
+    percent: Option<f64>,
     reading_time: Option<i64>,
     last_read_at: Option<String>,
 }
 
 // 搜索书籍：按 title/author/章节标题 LIKE 模糊匹配
-// 不做书内全文索引（FTS），因为后续书籍正文可能不再存 sqlite
+// 不做书内全文索引（FTS）：搜索定位是元数据级别
 async fn search_books(
     auth: AuthUser,
     State(pool): State<Pool<Sqlite>>,
@@ -858,8 +988,10 @@ async fn search_books(
     // 使用 DISTINCT 因为 LEFT JOIN chapters 会让一本书出现多次
     let mut qb = sqlx::QueryBuilder::new(
         "SELECT DISTINCT b.id, b.title, b.author, b.is_public, b.created_at, \
-         b.total_chars AS total_chars, b.description AS description, \
-         rp.position AS position, rp.reading_time AS reading_time, rp.last_read_at AS last_read_at \
+         b.total_chars AS total_chars, b.total_pages AS total_pages, \
+         b.description AS description, b.format AS format, \
+         rp.locator AS locator, rp.percent AS percent, \
+         rp.reading_time AS reading_time, rp.last_read_at AS last_read_at \
          FROM books b \
          LEFT JOIN reading_progress rp ON rp.book_id = b.id AND rp.user_id = ",
     );
@@ -886,11 +1018,14 @@ async fn search_books(
             title: r.title,
             author: r.author,
             is_public: r.is_public,
+            format: r.format,
             created_at: r.created_at,
             last_read_at: r.last_read_at,
-            position: r.position.unwrap_or(0),
+            locator: r.locator,
+            percent: r.percent.unwrap_or(0.0),
             reading_time: r.reading_time.unwrap_or(0),
             total_chars: r.total_chars,
+            total_pages: r.total_pages,
             description: r.description,
         })
         .collect();

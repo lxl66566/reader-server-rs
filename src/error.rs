@@ -117,20 +117,30 @@ pub enum AppError {
     #[error("File cannot be empty")]
     FileEmpty,
 
-    #[error("File size must not exceed 10MB")]
+    #[error("File size must not exceed 50MB")]
     FileTooLarge,
 
     #[error("File encoding is not valid UTF-8")]
     FileInvalidUtf8,
 
-    #[error("Only TXT and EPUB formats are supported")]
+    #[error("Only TXT, EPUB and PDF formats are supported")]
     UnsupportedFileFormat,
 
     #[error("Position exceeds content range")]
     PositionExceedsRange,
 
     #[error("Position must not be negative")]
+    #[allow(dead_code)]
     InvalidPosition,
+
+    #[error("Percent must be in [0.0, 1.0]")]
+    InvalidPercent,
+
+    #[error("Locator must not be empty")]
+    EmptyLocator,
+
+    #[error("Content endpoint is only supported for txt books")]
+    ContentEndpointNotSupported,
 
     #[error("Invalid timezone identifier (must be IANA name, e.g. Asia/Shanghai)")]
     InvalidTimezone,
@@ -204,13 +214,16 @@ impl IntoResponse for AppError {
             | AppError::FileTooLarge
             | AppError::FileInvalidUtf8
             | AppError::UnsupportedFileFormat
-            |             AppError::PositionExceedsRange
+            | AppError::PositionExceedsRange
             | AppError::InvalidPosition
             | AppError::InvalidTimezone
             | AppError::InvalidFontFamily
             | AppError::AnnotationRangeInvalid
             | AppError::SearchQueryEmpty
             | AppError::InvalidSearchScope
+            | AppError::InvalidPercent
+            | AppError::EmptyLocator
+            | AppError::ContentEndpointNotSupported
             | AppError::FormParseError(_)
             | AppError::FieldReadError(_, _) => StatusCode::BAD_REQUEST,
 
