@@ -487,6 +487,7 @@ async fn get_book_detail(
         total_chars: book.total_chars,
         total_pages: book.total_pages,
         description: book.description,
+        is_owner: book.user_id == auth.user_id,
         chapters: chapter_responses,
     };
 

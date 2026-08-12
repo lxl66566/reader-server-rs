@@ -47,8 +47,12 @@ async fn main() -> Result<()> {
 
     tracing::info!("服务器启动在 http://{}", addr);
 
-    // 启动服务器
-    axum::serve(TcpListener::bind(addr).await?, app).await?;
+    // 启动服务器（必须携带 ConnectInfo，否则限流中间件无法提取客户端 IP）
+    axum::serve(
+        TcpListener::bind(addr).await?,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }

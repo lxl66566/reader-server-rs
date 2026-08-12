@@ -24,7 +24,7 @@ reader-server-rs 是一个读书服务端软件，用户可以向服务器上传
 
 ## 技术栈
 
-后端采用 Rust + axum + sqlx (sqlite)。
+后端 Rust + axum + sqlx (sqlite)，前端 SolidJS + UnoCSS (tailwind preset) + pnpm。前端代码在 `frontend/`。
 
 ## 特色
 

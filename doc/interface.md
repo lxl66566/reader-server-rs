@@ -55,7 +55,7 @@ type Book = {
   total_pages: number;   // pdf 有效；txt/epub 为 0
   description: string | null
 }
-type BookDetail = Book & { chapters: { chapter_id: number; title: string; position: number }[] }
+type BookDetail = Book & { is_owner: boolean; chapters: { chapter_id: number; title: string; position: number }[] }
 // position 字段：txt = 全文字符偏移；epub = spine 索引（0-based，与 epub.js 对齐）；pdf 通常无章节
 type PublicBook = {
   book_id: number; title: string; author: string | null; owner_username: string;

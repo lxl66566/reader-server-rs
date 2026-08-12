@@ -308,6 +308,8 @@ pub struct BookDetailResponse {
     pub total_chars: i64,
     pub total_pages: i64,
     pub description: Option<String>,
+    /// 当前请求用户是否为书籍所有者（前端据此显示编辑/删除入口）
+    pub is_owner: bool,
     pub chapters: Vec<ChapterResponse>,
 }
 

@@ -1,0 +1,151 @@
+// Small shared UI primitives. Kept deliberately plain.
+
+import { VsClose, VsLoading } from 'solid-icons/vs';
+import {
+  createEffect,
+  onCleanup,
+  Show,
+  type JSX,
+  type ParentComponent,
+} from 'solid-js';
+
+type ButtonVariant = 'danger' | 'ghost' | 'primary';
+
+const BUTTON_STYLES: Record<ButtonVariant, string> = {
+  danger:
+    'bg-transparent text-red-700 dark:text-red-400 border border-red-300 hover:bg-red-50 dark:hover:bg-red-950',
+  ghost: 'bg-transparent text-ink border border-edge hover:bg-surface',
+  primary: 'bg-ink text-base hover:opacity-85 border border-ink',
+};
+
+export const Button: ParentComponent<{
+  class?: string;
+  disabled?: boolean;
+  onClick?: () => void;
+  type?: 'button' | 'submit';
+  variant?: ButtonVariant;
+}> = props => (
+  <button
+    class={`inline-flex cursor-pointer items-center justify-center gap-1 rounded px-3 py-1.5 text-sm transition-opacity disabled:cursor-not-allowed disabled:opacity-50 ${BUTTON_STYLES[props.variant ?? 'primary']} ${props.class ?? ''}`}
+    disabled={props.disabled}
+    onClick={() => props.onClick?.()}
+    type={props.type ?? 'button'}
+  >
+    {props.children}
+  </button>
+);
+
+export const Input: ParentComponent<{
+  class?: string;
+  onInput: (value: string) => void;
+  onKeyDown?: (event: KeyboardEvent) => void;
+  placeholder?: string;
+  type?: string;
+  value: string;
+}> = props => (
+  <input
+    class={`rounded border border-edge bg-surface px-3 py-1.5 text-sm text-ink outline-none focus:border-accent ${props.class ?? ''}`}
+    onInput={event => {
+      props.onInput(event.currentTarget.value);
+    }}
+    onKeyDown={event => props.onKeyDown?.(event)}
+    placeholder={props.placeholder}
+    type={props.type ?? 'text'}
+    value={props.value}
+  />
+);
+
+export const Spinner: ParentComponent<{ class?: string }> = props => (
+  <VsLoading class={`animate-spin ${props.class ?? 'size-5'}`} />
+);
+
+export const EmptyState: ParentComponent<{ text: string }> = props => (
+  <div class="py-12 text-center text-sm text-muted">{props.text}</div>
+);
+
+export const Toggle: ParentComponent<{
+  checked: boolean;
+  label?: string;
+  onChange: (checked: boolean) => void;
+}> = props => (
+  <label class="inline-flex cursor-pointer items-center gap-2 text-sm">
+    <button
+      aria-checked={props.checked}
+      class={`relative h-5 w-9 rounded-full transition-colors ${props.checked ? 'bg-accent' : 'bg-edge'}`}
+      onClick={() => {
+        props.onChange(!props.checked);
+      }}
+      role="switch"
+      type="button"
+    >
+      <span
+        class={`absolute top-0.5 size-4 rounded-full bg-surface transition-transform ${props.checked ? 'translate-x-4.5' : 'translate-x-0.5'}`}
+      />
+    </button>
+    <Show when={props.label}>{props.label}</Show>
+  </label>
+);
+
+// Modal rendered inline (no portal needed for this app's scale).
+export const Modal: ParentComponent<{
+  onClose: () => void;
+  open: boolean;
+  title: string;
+}> = props => {
+  const onKey = (event: KeyboardEvent) => {
+    if (event.key === 'Escape') props.onClose();
+  };
+  createEffect(() => {
+    if (props.open) {
+      document.addEventListener('keydown', onKey);
+      onCleanup(() => {
+        document.removeEventListener('keydown', onKey);
+      });
+    }
+  });
+  return (
+    <Show when={props.open}>
+      <div
+        class="rs-fade-in fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center"
+        onClick={event => {
+          if (event.target === event.currentTarget) props.onClose();
+        }}
+      >
+        <div class="safe-bottom w-full max-w-md rounded-t-lg bg-surface p-4 sm:rounded-lg">
+          <div class="mb-3 flex items-center justify-between">
+            <h2 class="text-base font-medium">{props.title}</h2>
+            <button
+              aria-label={props.title}
+              class="cursor-pointer text-muted hover:text-ink"
+              onClick={() => {
+                props.onClose();
+              }}
+              type="button"
+            >
+              <VsClose class="size-4" />
+            </button>
+          </div>
+          {props.children}
+        </div>
+      </div>
+    </Show>
+  );
+};
+
+export const SectionCard: ParentComponent<{
+  actions?: JSX.Element;
+  class?: string;
+  title?: string;
+}> = props => (
+  <section
+    class={`rounded-lg border border-edge bg-surface p-4 ${props.class ?? ''}`}
+  >
+    <Show when={props.title}>
+      <div class="mb-3 flex items-center justify-between">
+        <h2 class="text-sm font-medium text-muted">{props.title}</h2>
+        {props.actions}
+      </div>
+    </Show>
+    {props.children}
+  </section>
+);

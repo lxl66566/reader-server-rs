@@ -2,3 +2,5 @@
 *.db
 config.json
 .opencode/
+sqlite
+/logs

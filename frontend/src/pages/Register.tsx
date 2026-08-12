@@ -1,0 +1,104 @@
+// Register page: username + password + confirm + optional invite code.
+
+import { A, useNavigate } from '@solidjs/router';
+import { createSignal, Show } from 'solid-js';
+import toast from 'solid-toast';
+import { ApiError } from '../api';
+import { Button, Input, Spinner } from '../components/ui';
+import { useI18n } from '../i18n';
+import type { DictKey } from '../i18n/zh-CN';
+import { useAuth } from '../stores/auth';
+
+const Register = () => {
+  const { t } = useI18n();
+  const auth = useAuth();
+  const navigate = useNavigate();
+  const [confirmPassword, setConfirmPassword] = createSignal('');
+  const [inviteCode, setInviteCode] = createSignal('');
+  const [password, setPassword] = createSignal('');
+  const [submitting, setSubmitting] = createSignal(false);
+  const [username, setUsername] = createSignal('');
+
+  const submit = (event: SubmitEvent) => {
+    event.preventDefault();
+    if (submitting()) return;
+    if (password() !== confirmPassword()) {
+      toast.error(t('passwordMismatch'));
+      return;
+    }
+    void doRegister();
+  };
+
+  const doRegister = async () => {
+    setSubmitting(true);
+    try {
+      const code = inviteCode().trim();
+      await auth.register(username().trim(), password(), code || undefined);
+      navigate('/', { replace: true });
+    } catch (error) {
+      showError(error, t);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div class="mx-auto max-w-sm">
+      <form
+        class="rounded-lg border border-edge bg-surface p-6"
+        onSubmit={submit}
+      >
+        <h1 class="mb-4 text-lg font-medium">{t('register')}</h1>
+        <label class="mb-3 block text-sm">
+          <span class="mb-1 block text-muted">{t('username')}</span>
+          <Input class="w-full" onInput={setUsername} value={username()} />
+        </label>
+        <label class="mb-3 block text-sm">
+          <span class="mb-1 block text-muted">{t('password')}</span>
+          <Input
+            class="w-full"
+            onInput={setPassword}
+            type="password"
+            value={password()}
+          />
+        </label>
+        <label class="mb-3 block text-sm">
+          <span class="mb-1 block text-muted">{t('confirmPassword')}</span>
+          <Input
+            class="w-full"
+            onInput={setConfirmPassword}
+            type="password"
+            value={confirmPassword()}
+          />
+        </label>
+        <label class="mb-4 block text-sm">
+          <span class="mb-1 block text-muted">{t('inviteCodeOptional')}</span>
+          <Input class="w-full" onInput={setInviteCode} value={inviteCode()} />
+        </label>
+        <Button class="w-full" disabled={submitting()} type="submit">
+          <Show fallback={t('register')} when={submitting()}>
+            <Spinner class="size-4" />
+          </Show>
+        </Button>
+      </form>
+      <A
+        class="mt-4 block text-center text-sm text-muted hover:text-ink"
+        href="/login"
+      >
+        {t('goLogin')}
+      </A>
+    </div>
+  );
+};
+
+function showError(error: unknown, t: (key: DictKey) => string): void {
+  if (error instanceof ApiError && error.status === 429) {
+    toast.error(t('errorRateLimit'));
+  } else if (error instanceof Error) {
+    toast.error(error.message);
+  } else {
+    toast.error(t('errorGeneric'));
+  }
+}
+
+export default Register;
