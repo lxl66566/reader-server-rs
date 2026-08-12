@@ -3,6 +3,11 @@ name         = "reader-server-rs"
 version      = "0.1.0"
 edition      = "2024"
 rust-version = "1.85"
+description  = "A self-hosted reading server for txt/epub books with multi-user progress sync"
+license      = "BSD-3-Clause"
+repository   = "https://github.com/lxl66566/reader-server-rs"
+keywords     = ["reading", "epub", "server", "ebook"]
+categories   = ["web-programming::http-server"]
 include      = ["/CHANGELOG.md", "/LICENSE-*", "/README.md", "/benches/**", "/src/**", "/tests/**"]
 
 [[bin]]

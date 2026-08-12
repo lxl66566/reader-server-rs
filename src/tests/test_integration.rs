@@ -12,6 +12,7 @@ macro_rules! section {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn test_full_integration() {
     let (app, pool) = setup_test_app().await.unwrap();
 
@@ -263,8 +264,8 @@ async fn test_full_integration() {
     assert_eq!(resp.status(), StatusCode::OK);
     let json = response_json(resp).await;
     assert_eq!(json["data"]["total"], 2);
-    let books = json["data"]["books"].as_array().unwrap();
-    assert_eq!(books.len(), 2);
+    let book_list = json["data"]["books"].as_array().unwrap();
+    assert_eq!(book_list.len(), 2);
 
     // D4: get book detail
     let resp = make_request(
@@ -498,7 +499,7 @@ async fn test_full_integration() {
     .unwrap();
     assert!(result.synced);
     assert_eq!(result.locator, "100");
-    assert_eq!((result.percent * 100.0) as i64, 5);
+    assert!((result.percent * 100.0 - 5.0).abs() < f64::EPSILON);
     assert_eq!(result.reading_time, 0);
     assert!(result.updated);
 
@@ -1309,8 +1310,8 @@ async fn test_ws_annotation_bookmark_sync() {
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let _bookmark_json: serde_json::Value = response_json(resp).await;
-    let created_id = _bookmark_json["data"]["id"].as_i64().unwrap();
+    let bookmark_json: serde_json::Value = response_json(resp).await;
+    let created_id = bookmark_json["data"]["id"].as_i64().unwrap();
 
     // 设备 A 应收到 bookmark_changed
     let v = recv_json(&mut ws_a).await;
@@ -1389,19 +1390,19 @@ fn minimal_pdf_bytes() -> Vec<u8> {
     let mut doc = Document::with_version("1.4");
 
     // Page tree：先创建空的 Pages 字典，再创建 Page，最后用 Reference 互联
-    let pages_id = doc.add_object(Dictionary::from_iter([
+    let page_tree_id = doc.add_object(Dictionary::from_iter([
         ("Type", "Pages".into()),
         ("Count", 1u32.into()),
     ]));
     let page_id = doc.add_object(Dictionary::from_iter([
         ("Type", "Page".into()),
-        ("Parent", Object::Reference(pages_id)),
+        ("Parent", Object::Reference(page_tree_id)),
         (
             "MediaBox",
             vec![0.into(), 0.into(), 200.into(), 200.into()].into(),
         ),
     ]));
-    doc.get_object_mut(pages_id)
+    doc.get_object_mut(page_tree_id)
         .unwrap()
         .as_dict_mut()
         .unwrap()
@@ -1409,7 +1410,7 @@ fn minimal_pdf_bytes() -> Vec<u8> {
 
     let catalog_id = doc.add_object(Dictionary::from_iter([
         ("Type", "Catalog".into()),
-        ("Pages", Object::Reference(pages_id)),
+        ("Pages", Object::Reference(page_tree_id)),
     ]));
     doc.trailer.set("Root", Object::Reference(catalog_id));
 
@@ -1591,7 +1592,7 @@ async fn test_percent_validation_in_heartbeat() {
     .await
     .unwrap();
     assert!(result.synced);
-    assert_eq!(result.percent, 0.0);
+    assert!(result.percent.abs() < f64::EPSILON);
 
     println!("\n===== Percent validation tests passed! =====");
 }
