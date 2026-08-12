@@ -1,10 +1,3 @@
-#![warn(clippy::pedantic)]
-#![allow(
-    clippy::too_many_arguments,
-    clippy::too_many_lines,
-    clippy::similar_names
-)]
-
 mod app;
 mod auth;
 mod config;
@@ -87,7 +80,7 @@ fn init_tracing(
         "daily" | "" => tracing_appender::rolling::daily(&config.log.dir, "reader-server.log"),
         other => {
             anyhow::bail!("unknown log rotation '{other}', expected hourly/daily/never")
-        }
+        },
     };
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 

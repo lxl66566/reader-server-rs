@@ -132,7 +132,8 @@ pub async fn create_bookmark(
 
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     let id = sqlx::query!(
-        "INSERT INTO bookmarks (user_id, book_id, locator, percent, label, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO bookmarks (user_id, book_id, locator, percent, label, created_at) VALUES (?, \
+         ?, ?, ?, ?, ?)",
         auth.user_id,
         book_id,
         req.locator,
@@ -206,7 +207,8 @@ pub async fn list_annotations(
     check_book_access(&pool, &auth, book_id).await?;
 
     let annotations = sqlx::query_as::<_, Annotation>(
-        "SELECT * FROM annotations WHERE user_id = ? AND book_id = ? ORDER BY start_percent ASC, id ASC",
+        "SELECT * FROM annotations WHERE user_id = ? AND book_id = ? ORDER BY start_percent ASC, \
+         id ASC",
     )
     .bind(auth.user_id)
     .bind(book_id)
@@ -237,7 +239,7 @@ pub async fn create_annotation(
             (Some(end), Some(ep)) if !end.trim().is_empty() && ep > req.start_percent => {
                 validate_percent(ep)?;
                 true
-            }
+            },
             _ => false,
         };
         if !end_ok {
@@ -251,8 +253,9 @@ pub async fn create_annotation(
 
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     let id = sqlx::query!(
-        "INSERT INTO annotations (user_id, book_id, kind, start_locator, end_locator, start_percent, end_percent, excerpt, content, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO annotations (user_id, book_id, kind, start_locator, end_locator, \
+         start_percent, end_percent, excerpt, content, created_at, updated_at) VALUES (?, ?, ?, \
+         ?, ?, ?, ?, ?, ?, ?, ?)",
         auth.user_id,
         book_id,
         req.kind,

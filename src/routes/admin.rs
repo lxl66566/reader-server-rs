@@ -50,8 +50,8 @@ async fn log_audit(
     detail: Option<&str>,
 ) -> Result<(), AppError> {
     sqlx::query!(
-        "INSERT INTO audit_logs (admin_id, admin_username, action, target_type, target_id, detail) \
-         VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO audit_logs (admin_id, admin_username, action, target_type, target_id, \
+         detail) VALUES (?, ?, ?, ?, ?, ?)",
         admin.admin_id,
         admin.username,
         action,
@@ -236,7 +236,8 @@ async fn reset_password(
     let new_password_hash = hash_password(&req.new_password)?;
 
     sqlx::query!(
-        "UPDATE users SET password_hash = ?, failed_login_attempts = 0, locked_until = NULL WHERE id = ?",
+        "UPDATE users SET password_hash = ?, failed_login_attempts = 0, locked_until = NULL WHERE \
+         id = ?",
         new_password_hash,
         user_id
     )
@@ -336,8 +337,8 @@ async fn unban_user(
     Path(user_id): Path<i64>,
 ) -> Result<Json<ApiResponse<()>>, AppError> {
     let result = sqlx::query!(
-        "UPDATE users SET status = 'active', banned_at = NULL, failed_login_attempts = 0, locked_until = NULL \
-         WHERE id = ? AND status = 'banned'",
+        "UPDATE users SET status = 'active', banned_at = NULL, failed_login_attempts = 0, \
+         locked_until = NULL WHERE id = ? AND status = 'banned'",
         user_id,
     )
     .execute(&pool)
@@ -505,10 +506,10 @@ async fn backup_global(
                     .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
                 zip.write_all(&bytes)
                     .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
-            }
+            },
             Err(e) => {
                 tracing::warn!(error = %e, db = %db_path, "skip db file in global backup");
-            }
+            },
         }
 
         // 写入 books 目录所有文件
@@ -520,7 +521,7 @@ async fn backup_global(
                 zip.finish()
                     .map_err(|e| AppError::Internal(format!("zip finalize: {e}")))?;
                 return Ok(finalize_backup(zip_buf));
-            }
+            },
         };
 
         while let Some(entry) = entries.next_entry().await.map_err(AppError::Io)? {

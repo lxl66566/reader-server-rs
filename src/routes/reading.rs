@@ -160,7 +160,7 @@ async fn update_reading_settings(
     }
 
     // 构建动态更新 SQL（使用 separated 自动处理逗号分隔）
-    let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> =
+    let mut query_builder: sqlx::QueryBuilder<Sqlite> =
         sqlx::QueryBuilder::new("UPDATE reading_settings SET ");
     let mut sep = query_builder.separated(", ");
 
@@ -383,10 +383,10 @@ pub async fn process_heartbeat_logic(
         Some(t) => {
             qb.push("last_read_at = ");
             qb.push_bind(t);
-        }
+        },
         None => {
             qb.push("last_read_at IS NULL");
-        }
+        },
     }
 
     let result = qb.build().execute(pool).await?;
@@ -395,7 +395,8 @@ pub async fn process_heartbeat_logic(
     // synced=true，但未广播）
     if result.rows_affected() == 0 {
         let current = sqlx::query!(
-            "SELECT locator, percent, reading_time FROM reading_progress WHERE user_id = ? AND book_id = ?",
+            "SELECT locator, percent, reading_time FROM reading_progress WHERE user_id = ? AND \
+             book_id = ?",
             user_id,
             book_id
         )
@@ -428,8 +429,9 @@ pub async fn process_heartbeat_logic(
         let local_now = user_local_now(pool, user_id).await;
         let today = local_now.format("%Y-%m-%d").to_string();
         sqlx::query!(
-            "INSERT INTO daily_reading_stats (user_id, date, reading_seconds) VALUES (?, ?, ?) \
-             ON CONFLICT (user_id, date) DO UPDATE SET reading_seconds = reading_seconds + excluded.reading_seconds",
+            "INSERT INTO daily_reading_stats (user_id, date, reading_seconds) VALUES (?, ?, ?) ON \
+             CONFLICT (user_id, date) DO UPDATE SET reading_seconds = reading_seconds + \
+             excluded.reading_seconds",
             user_id,
             today,
             reading_time_increment,
@@ -479,8 +481,7 @@ async fn get_reading_stats(
 
     // 最近 30 天的每日时长（按日期升序）
     let recent_days: Vec<DailyReadingStat> = sqlx::query_as::<_, DailyReadingStat>(
-        "SELECT date, reading_seconds FROM daily_reading_stats \
-         WHERE user_id = ? AND date >= ? \
+        "SELECT date, reading_seconds FROM daily_reading_stats WHERE user_id = ? AND date >= ? \
          ORDER BY date ASC",
     )
     .bind(auth.user_id)
@@ -547,7 +548,7 @@ fn compute_streaks(sorted_desc_dates: &[String], today: &str, yesterday: &str) -
         match &prev {
             Some(p) if days_between(p, d) == Some(1) => {
                 run += 1;
-            }
+            },
             _ => run = 1,
         }
         longest = longest.max(run);

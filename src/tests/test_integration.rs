@@ -50,7 +50,7 @@ async fn test_full_integration() {
     assert_eq!(json["data"]["is_setup"], true);
 
     // A4: 重复设置管理员 (error 1006)
-    let resp = super::make_json_request(
+    let resp = make_json_request(
         &app,
         Method::POST,
         "/api/v1/auth/admin/setup",
@@ -72,7 +72,7 @@ async fn test_full_integration() {
     assert_eq!(resp.status(), StatusCode::OK);
 
     // A6: update settings (关闭邀请码)
-    let resp = super::make_json_request(
+    let resp = make_json_request(
         &app,
         Method::PUT,
         "/api/v1/admin/settings",
@@ -96,7 +96,7 @@ async fn test_full_integration() {
     assert_eq!(json["data"]["invite_code_required"], false);
 
     // A8: create invite code
-    let resp = super::make_json_request(
+    let resp = make_json_request(
         &app,
         Method::POST,
         "/api/v1/admin/invite_code",
@@ -176,7 +176,7 @@ async fn test_full_integration() {
     );
 
     // B7: change password
-    let resp = super::make_json_request(
+    let resp = make_json_request(
         &app,
         Method::POST,
         "/api/v1/auth/change_password",
@@ -203,7 +203,7 @@ async fn test_full_integration() {
     section!("C. Invite Code Flow");
 
     // C1: enable invite_code_required
-    let _resp = super::make_json_request(
+    let _resp = make_json_request(
         &app,
         Method::PUT,
         "/api/v1/admin/settings",
@@ -229,7 +229,7 @@ async fn test_full_integration() {
     assert!(json["message"].as_str().unwrap().contains("Invite code"));
 
     // C5: disable invite_code_required
-    let _resp = super::make_json_request(
+    let _resp = make_json_request(
         &app,
         Method::PUT,
         "/api/v1/admin/settings",
@@ -295,7 +295,7 @@ async fn test_full_integration() {
     assert!(json["data"]["next_position"].as_i64().unwrap() > 0);
 
     // D6: update book (change title + is_public=false)
-    let resp = super::make_json_request(
+    let resp = make_json_request(
         &app,
         Method::PUT,
         &format!("/api/v1/books/{book1_id}"),
@@ -419,7 +419,7 @@ async fn test_full_integration() {
     assert_eq!(json["data"]["simplified_chinese"], true);
 
     // F2: update all fields
-    let resp = super::make_json_request(
+    let resp = make_json_request(
         &app,
         Method::PUT,
         "/api/v1/reading/settings",
@@ -455,7 +455,7 @@ async fn test_full_integration() {
     assert_eq!(json["data"]["simplified_chinese"], false);
 
     // F4: partial update (only font_size)
-    let resp = super::make_json_request(
+    let resp = make_json_request(
         &app,
         Method::PUT,
         "/api/v1/reading/settings",
@@ -579,7 +579,7 @@ async fn test_full_integration() {
         .as_i64()
         .unwrap();
 
-    let resp = super::make_json_request(
+    let resp = make_json_request(
         &app,
         Method::POST,
         &format!("/api/v1/admin/users/{user2_id}/reset_password"),
@@ -636,7 +636,7 @@ async fn test_full_integration() {
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 
     // I5: invalid file format (上传真正的二进制文件，非 txt/epub)
-    let exe_bytes: &[u8] = &[0x4D, 0x5A, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00]; // MZ = Windows EXE
+    let exe_bytes: &[u8] = &[0x4d, 0x5a, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00]; // MZ = Windows EXE
     let resp = make_multipart_request(
         &app,
         "/api/v1/books/upload",
@@ -648,7 +648,7 @@ async fn test_full_integration() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
     // I6: change password with wrong old password
-    let resp = super::make_json_request(
+    let resp = make_json_request(
         &app,
         Method::POST,
         "/api/v1/auth/change_password",
@@ -682,7 +682,7 @@ async fn test_bookmarks_and_annotations() {
     // ================================================================
 
     // 创建书签
-    let resp = super::make_json_request(
+    let resp = make_json_request(
         &app,
         Method::POST,
         &format!("/api/v1/books/{book_id}/bookmarks"),
@@ -735,7 +735,7 @@ async fn test_bookmarks_and_annotations() {
     // ================================================================
 
     // 创建笔记
-    let resp = super::make_json_request(
+    let resp = make_json_request(
         &app,
         Method::POST,
         &format!("/api/v1/books/{book_id}/annotations"),
@@ -753,7 +753,7 @@ async fn test_bookmarks_and_annotations() {
     let note_id = json["data"]["id"].as_i64().unwrap();
 
     // 创建高亮：必须带 end_locator + end_percent > start_percent
-    let resp = super::make_json_request(
+    let resp = make_json_request(
         &app,
         Method::POST,
         &format!("/api/v1/books/{book_id}/annotations"),
@@ -773,7 +773,7 @@ async fn test_bookmarks_and_annotations() {
     let highlight_id = json["data"]["id"].as_i64().unwrap();
 
     // 高亮校验：end_position 缺失应失败
-    let resp = super::make_json_request(
+    let resp = make_json_request(
         &app,
         Method::POST,
         &format!("/api/v1/books/{book_id}/annotations"),
@@ -796,7 +796,7 @@ async fn test_bookmarks_and_annotations() {
     assert_eq!(json["data"]["annotations"].as_array().unwrap().len(), 2);
 
     // 更新批注内容
-    let resp = super::make_json_request(
+    let resp = make_json_request(
         &app,
         Method::PUT,
         &format!("/api/v1/books/{book_id}/annotations/{note_id}"),
@@ -910,7 +910,7 @@ async fn test_user_ban_and_delete_account() {
     let (admin_token, _) = setup_admin(&app).await;
 
     // 关闭邀请码，方便注册
-    let _ = super::make_json_request(
+    let _ = make_json_request(
         &app,
         Method::PUT,
         "/api/v1/admin/settings",
@@ -987,7 +987,7 @@ async fn test_user_ban_and_delete_account() {
     assert_eq!(resp.status(), StatusCode::OK);
 
     // 但 token_version 已变更，旧 token 仍失效；重新登录才能用
-    let resp = super::make_json_request(
+    let resp = make_json_request(
         &app,
         Method::POST,
         "/api/v1/auth/login",
@@ -1004,7 +1004,7 @@ async fn test_user_ban_and_delete_account() {
     // ================================================================
 
     // 错密码应失败
-    let resp = super::make_json_request(
+    let resp = make_json_request(
         &app,
         Method::DELETE,
         "/api/v1/auth/account",
@@ -1015,7 +1015,7 @@ async fn test_user_ban_and_delete_account() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
     // 正确密码注销
-    let resp = super::make_json_request(
+    let resp = make_json_request(
         &app,
         Method::DELETE,
         "/api/v1/auth/account",
@@ -1026,7 +1026,7 @@ async fn test_user_ban_and_delete_account() {
     assert_eq!(resp.status(), StatusCode::OK);
 
     // 再登录应失败（账户已删）
-    let resp = super::make_json_request(
+    let resp = make_json_request(
         &app,
         Method::POST,
         "/api/v1/auth/login",
@@ -1088,8 +1088,8 @@ async fn test_etag_caching() {
     println!("\n===== ETag caching tests passed! =====");
 }
 
-async fn login_as_admin(app: &axum::Router) -> axum::response::Response {
-    super::make_json_request(
+async fn login_as_admin(app: &Router) -> Response {
+    make_json_request(
         app,
         Method::POST,
         "/api/v1/auth/admin/login",
@@ -1108,7 +1108,7 @@ type WsClient =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 /// 启动一个真实 TCP 服务（提供 `connect_info` 给限流层），返回监听地址
-async fn spawn_server(app: axum::Router) -> std::net::SocketAddr {
+async fn spawn_server(app: Router) -> std::net::SocketAddr {
     use std::net::SocketAddr;
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1152,7 +1152,7 @@ async fn recv_json(ws: &mut WsClient) -> serde_json::Value {
             Message::Text(t) => return serde_json::from_str(t.as_str()).unwrap(),
             Message::Close(_) => panic!("connection closed unexpectedly"),
             // Ping/Pong/Binary/Frame 由底层处理或忽略
-            _ => {}
+            _ => {},
         }
     }
 }

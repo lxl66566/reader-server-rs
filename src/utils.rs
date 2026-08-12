@@ -277,7 +277,7 @@ fn pdf_string(obj: Option<&lopdf::Object>) -> Option<String> {
                 String::from_utf8(bytes.clone())
                     .ok()
                     .or_else(|| Some(iso8859_1_to_string(bytes)))
-            }
+            },
             StringFormat::Hexadecimal => String::from_utf8(bytes.clone()).ok(),
         },
         Object::Name(bytes) => String::from_utf8(bytes.clone()).ok(),
@@ -340,13 +340,13 @@ mod tests {
 
     #[test]
     fn detect_format_invalid_utf8() {
-        let bad = &[0xFF, 0xFE, 0xFD];
+        let bad = &[0xff, 0xfe, 0xfd];
         assert!(detect_format(bad).is_err());
     }
 
     #[test]
     fn detect_format_exe_rejected() {
-        let exe: &[u8] = &[0x4D, 0x5A, 0x90, 0x00];
+        let exe: &[u8] = &[0x4d, 0x5a, 0x90, 0x00];
         assert!(detect_format(exe).is_err());
     }
 }

@@ -152,26 +152,26 @@ async fn upload_book(
                     Some(field.text().await.map_err(|e| {
                         AppError::FieldReadError("title".to_string(), e.to_string())
                     })?);
-            }
+            },
             "author" => {
                 author =
                     Some(field.text().await.map_err(|e| {
                         AppError::FieldReadError("author".to_string(), e.to_string())
                     })?);
-            }
+            },
             "is_public" => {
                 let value = field.text().await.map_err(|e| {
                     AppError::FieldReadError("is_public".to_string(), e.to_string())
                 })?;
                 is_public = value == "true" || value == "1";
-            }
+            },
             "file" => {
                 file_content =
                     Some(field.bytes().await.map_err(|e| {
                         AppError::FieldReadError("file".to_string(), e.to_string())
                     })?);
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
 
@@ -204,7 +204,7 @@ async fn upload_book(
             let chs = extract_chapters(&text);
             // txt 元数据全部来自用户输入
             (tc, 0i64, chs, title, author)
-        }
+        },
         BookFormat::Epub => {
             let parsed = parse_epub(&file_content)?;
             #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
@@ -223,7 +223,7 @@ async fn upload_book(
             };
             let final_author = author.or(parsed.author);
             (tc, 0i64, chs, final_title, final_author)
-        }
+        },
         BookFormat::Pdf => {
             let parsed = parse_pdf(&file_content)?;
             // PDF 不做章节提取（暂不解析 outline），前端用页码导航
@@ -240,7 +240,7 @@ async fn upload_book(
                 final_title,
                 final_author,
             )
-        }
+        },
     };
 
     // 文件 hash（用原文件字节，不依赖格式）
@@ -261,7 +261,8 @@ async fn upload_book(
     // 将书籍信息和章节写入数据库；失败时清理已写入的文件，避免孤儿文件
     let db_result: Result<(i64, Vec<ChapterResponse>), AppError> = async {
         let book_id = sqlx::query!(
-            "INSERT INTO books (user_id, title, author, file_path, is_public, total_chars, total_pages, format, content_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO books (user_id, title, author, file_path, is_public, total_chars, \
+             total_pages, format, content_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             auth.user_id,
             final_title,
             final_author,
@@ -280,9 +281,8 @@ async fn upload_book(
         let chapter_responses = if chapters.is_empty() {
             Vec::new()
         } else {
-            let mut chapter_qb = sqlx::QueryBuilder::new(
-                "INSERT INTO chapters (book_id, title, position) ",
-            );
+            let mut chapter_qb =
+                sqlx::QueryBuilder::new("INSERT INTO chapters (book_id, title, position) ");
             chapter_qb.push_values(chapters.iter(), |mut b, (title, position)| {
                 b.push_bind(book_id)
                     .push_bind(title.clone())
@@ -326,7 +326,7 @@ async fn upload_book(
             // 清理已写入的文件
             let _ = fs::remove_file(&file_path).await;
             return Err(e);
-        }
+        },
     };
 
     // 返回响应
@@ -512,7 +512,7 @@ async fn update_book(
     }
 
     // 构建动态更新 SQL（使用 separated 自动处理逗号分隔）
-    let mut query_builder: sqlx::QueryBuilder<sqlx::Sqlite> =
+    let mut query_builder: sqlx::QueryBuilder<Sqlite> =
         sqlx::QueryBuilder::new("UPDATE books SET ");
     let mut sep = query_builder.separated(", ");
 
@@ -709,7 +709,7 @@ async fn get_book_content(
         .and_then(|v| v.to_str().ok())
         && etag_matches(if_none, &etag)
     {
-        return Ok(axum::http::StatusCode::NOT_MODIFIED.into_response());
+        return Ok(StatusCode::NOT_MODIFIED.into_response());
     }
 
     Ok((
@@ -758,7 +758,7 @@ async fn read_char_slice(
                     ));
                 }
                 v
-            }
+            },
         };
 
         let chunk = std::str::from_utf8(&buf[..valid_len]).expect("verified above");
@@ -939,7 +939,7 @@ fn escape_like(input: &str) -> String {
             '%' | '_' | '\\' => {
                 out.push('\\');
                 out.push(ch);
-            }
+            },
             _ => out.push(ch),
         }
     }
@@ -987,13 +987,11 @@ async fn search_books(
 
     // 使用 DISTINCT 因为 LEFT JOIN chapters 会让一本书出现多次
     let mut qb = sqlx::QueryBuilder::new(
-        "SELECT DISTINCT b.id, b.title, b.author, b.is_public, b.created_at, \
-         b.total_chars AS total_chars, b.total_pages AS total_pages, \
-         b.description AS description, b.format AS format, \
-         rp.locator AS locator, rp.percent AS percent, \
-         rp.reading_time AS reading_time, rp.last_read_at AS last_read_at \
-         FROM books b \
-         LEFT JOIN reading_progress rp ON rp.book_id = b.id AND rp.user_id = ",
+        "SELECT DISTINCT b.id, b.title, b.author, b.is_public, b.created_at, b.total_chars AS \
+         total_chars, b.total_pages AS total_pages, b.description AS description, b.format AS \
+         format, rp.locator AS locator, rp.percent AS percent, rp.reading_time AS reading_time, \
+         rp.last_read_at AS last_read_at FROM books b LEFT JOIN reading_progress rp ON rp.book_id \
+         = b.id AND rp.user_id = ",
     );
     qb.push_bind(auth.user_id);
     qb.push(" LEFT JOIN chapters c ON c.book_id = b.id WHERE (b.title LIKE ");
@@ -1032,7 +1030,8 @@ async fn search_books(
 
     // 单独查询总数，避免 DISTINCT + JOIN 的复杂聚合影响主查询性能
     let mut count_qb = sqlx::QueryBuilder::new(
-        "SELECT COUNT(DISTINCT b.id) FROM books b LEFT JOIN chapters c ON c.book_id = b.id WHERE (b.title LIKE ",
+        "SELECT COUNT(DISTINCT b.id) FROM books b LEFT JOIN chapters c ON c.book_id = b.id WHERE \
+         (b.title LIKE ",
     );
     count_qb.push_bind(&pattern);
     count_qb.push(" ESCAPE '\\' OR b.author LIKE ");
@@ -1055,23 +1054,19 @@ async fn search_books(
 }
 
 /// 把 scope 条件追加到已构造的 QueryBuilder（WHERE 子句的最后一个分组）
-fn push_scope_condition(
-    qb: &mut sqlx::QueryBuilder<sqlx::Sqlite>,
-    scope: SearchScope,
-    user_id: i64,
-) {
+fn push_scope_condition(qb: &mut sqlx::QueryBuilder<Sqlite>, scope: SearchScope, user_id: i64) {
     match scope {
         SearchScope::Mine => {
             qb.push("b.user_id = ").push_bind(user_id);
-        }
+        },
         SearchScope::Public => {
             qb.push("b.is_public = 1");
-        }
+        },
         SearchScope::All => {
             qb.push("b.user_id = ")
                 .push_bind(user_id)
                 .push(" OR b.is_public = 1");
-        }
+        },
     }
 }
 
@@ -1110,9 +1105,8 @@ async fn get_book_tags(
     }
 
     let tags: Vec<String> = sqlx::query_scalar(
-        "SELECT t.name FROM tags t \
-         JOIN book_tags bt ON bt.tag_id = t.id \
-         WHERE bt.book_id = ? ORDER BY t.name",
+        "SELECT t.name FROM tags t JOIN book_tags bt ON bt.tag_id = t.id WHERE bt.book_id = ? \
+         ORDER BY t.name",
     )
     .bind(book_id)
     .fetch_all(&pool)

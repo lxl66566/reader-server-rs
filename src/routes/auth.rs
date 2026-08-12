@@ -75,13 +75,13 @@ async fn register(
         match invite {
             Some(invite) if invite.limit_times >= 0 && invite.used_times >= invite.limit_times => {
                 return Err(AppError::InviteCodeExhausted);
-            }
+            },
             None => {
                 return Err(AppError::InviteCodeInvalid);
-            }
+            },
             _ => {
                 // 邀请码有效
-            }
+            },
         }
     }
 
@@ -390,7 +390,8 @@ async fn export_data(
 
     // 进度
     let progress_rows = sqlx::query!(
-        "SELECT book_id, locator, percent, reading_time, last_read_at FROM reading_progress WHERE user_id = ?",
+        "SELECT book_id, locator, percent, reading_time, last_read_at FROM reading_progress WHERE \
+         user_id = ?",
         auth.user_id
     )
     .fetch_all(&pool)
@@ -459,14 +460,14 @@ async fn export_data(
                 Ok(bytes) => {
                     zip.write_all(&bytes)
                         .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
-                }
+                },
                 Err(e) => {
                     tracing::warn!(error = %e, file_path = %b.file_path, "skip book file in export");
                     // 写入一个 README 说明
                     let note = format!("# 文件读取失败：{e}\n原路径：{}\n", b.file_path);
                     zip.write_all(note.as_bytes())
                         .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
-                }
+                },
             }
         }
 

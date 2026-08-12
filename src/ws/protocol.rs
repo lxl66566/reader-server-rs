@@ -52,7 +52,7 @@ pub enum ServerMessage {
     /// 退订成功
     Unsubscribed { book_id: i64 },
     /// 书签变更通知：客户端收到后重新拉取书签列表
-    ///（HTTP 接口不感知发起方设备，发起方可通过 X-Device-Id 头被排除）
+    /// （HTTP 接口不感知发起方设备，发起方可通过 X-Device-Id 头被排除）
     BookmarkChanged {
         book_id: i64,
         /// `created` / `deleted`（更新目前走 delete+recreate 也可）

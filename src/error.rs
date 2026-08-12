@@ -225,11 +225,11 @@ impl IntoResponse for AppError {
             | AppError::EmptyLocator
             | AppError::ContentEndpointNotSupported
             | AppError::FormParseError(_)
-            | AppError::FieldReadError(_, _) => StatusCode::BAD_REQUEST,
+            | AppError::FieldReadError(..) => StatusCode::BAD_REQUEST,
 
             AppError::Database(_) | AppError::Jwt(_) | AppError::Io(_) | AppError::Internal(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR
-            }
+            },
         };
 
         // 对内部错误（数据库/JWT/IO/Internal）记录详细日志，但只向客户端返回固定文案，

@@ -22,7 +22,7 @@ fn main() {
     // Run the async setup function using a tokio runtime
     let rt = Runtime::new().expect("Failed to create Tokio runtime for build script");
     if let Err(e) = rt.block_on(setup_schema_db()) {
-        eprintln!("Error during build script database setup: {}", e);
+        eprintln!("Error during build script database setup: {e}");
         process::exit(1); // Signal build failure
     }
 }
@@ -53,7 +53,12 @@ async fn setup_schema_db() -> Result<(), Box<dyn std::error::Error>> {
     let db_url_for_creation = format!("sqlite:{}?mode=rwc", db_path.display()); // mode=rwc (ReadWriteCreate)
 
     // Only create and setup if the database file doesn't exist
-    if !db_path.exists() {
+    if db_path.exists() {
+        println!(
+            "cargo:warning=Schema DB file {} already exists. Skipping creation.",
+            db_path.display()
+        );
+    } else {
         println!(
             "cargo:warning=Schema DB file {} not found. Creating and initializing from {}.",
             db_path.display(),
@@ -65,11 +70,9 @@ async fn setup_schema_db() -> Result<(), Box<dyn std::error::Error>> {
             Ok(c) => c,
             Err(e) => {
                 panic!(
-                    "Failed to connect to (create) SQLite database at '{}': {}",
-                    db_url_for_creation,
-                    e // Use the creation URL in error msg
+                    "Failed to connect to (create) SQLite database at '{db_url_for_creation}': {e}" /* Use the creation URL in error msg */
                 );
-            }
+            },
         };
 
         // Execute the schema script (SCHEMA_SQL is &'static str from include_str!,
@@ -80,11 +83,12 @@ async fn setup_schema_db() -> Result<(), Box<dyn std::error::Error>> {
                     "cargo:warning=Successfully created and initialized schema DB: {}",
                     db_path.display()
                 );
-            }
+            },
             Err(e) => {
                 // Attempt to clean up the partially created file on error
                 println!(
-                    "cargo:warning=Failed to execute schema SQL. Attempting to remove partially created DB file: {}",
+                    "cargo:warning=Failed to execute schema SQL. Attempting to remove partially \
+                     created DB file: {}",
                     db_path.display()
                 );
                 let _ = fs::remove_file(&db_path); // Ignore error on removal
@@ -94,14 +98,9 @@ async fn setup_schema_db() -> Result<(), Box<dyn std::error::Error>> {
                     e,
                     SCHEMA_SQL
                 );
-            }
-        };
+            },
+        }
         // Connection is closed when `conn` goes out of scope
-    } else {
-        println!(
-            "cargo:warning=Schema DB file {} already exists. Skipping creation.",
-            db_path.display()
-        );
     }
 
     // --- Set DATABASE_URL environment variable for sqlx macros ---
@@ -121,13 +120,12 @@ async fn setup_schema_db() -> Result<(), Box<dyn std::error::Error>> {
     // Construct the final DATABASE_URL for compile-time checks.
     // It does NOT need mode=rwc, just the path.
     // IMPORTANT: Use the `sqlite://` prefix for sqlx compile-time checks!
-    let database_url_for_macros = format!("sqlite://{}", db_path_str);
+    let database_url_for_macros = format!("sqlite://{db_path_str}");
 
     // Set the environment variable
-    println!("cargo:rustc-env=DATABASE_URL={}", database_url_for_macros);
+    println!("cargo:rustc-env=DATABASE_URL={database_url_for_macros}");
     println!(
-        "cargo:warning=DATABASE_URL for compile-time checks set to: {}",
-        database_url_for_macros
+        "cargo:warning=DATABASE_URL for compile-time checks set to: {database_url_for_macros}"
     );
 
     Ok(())

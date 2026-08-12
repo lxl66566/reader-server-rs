@@ -104,8 +104,8 @@ pub async fn load_config() -> Result<Config> {
         // 强制要求用户设置非空、非默认值的 JWT secret
         if config.jwt.secret.is_empty() || config.jwt.secret == LEGACY_DEFAULT_SECRET {
             anyhow::bail!(
-                "JWT secret in config.json must be a non-empty, non-default value. \
-                 Please generate a random secret and update config.json."
+                "JWT secret in config.json must be a non-empty, non-default value. Please \
+                 generate a random secret and update config.json."
             );
         }
 

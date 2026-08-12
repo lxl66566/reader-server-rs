@@ -202,7 +202,7 @@ async fn handle_text(
         Err(e) => {
             let _ = out_tx.send(ServerMessage::error(format!("invalid message: {e}")));
             return;
-        }
+        },
     };
 
     match msg {
@@ -221,7 +221,7 @@ async fn handle_text(
             state.ws.subscribe(key, out_tx.clone()).await;
             session.subs.insert(book_id, device_id);
             let _ = out_tx.send(ServerMessage::Subscribed { book_id });
-        }
+        },
         ClientMessage::Heartbeat {
             book_id,
             locator,
@@ -269,18 +269,18 @@ async fn handle_text(
                             )
                             .await;
                     }
-                }
+                },
                 Err(e) => {
                     let _ = out_tx.send(ServerMessage::error(e.to_string()));
-                }
+                },
             }
-        }
+        },
         ClientMessage::Unsubscribe { book_id } => {
             if let Some(key) = session.key(book_id) {
                 state.ws.unsubscribe(&key).await;
             }
             session.subs.remove(&book_id);
             let _ = out_tx.send(ServerMessage::Unsubscribed { book_id });
-        }
+        },
     }
 }

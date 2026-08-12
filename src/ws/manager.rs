@@ -55,8 +55,7 @@ impl ConnectionRegistry {
     ) {
         let guard = self.conns.read().await;
         for ((u, b, d), tx) in guard.iter() {
-            if *u == user_id && *b == book_id && exclude_device.map_or(true, |ex| d.as_str() != ex)
-            {
+            if *u == user_id && *b == book_id && (exclude_device != Some(d.as_str())) {
                 let _ = tx.send(msg.clone());
             }
         }

@@ -14,17 +14,9 @@ use tower::ServiceExt;
 use crate::{app::create_app, config::Config, db::create_test_pool};
 
 pub const TEST_BOOK_CONTENT: &str = "\
-测试小说\n\
- 第一章 测试章节\n\
-这是第一章的内容，用于测试书籍上传功能。\n\
-这是一段普通的文本。\n\
-\n\
- 第二章 另一个章节\n\
-这是第二章的内容，用于测试章节提取功能。\n\
-更多内容在这里。\n\
-\n\
- 第三章 最终章\n\
-这是第三章的内容。";
+测试小说\n第一章 测试章节\n这是第一章的内容，用于测试书籍上传功能。\n这是一段普通的文本。\n\\
+                                     n第二章 另一个章节\n这是第二章的内容，用于测试章节提取功能。\\
+                                     n更多内容在这里。\n\n第三章 最终章\n这是第三章的内容。";
 
 pub async fn setup_test_app() -> Result<(Router, Pool<Sqlite>)> {
     let pool = create_test_pool().await?;
@@ -121,7 +113,8 @@ pub async fn make_multipart_request(
     for (name, value) in fields {
         body.extend_from_slice(
             format!(
-                "--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"
+                "--{boundary}\r\nContent-Disposition: form-data; \
+                 name=\"{name}\"\r\n\r\n{value}\r\n"
             )
             .as_bytes(),
         );
@@ -130,7 +123,8 @@ pub async fn make_multipart_request(
     if let Some((name, filename, data)) = file_field {
         body.extend_from_slice(
             format!(
-                "--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"; \
+                 filename=\"{filename}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
             )
             .as_bytes(),
         );
@@ -231,7 +225,14 @@ pub async fn upload_test_book(
         "/api/v1/books/upload",
         vec![
             ("title", title),
-            ("is_public", if is_public { "true" } else { "false" }),
+            (
+                "is_public",
+                if is_public {
+                    "true"
+                } else {
+                    "false"
+                },
+            ),
         ],
         Some(("file", "test.txt", content.as_bytes())),
         Some(token),
