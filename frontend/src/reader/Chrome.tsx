@@ -12,6 +12,7 @@ import {
 } from 'solid-icons/vs';
 import { createSignal, For, Show } from 'solid-js';
 import toast from 'solid-toast';
+
 import { markerApi } from '../api';
 import type { Annotation, BookDetail, Bookmark } from '../api/types';
 import {
@@ -76,11 +77,11 @@ const Chrome = (props: ChromeProps) => {
 
       <Show when={props.visible()}>
         {/* top bar */}
-        <div class="safe-top rs-fade-in absolute top-0 left-0 z-20 w-full border-b border-edge bg-surface/95 backdrop-blur">
+        <div class="safe-top rs-fade-in border-edge bg-surface/95 absolute top-0 left-0 z-20 w-full border-b backdrop-blur">
           <div class="flex h-12 items-center gap-2 px-3">
             <button
               aria-label={t('readerExit')}
-              class="flex size-9 cursor-pointer items-center justify-center rounded text-muted hover:bg-base hover:text-ink"
+              class="text-muted hover:bg-base hover:text-ink flex size-9 cursor-pointer items-center justify-center rounded"
               onClick={() => {
                 navigate(`/book/${props.book.book_id}`);
               }}
@@ -91,7 +92,7 @@ const Chrome = (props: ChromeProps) => {
             <div class="min-w-0 flex-1 truncate text-sm font-medium">
               {props.book.title}
             </div>
-            <div class="text-xs text-muted tabular-nums">
+            <div class="text-muted text-xs tabular-nums">
               {t('progressPercent', {
                 percent: formatPercent(props.percent()),
               })}
@@ -100,7 +101,7 @@ const Chrome = (props: ChromeProps) => {
         </div>
 
         {/* bottom bar */}
-        <div class="safe-bottom rs-fade-in absolute bottom-0 left-0 z-20 w-full border-t border-edge bg-surface/95 backdrop-blur">
+        <div class="safe-bottom rs-fade-in border-edge bg-surface/95 absolute bottom-0 left-0 z-20 w-full border-t backdrop-blur">
           <div class="flex h-14 items-stretch justify-around px-2">
             <BarButton
               icon={<VsListOrdered class="size-5" />}
@@ -187,7 +188,7 @@ const BarButton = (buttonProps: {
   onClick: () => void;
 }) => (
   <button
-    class="flex min-w-16 cursor-pointer flex-col items-center justify-center gap-0.5 rounded px-2 text-muted hover:bg-base hover:text-ink"
+    class="text-muted hover:bg-base hover:text-ink flex min-w-16 cursor-pointer flex-col items-center justify-center gap-0.5 rounded px-2"
     onClick={() => {
       buttonProps.onClick();
     }}
@@ -224,7 +225,7 @@ const TocPanel = (panelProps: {
             {chapter => (
               <li>
                 <button
-                  class="w-full cursor-pointer rounded px-2 py-2.5 text-left text-sm hover:bg-base"
+                  class="hover:bg-base w-full cursor-pointer rounded px-2 py-2.5 text-left text-sm"
                   onClick={() => {
                     panelProps.onJump(chapter.position);
                   }}
@@ -323,7 +324,7 @@ const BookmarksPanel = (panelProps: {
                 {bookmark => (
                   <li class="flex items-center gap-2">
                     <button
-                      class="min-w-0 flex-1 cursor-pointer truncate rounded px-2 py-2.5 text-left text-sm hover:bg-base"
+                      class="hover:bg-base min-w-0 flex-1 cursor-pointer truncate rounded px-2 py-2.5 text-left text-sm"
                       onClick={() => {
                         panelProps.onJump(bookmark.locator);
                       }}
@@ -333,7 +334,7 @@ const BookmarksPanel = (panelProps: {
                     </button>
                     <button
                       aria-label={t('delete')}
-                      class="cursor-pointer rounded px-2 py-1 text-xs text-muted hover:text-red-700"
+                      class="text-muted cursor-pointer rounded px-2 py-1 text-xs hover:text-red-700"
                       onClick={() => void remove(bookmark.id)}
                       type="button"
                     >
@@ -405,7 +406,7 @@ const AnnotationsPanel = (panelProps: {
     >
       <div class="mb-3">
         <textarea
-          class="h-20 w-full rounded border border-edge bg-surface px-3 py-2 text-sm text-ink outline-none focus:border-accent"
+          class="border-edge bg-surface text-ink focus:border-accent h-20 w-full rounded border px-3 py-2 text-sm outline-none"
           onInput={event => setDraft(event.currentTarget.value)}
           placeholder={t('readerNotePlaceholder')}
           value={draft()}
@@ -435,8 +436,8 @@ const AnnotationsPanel = (panelProps: {
             <ul class="max-h-[50vh] space-y-2 overflow-y-auto">
               <For each={list()}>
                 {annotation => (
-                  <li class="rounded border border-edge p-2">
-                    <div class="flex items-center justify-between text-xs text-muted">
+                  <li class="border-edge rounded border p-2">
+                    <div class="text-muted flex items-center justify-between text-xs">
                       <span>
                         {annotation.kind === 'note'
                           ? t('kindNote')
@@ -448,7 +449,7 @@ const AnnotationsPanel = (panelProps: {
                       </span>
                       <span class="flex gap-2">
                         <button
-                          class="cursor-pointer hover:text-ink"
+                          class="hover:text-ink cursor-pointer"
                           onClick={() => {
                             panelProps.onJump(annotation.start_locator);
                           }}
@@ -467,7 +468,7 @@ const AnnotationsPanel = (panelProps: {
                       </span>
                     </div>
                     <Show when={annotation.excerpt}>
-                      <p class="mt-1 border-l-2 border-edge pl-2 text-xs text-muted">
+                      <p class="border-edge text-muted mt-1 border-l-2 pl-2 text-xs">
                         {annotation.excerpt}
                       </p>
                     </Show>

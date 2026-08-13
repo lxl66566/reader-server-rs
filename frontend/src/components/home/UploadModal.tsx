@@ -2,6 +2,7 @@
 
 import { createEffect, createSignal, type ParentComponent } from 'solid-js';
 import toast from 'solid-toast';
+
 import { ApiError, bookApi } from '../../api';
 import { useI18n } from '../../i18n';
 import { Button, Input, Modal, Toggle } from '../ui';
@@ -79,7 +80,7 @@ export const UploadModal: ParentComponent<{
       title={t('uploadTitle')}
     >
       <form class="flex flex-col gap-3" onSubmit={submit}>
-        <label class="block cursor-pointer rounded border border-edge bg-base px-3 py-2 text-sm text-muted hover:bg-surface">
+        <label class="border-edge bg-base text-muted hover:bg-surface block cursor-pointer rounded border px-3 py-2 text-sm">
           <span class="block truncate">
             {file() ? file()!.name : t('uploadFile')}
           </span>
@@ -91,18 +92,18 @@ export const UploadModal: ParentComponent<{
           />
         </label>
         <label class="block text-sm">
-          <span class="mb-1 block text-muted">{t('titleLabel')}</span>
+          <span class="text-muted mb-1 block">{t('titleLabel')}</span>
           <Input class="w-full" onInput={setTitle} value={title()} />
         </label>
         <label class="block text-sm">
-          <span class="mb-1 block text-muted">{t('authorLabel')}</span>
+          <span class="text-muted mb-1 block">{t('authorLabel')}</span>
           <Input class="w-full" onInput={setAuthor} value={author()} />
         </label>
         <div class="flex items-center justify-between">
           <span class="text-sm">{t('isPublicLabel')}</span>
           <Toggle checked={isPublic()} onChange={setIsPublic} />
         </div>
-        <p class="text-xs text-muted">{t('uploadFileHint')}</p>
+        <p class="text-muted text-xs">{t('uploadFileHint')}</p>
         <div class="mt-1 flex gap-2">
           <Button
             class="flex-1"

@@ -2,54 +2,21 @@
   "name": "my-solid-template",
   "version": "0.0.0",
   "description": "",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "serve": "vite preview",
-    "fmt": "prettier --write .",
+    "fmt": "oxfmt",
     "lint": "oxlint . && eslint .",
     "fix": "eslint --fix .",
     "check": "tsc --noEmit --strict --skipLibCheck",
     "verify": "pnpm fmt:check && pnpm lint && pnpm check && pnpm test",
-    "fmt:check": "prettier --check .",
+    "fmt:check": "oxfmt --check",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
     "prepare": "simple-git-hooks"
-  },
-  "simple-git-hooks": {
-    "pre-commit": "pnpm lint-staged"
-  },
-  "lint-staged": {
-    "*.{ts,tsx,js,mjs,cjs}": [
-      "oxlint --fix",
-      "eslint --fix"
-    ],
-    "*.{ts,tsx,js,mjs,cjs,json,jsonc,css,html,md,yml,yaml}": "prettier --write"
-  },
-  "license": "MIT",
-  "devDependencies": {
-    "@eslint/js": "^10.0.1",
-    "@ianvs/prettier-plugin-sort-imports": "4.4.0",
-    "@unocss/preset-wind4": "^66.7.5",
-    "@vitest/eslint-plugin": "^1.6.24",
-    "eslint": "^10.8.0",
-    "eslint-config-prettier": "^10.1.8",
-    "eslint-plugin-import-x": "^4.17.1",
-    "eslint-plugin-perfectionist": "^5.10.0",
-    "eslint-plugin-regexp": "^3.1.1",
-    "eslint-plugin-solid": "^0.14.5",
-    "lint-staged": "^17.2.0",
-    "oxlint": "^1.75.0",
-    "prettier": "^3.9.6",
-    "prettier-plugin-tailwindcss": "^0.8.1",
-    "simple-git-hooks": "^2.13.1",
-    "typescript": "^6.0.3",
-    "typescript-eslint": "^8.65.0",
-    "unocss": "^66.7.5",
-    "vite": "^7.3.6",
-    "vite-plugin-solid": "^2.11.13",
-    "vitest": "^4.1.10"
   },
   "dependencies": {
     "@solidjs/router": "^1.0.0",
@@ -59,6 +26,37 @@
     "solid-icons": "^1.2.0",
     "solid-js": "^1.9.14",
     "solid-toast": "^0.5.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@unocss/preset-wind4": "^66.7.5",
+    "@vitest/eslint-plugin": "^1.6.24",
+    "eslint": "^10.8.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-import-x": "^4.17.1",
+    "eslint-plugin-perfectionist": "^5.10.0",
+    "eslint-plugin-regexp": "^3.1.1",
+    "eslint-plugin-solid": "^0.14.5",
+    "lint-staged": "^17.2.0",
+    "oxfmt": "^0.63.0",
+    "oxlint": "^1.75.0",
+    "simple-git-hooks": "^2.13.1",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.65.0",
+    "unocss": "^66.7.5",
+    "vite": "^7.3.6",
+    "vite-plugin-solid": "^2.11.13",
+    "vitest": "^4.1.10"
+  },
+  "simple-git-hooks": {
+    "pre-commit": "pnpm lint-staged"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,js,mjs,cjs}": [
+      "oxlint --fix",
+      "eslint --fix"
+    ],
+    "*.{ts,tsx,js,mjs,cjs,json,jsonc,css,html,md,yml,yaml}": "oxfmt --no-error-on-unmatched-pattern"
   },
   "packageManager": "pnpm@11.17.0+sha512.cca3cea332ad254bb84145f966d19f4879615210346fc92c79a047f23a0d7b3cca3c3792f0076ba1f1831d277efbcf0a9119b31a9a60eca7fb3d6231f331ef72"
 }

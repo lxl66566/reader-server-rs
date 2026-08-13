@@ -10,6 +10,7 @@ import {
   Show,
   type Component,
 } from 'solid-js';
+
 import { bookApi } from '../api';
 import type { SearchScope } from '../api/types';
 import { BookCard } from '../components/home/BookCard';
@@ -81,7 +82,7 @@ const Library: Component = () => {
     <div class="flex flex-col gap-6">
       <div class="flex items-center gap-2">
         <div class="relative flex-1">
-          <VsSearch class="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted" />
+          <VsSearch class="text-muted absolute top-1/2 left-2.5 size-4 -translate-y-1/2" />
           <Input
             class="w-full pl-8"
             onInput={setSearchQuery}
@@ -91,7 +92,7 @@ const Library: Component = () => {
           />
         </div>
         <select
-          class="shrink-0 rounded border border-edge bg-surface px-2 py-1.5 text-sm text-ink outline-none focus:border-accent"
+          class="border-edge bg-surface text-ink focus:border-accent shrink-0 rounded border px-2 py-1.5 text-sm outline-none"
           onChange={event => {
             setScope(event.currentTarget.value as SearchScope);
           }}

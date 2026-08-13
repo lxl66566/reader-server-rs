@@ -8,6 +8,7 @@ import {
   VsTrash,
 } from 'solid-icons/vs';
 import { createSignal, For, Show, type Component, type JSX } from 'solid-js';
+
 import type { Annotation, Bookmark, Chapter } from '../../api/types';
 import { useI18n } from '../../i18n';
 import type { DictKey } from '../../i18n/zh-CN';
@@ -62,8 +63,8 @@ export const DetailTabs: Component<{
   };
 
   return (
-    <section class="overflow-hidden rounded-lg border border-edge bg-surface">
-      <div class="flex border-b border-edge" role="tablist">
+    <section class="border-edge bg-surface overflow-hidden rounded-lg border">
+      <div class="border-edge flex border-b" role="tablist">
         <For each={TAB_ORDER}>
           {item => (
             <button
@@ -71,7 +72,7 @@ export const DetailTabs: Component<{
               class={`flex min-h-11 flex-1 cursor-pointer items-center justify-center gap-1.5 border-b-2 text-sm transition-colors ${
                 tab() === item.key
                   ? 'border-accent text-ink'
-                  : 'border-transparent text-muted hover:text-ink'
+                  : 'text-muted hover:text-ink border-transparent'
               }`}
               onClick={() => setTab(item.key)}
               role="tab"
@@ -140,7 +141,7 @@ function AnnotationsPanel(props: {
       fallback={<EmptyState text={t('noAnnotations')} />}
       when={props.annotations.length > 0}
     >
-      <ul class="divide-y divide-edge">
+      <ul class="divide-edge divide-y">
         <For each={props.annotations}>
           {annotation => (
             <li class="py-3">
@@ -153,24 +154,24 @@ function AnnotationsPanel(props: {
                   type="button"
                 >
                   <span class="flex flex-wrap items-center gap-2">
-                    <span class="rounded-full border border-edge bg-base px-2 py-0.5 text-xs">
+                    <span class="border-edge bg-base rounded-full border px-2 py-0.5 text-xs">
                       {annotation.kind === 'note'
                         ? t('kindNote')
                         : t('kindHighlight')}
                     </span>
-                    <span class="text-xs text-muted">
+                    <span class="text-muted text-xs">
                       {t('progressPercent', {
                         percent: formatPercent(annotation.start_percent),
                       })}
                     </span>
                   </span>
                   <Show when={annotation.excerpt}>
-                    <p class="mt-1.5 line-clamp-2 border-l-2 border-edge pl-2 text-sm italic text-muted">
+                    <p class="border-edge text-muted mt-1.5 line-clamp-2 border-l-2 pl-2 text-sm italic">
                       {annotation.excerpt}
                     </p>
                   </Show>
                   <Show when={annotation.content}>
-                    <p class="mt-1 line-clamp-3 text-sm text-ink">
+                    <p class="text-ink mt-1 line-clamp-3 text-sm">
                       {annotation.content}
                     </p>
                   </Show>
@@ -178,7 +179,7 @@ function AnnotationsPanel(props: {
                 {/* bookmarks/annotations are per-user: everyone deletes their own */}
                 <button
                   aria-label={t('delete')}
-                  class="flex size-10 shrink-0 cursor-pointer items-center justify-center text-muted transition-colors hover:text-red-700 dark:hover:text-red-400"
+                  class="text-muted flex size-10 shrink-0 cursor-pointer items-center justify-center transition-colors hover:text-red-700 dark:hover:text-red-400"
                   onClick={() => {
                     props.onDelete(annotation.id);
                   }}
@@ -207,7 +208,7 @@ function BookmarksPanel(props: {
       fallback={<EmptyState text={t('noBookmarks')} />}
       when={props.bookmarks.length > 0}
     >
-      <ul class="divide-y divide-edge">
+      <ul class="divide-edge divide-y">
         <For each={props.bookmarks}>
           {bookmark => (
             <li class="flex min-h-11 items-center gap-2">
@@ -224,13 +225,13 @@ function BookmarksPanel(props: {
                       percent: formatPercent(bookmark.percent),
                     })}
                 </span>
-                <span class="block text-xs text-muted">
+                <span class="text-muted block text-xs">
                   {formatDateTime(bookmark.created_at, props.locale)}
                 </span>
               </button>
               <button
                 aria-label={t('delete')}
-                class="flex size-10 shrink-0 cursor-pointer items-center justify-center text-muted transition-colors hover:text-red-700 dark:hover:text-red-400"
+                class="text-muted flex size-10 shrink-0 cursor-pointer items-center justify-center transition-colors hover:text-red-700 dark:hover:text-red-400"
                 onClick={() => {
                   props.onDelete(bookmark.id);
                 }}
@@ -256,18 +257,18 @@ function ChaptersPanel(props: {
       fallback={<EmptyState text={t('noChapters')} />}
       when={props.chapters.length > 0}
     >
-      <ol class="divide-y divide-edge">
+      <ol class="divide-edge divide-y">
         <For each={props.chapters}>
           {chapter => (
             <li>
               <button
-                class="flex min-h-11 w-full cursor-pointer items-center gap-2 py-1 text-left text-sm hover:bg-base"
+                class="hover:bg-base flex min-h-11 w-full cursor-pointer items-center gap-2 py-1 text-left text-sm"
                 onClick={() => {
                   props.onOpen(chapter);
                 }}
                 type="button"
               >
-                <VsChevronRight class="size-4 shrink-0 text-muted" />
+                <VsChevronRight class="text-muted size-4 shrink-0" />
                 <span class="truncate">{chapter.title}</span>
               </button>
             </li>

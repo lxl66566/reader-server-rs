@@ -10,6 +10,7 @@ import {
   type ParentComponent,
 } from 'solid-js';
 import toast from 'solid-toast';
+
 import { adminApi, authApi, getToken, setToken } from '../api';
 import {
   AdminsTab,
@@ -81,7 +82,7 @@ const Admin: Component = () => {
       <Show
         fallback={
           <div class="flex flex-1 items-center justify-center p-4">
-            <div class="w-full max-w-sm rounded-lg border border-edge bg-surface p-6">
+            <div class="border-edge bg-surface w-full max-w-sm rounded-lg border p-6">
               <Show
                 fallback={
                   <>
@@ -91,7 +92,7 @@ const Admin: Component = () => {
                         : t('adminLoginTitle')}
                     </h1>
                     <Show when={phase() === 'setup'}>
-                      <p class="mt-1 text-sm text-muted">
+                      <p class="text-muted mt-1 text-sm">
                         {t('adminSetupDesc')}
                       </p>
                     </Show>
@@ -143,7 +144,7 @@ const Admin: Component = () => {
         }
         when={phase() === 'dashboard'}
       >
-        <header class="safe-top sticky top-0 z-40 border-b border-edge bg-surface">
+        <header class="safe-top border-edge bg-surface sticky top-0 z-40 border-b">
           <div class="mx-auto flex h-12 max-w-4xl items-center justify-between px-4">
             <h1 class="text-base font-semibold">{t('adminDashboard')}</h1>
             <Button onClick={backToLogin} variant="ghost">
@@ -209,7 +210,7 @@ const TabButton: Component<{
   <button
     class={`shrink-0 cursor-pointer rounded-t px-3 py-1.5 text-sm ${
       props.active
-        ? 'border-b-2 border-accent text-ink'
+        ? 'border-accent text-ink border-b-2'
         : 'text-muted hover:text-ink'
     }`}
     onClick={() => {

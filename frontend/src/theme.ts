@@ -2,6 +2,7 @@
 // prefers-color-scheme). Reader pages may override colors via inline styles.
 
 import { createEffect, createSignal } from 'solid-js';
+
 import type { ThemeMode } from './api/types';
 
 const media = window.matchMedia('(prefers-color-scheme: dark)');

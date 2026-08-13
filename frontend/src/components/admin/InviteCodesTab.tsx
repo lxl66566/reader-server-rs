@@ -9,6 +9,7 @@ import {
   type Component,
 } from 'solid-js';
 import toast from 'solid-toast';
+
 import { adminApi } from '../../api';
 import type { InviteCodeItem } from '../../api/types';
 import { useI18n } from '../../i18n';
@@ -96,38 +97,38 @@ export const InviteCodesTab: Component<{
           <div class="overflow-x-auto">
             <table class="w-full min-w-[560px] text-sm">
               <thead>
-                <tr class="text-left text-muted">
-                  <th class="pb-2 pr-3 font-normal">{t('inviteCode')}</th>
-                  <th class="pb-2 pr-3 font-normal">{t('limitTimes')}</th>
-                  <th class="pb-2 pr-3 font-normal">{t('usedTimes')}</th>
-                  <th class="pb-2 pr-3 font-normal">{t('descriptionLabel')}</th>
+                <tr class="text-muted text-left">
+                  <th class="pr-3 pb-2 font-normal">{t('inviteCode')}</th>
+                  <th class="pr-3 pb-2 font-normal">{t('limitTimes')}</th>
+                  <th class="pr-3 pb-2 font-normal">{t('usedTimes')}</th>
+                  <th class="pr-3 pb-2 font-normal">{t('descriptionLabel')}</th>
                   <th class="pb-2 font-normal">{t('createdAt')}</th>
                 </tr>
               </thead>
               <tbody>
                 <For each={list()}>
                   {(item: InviteCodeItem) => (
-                    <tr class="border-t border-edge">
+                    <tr class="border-edge border-t">
                       <td class="py-2 pr-3">
                         <button
-                          class="flex max-w-52 items-center gap-1 text-accent hover:underline"
+                          class="text-accent flex max-w-52 items-center gap-1 hover:underline"
                           onClick={() => {
                             copy(item.invite_code);
                           }}
                           type="button"
                         >
                           <VsCopy class="size-3.5 shrink-0" />
-                          <span class="break-all font-mono text-xs">
+                          <span class="font-mono text-xs break-all">
                             {item.invite_code}
                           </span>
                         </button>
                       </td>
                       <td class="py-2 pr-3">{item.limit_times}</td>
                       <td class="py-2 pr-3">{item.used_times}</td>
-                      <td class="py-2 pr-3 text-muted">
+                      <td class="text-muted py-2 pr-3">
                         {item.description ?? t('none')}
                       </td>
-                      <td class="py-2 text-muted">
+                      <td class="text-muted py-2">
                         {formatDateTime(item.created_at, locale())}
                       </td>
                     </tr>

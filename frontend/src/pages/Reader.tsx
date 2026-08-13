@@ -13,6 +13,7 @@ import {
   Suspense,
 } from 'solid-js';
 import toast from 'solid-toast';
+
 import { bookApi, markerApi } from '../api';
 import type { BookDetail } from '../api/types';
 import { Spinner } from '../components/ui';

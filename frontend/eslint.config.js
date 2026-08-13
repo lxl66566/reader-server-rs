@@ -90,13 +90,11 @@ export default tseslint.config(
       'no-underscore-dangle': 'off',
       // --- rules from plugins not loaded in ESLint ---
       'oxc/no-map-spread': 'off',
-      // Import ordering is owned by `@ianvs/prettier-plugin-sort-imports`
-      // (run via `prettier --write`, which executes *after* `eslint --fix` in
-      // lint-staged). Perfectionist's sort-imports rules use a different
-      // grouping than the prettier plugin, so the two can never be satisfied
-      // at the same time — every file would flip-flop. Disable the redundant
-      // ESLint rules so `verify` (fmt:check && lint:full) is achievable; all
-      // other Perfectionist rules (sort-objects, sort-object-types, …) stay.
+      // Import ordering is owned by oxfmt's built-in sortImports (run via
+      // `oxfmt`, which executes *after* `eslint --fix` in lint-staged).
+      // Perfectionist's sort-imports rules can conflict, so disable the
+      // redundant ESLint rules; all other Perfectionist rules
+      // (sort-objects, sort-object-types, …) stay.
       'perfectionist/sort-imports': 'off',
       'perfectionist/sort-named-imports': 'off',
       'prefer-const': 'error',

@@ -8,6 +8,7 @@ import {
   type ParentComponent,
 } from 'solid-js';
 import { createStore } from 'solid-js/store';
+
 import { readingApi } from '../api';
 import type { PaginationMode, ReadingSettings, ThemeMode } from '../api/types';
 import { setThemeMode } from '../theme';

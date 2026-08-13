@@ -10,7 +10,7 @@ export const SettingRow: ParentComponent<{
   right: JSX.Element;
 }> = props => (
   <div class="flex items-center justify-between gap-3 py-2">
-    <span class="text-sm text-ink">{props.label}</span>
+    <span class="text-ink text-sm">{props.label}</span>
     {props.right}
   </div>
 );
@@ -30,7 +30,7 @@ export const StepperControl: ParentComponent<{
   return (
     <div class="flex items-center gap-1">
       <button
-        class="flex size-7 cursor-pointer items-center justify-center rounded border border-edge text-muted hover:bg-base hover:text-ink"
+        class="border-edge text-muted hover:bg-base hover:text-ink flex size-7 cursor-pointer items-center justify-center rounded border"
         onClick={decrease}
         type="button"
       >
@@ -38,7 +38,7 @@ export const StepperControl: ParentComponent<{
       </button>
       <span class="w-8 text-center text-sm tabular-nums">{props.value}</span>
       <button
-        class="flex size-7 cursor-pointer items-center justify-center rounded border border-edge text-muted hover:bg-base hover:text-ink"
+        class="border-edge text-muted hover:bg-base hover:text-ink flex size-7 cursor-pointer items-center justify-center rounded border"
         onClick={increase}
         type="button"
       >
@@ -62,7 +62,7 @@ export const RangeControl: ParentComponent<{
   return (
     <div class="flex items-center gap-2">
       <input
-        class="w-32 accent-accent"
+        class="accent-accent w-32"
         max={props.max}
         min={props.min}
         onInput={event => {
@@ -73,7 +73,7 @@ export const RangeControl: ParentComponent<{
         type="range"
         value={props.value}
       />
-      <span class="w-12 text-right text-sm tabular-nums text-muted">
+      <span class="text-muted w-12 text-right text-sm tabular-nums">
         {display()}
         {props.unit}
       </span>
@@ -87,7 +87,7 @@ export const SelectControl: ParentComponent<{
   value: string;
 }> = props => (
   <select
-    class="max-w-44 rounded border border-edge bg-surface px-2 py-1 text-sm text-ink outline-none focus:border-accent"
+    class="border-edge bg-surface text-ink focus:border-accent max-w-44 rounded border px-2 py-1 text-sm outline-none"
     onChange={event => {
       props.onChange(event.currentTarget.value);
     }}
@@ -119,7 +119,7 @@ export const ColorControl: ParentComponent<{
       )}
     </For>
     <label
-      class="relative size-6 cursor-pointer overflow-hidden rounded-full border border-edge"
+      class="border-edge relative size-6 cursor-pointer overflow-hidden rounded-full border"
       title={props.value}
     >
       <span

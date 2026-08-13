@@ -44,7 +44,7 @@ export const Input: ParentComponent<{
   value: string;
 }> = props => (
   <input
-    class={`rounded border border-edge bg-surface px-3 py-1.5 text-sm text-ink outline-none focus:border-accent ${props.class ?? ''}`}
+    class={`border-edge bg-surface text-ink focus:border-accent rounded border px-3 py-1.5 text-sm outline-none ${props.class ?? ''}`}
     onInput={event => {
       props.onInput(event.currentTarget.value);
     }}
@@ -60,7 +60,7 @@ export const Spinner: ParentComponent<{ class?: string }> = props => (
 );
 
 export const EmptyState: ParentComponent<{ text: string }> = props => (
-  <div class="py-12 text-center text-sm text-muted">{props.text}</div>
+  <div class="text-muted py-12 text-center text-sm">{props.text}</div>
 );
 
 export const Toggle: ParentComponent<{
@@ -79,7 +79,7 @@ export const Toggle: ParentComponent<{
       type="button"
     >
       <span
-        class={`absolute top-0.5 size-4 rounded-full bg-surface transition-transform ${props.checked ? 'translate-x-4.5' : 'translate-x-0.5'}`}
+        class={`bg-surface absolute top-0.5 size-4 rounded-full transition-transform ${props.checked ? 'translate-x-4.5' : 'translate-x-0.5'}`}
       />
     </button>
     <Show when={props.label}>{props.label}</Show>
@@ -111,12 +111,12 @@ export const Modal: ParentComponent<{
           if (event.target === event.currentTarget) props.onClose();
         }}
       >
-        <div class="safe-bottom w-full max-w-md rounded-t-lg bg-surface p-4 sm:rounded-lg">
+        <div class="safe-bottom bg-surface w-full max-w-md rounded-t-lg p-4 sm:rounded-lg">
           <div class="mb-3 flex items-center justify-between">
             <h2 class="text-base font-medium">{props.title}</h2>
             <button
               aria-label={props.title}
-              class="cursor-pointer text-muted hover:text-ink"
+              class="text-muted hover:text-ink cursor-pointer"
               onClick={() => {
                 props.onClose();
               }}
@@ -138,11 +138,11 @@ export const SectionCard: ParentComponent<{
   title?: string;
 }> = props => (
   <section
-    class={`rounded-lg border border-edge bg-surface p-4 ${props.class ?? ''}`}
+    class={`border-edge bg-surface rounded-lg border p-4 ${props.class ?? ''}`}
   >
     <Show when={props.title}>
       <div class="mb-3 flex items-center justify-between">
-        <h2 class="text-sm font-medium text-muted">{props.title}</h2>
+        <h2 class="text-muted text-sm font-medium">{props.title}</h2>
         {props.actions}
       </div>
     </Show>

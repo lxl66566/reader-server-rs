@@ -10,6 +10,7 @@ import {
   Show,
   untrack,
 } from 'solid-js';
+
 import { useI18n } from '../i18n';
 import { fontFamilyCss, useSettings } from '../stores/settings';
 import { loadChineseConverter, toSimplified } from '../utils/opencc';

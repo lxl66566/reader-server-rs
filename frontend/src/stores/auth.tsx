@@ -8,6 +8,7 @@ import {
   useContext,
   type ParentComponent,
 } from 'solid-js';
+
 import { authApi, setToken, setUnauthorizedHandler } from '../api';
 import type { UserInfo } from '../api/types';
 

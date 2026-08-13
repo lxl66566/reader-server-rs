@@ -3,6 +3,7 @@
 
 import ePub, { type Book, type Rendition } from 'epubjs';
 import { createEffect, on, onCleanup, onMount, Show } from 'solid-js';
+
 import { bookApi } from '../api';
 import { Spinner } from '../components/ui';
 import { fontFamilyCss, useSettings } from '../stores/settings';

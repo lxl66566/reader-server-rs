@@ -1,6 +1,7 @@
 // Edit modal for book metadata (title / author / visibility toggle).
 import { createEffect, createSignal, type Component } from 'solid-js';
 import toast from 'solid-toast';
+
 import type { BookDetail } from '../../api/types';
 import { useI18n } from '../../i18n';
 import { Button, Input, Modal, Toggle } from '../ui';
@@ -59,11 +60,11 @@ export const EditBookModal: Component<{
     <Modal onClose={props.onClose} open={props.open} title={t('editBook')}>
       <div class="space-y-4">
         <label class="block">
-          <span class="mb-1 block text-sm text-muted">{t('titleLabel')}</span>
+          <span class="text-muted mb-1 block text-sm">{t('titleLabel')}</span>
           <Input onInput={setTitle} onKeyDown={onEnter} value={title()} />
         </label>
         <label class="block">
-          <span class="mb-1 block text-sm text-muted">{t('authorLabel')}</span>
+          <span class="text-muted mb-1 block text-sm">{t('authorLabel')}</span>
           <Input onInput={setAuthor} onKeyDown={onEnter} value={author()} />
         </label>
         <Toggle

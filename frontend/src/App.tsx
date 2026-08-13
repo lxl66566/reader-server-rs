@@ -1,6 +1,7 @@
 import { Navigate, Route, Router } from '@solidjs/router';
 import { lazy, type Component } from 'solid-js';
 import { Toaster } from 'solid-toast';
+
 import { Layout } from './components/Layout';
 import { I18nProvider } from './i18n';
 import { AuthProvider } from './stores/auth';

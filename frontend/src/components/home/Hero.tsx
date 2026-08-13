@@ -3,6 +3,7 @@
 import { A } from '@solidjs/router';
 import { VsClockface, VsGlobe, VsSettingsGear, VsSync } from 'solid-icons/vs';
 import { For, type Component } from 'solid-js';
+
 import { useI18n } from '../../i18n';
 import { Button } from '../ui';
 
@@ -38,19 +39,19 @@ export const Hero = () => {
   ];
   return (
     <div class="mx-auto max-w-2xl py-8 sm:py-14">
-      <h1 class="text-2xl font-semibold text-ink sm:text-3xl">
+      <h1 class="text-ink text-2xl font-semibold sm:text-3xl">
         {t('heroTitle')}
       </h1>
-      <p class="mt-3 text-sm text-muted sm:text-base">{t('heroSubtitle')}</p>
+      <p class="text-muted mt-3 text-sm sm:text-base">{t('heroSubtitle')}</p>
       <div class="mt-8 grid grid-cols-1 gap-3 sm:grid-cols-2">
         <For each={features}>
           {feature => (
-            <div class="rounded-lg border border-edge bg-surface p-4">
+            <div class="border-edge bg-surface rounded-lg border p-4">
               <div class="flex items-center gap-2">
-                <feature.icon class="size-5 text-accent" />
-                <h3 class="text-sm font-medium text-ink">{feature.title}</h3>
+                <feature.icon class="text-accent size-5" />
+                <h3 class="text-ink text-sm font-medium">{feature.title}</h3>
               </div>
-              <p class="mt-2 text-sm text-muted">{feature.text}</p>
+              <p class="text-muted mt-2 text-sm">{feature.text}</p>
             </div>
           )}
         </For>
@@ -59,7 +60,7 @@ export const Hero = () => {
         <A href="/register">
           <Button>{t('getStarted')}</Button>
         </A>
-        <A class="text-sm text-muted hover:text-ink" href="/login">
+        <A class="text-muted hover:text-ink text-sm" href="/login">
           {t('goLogin')}
         </A>
       </div>

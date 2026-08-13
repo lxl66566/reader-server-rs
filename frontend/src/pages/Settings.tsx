@@ -5,6 +5,7 @@ import { useNavigate } from '@solidjs/router';
 import { VsDownload, VsKey, VsTrash } from 'solid-icons/vs';
 import { createSignal, Show, type JSX, type ParentComponent } from 'solid-js';
 import toast from 'solid-toast';
+
 import { ApiError, authApi } from '../api';
 import type { PaginationMode, ThemeMode } from '../api/types';
 import {
@@ -346,7 +347,7 @@ const Settings = () => {
       <SectionCard title={t('accountSection')}>
         <Show fallback={<Spinner class="size-5" />} when={auth.user()}>
           {user => (
-            <div class="mb-3 border-b border-edge pb-3">
+            <div class="border-edge mb-3 border-b pb-3">
               <InfoRow label={t('username')} value={user().username} />
               <InfoRow
                 label={t('readingTime')}
@@ -366,8 +367,8 @@ const Settings = () => {
           </Button>
           <div class="flex items-center justify-between gap-3">
             <div class="min-w-0">
-              <div class="text-sm text-ink">{t('exportData')}</div>
-              <div class="text-xs text-muted">{t('exportDataDesc')}</div>
+              <div class="text-ink text-sm">{t('exportData')}</div>
+              <div class="text-muted text-xs">{t('exportDataDesc')}</div>
             </div>
             <Button
               disabled={exporting()}
@@ -384,7 +385,7 @@ const Settings = () => {
                 <div class="text-sm text-red-700 dark:text-red-400">
                   {t('deleteAccount')}
                 </div>
-                <div class="text-xs text-muted">{t('deleteAccountDesc')}</div>
+                <div class="text-muted text-xs">{t('deleteAccountDesc')}</div>
               </div>
               <Button onClick={() => setDelOpen(true)} variant="danger">
                 <VsTrash class="size-4" />
@@ -455,7 +456,7 @@ const Settings = () => {
             void submitDelete();
           }}
         >
-          <p class="text-sm text-muted">{t('deleteAccountConfirm')}</p>
+          <p class="text-muted text-sm">{t('deleteAccountConfirm')}</p>
           <FormField
             input={
               <Input
@@ -486,7 +487,7 @@ const FormField: ParentComponent<{
   label: string;
 }> = props => (
   <label class="block space-y-1">
-    <span class="text-sm text-muted">{props.label}</span>
+    <span class="text-muted text-sm">{props.label}</span>
     {props.input}
   </label>
 );

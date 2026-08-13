@@ -2,6 +2,7 @@
 // Owns the connection; the reader page owns the heartbeat timer and calls send().
 
 import { onCleanup, onMount } from 'solid-js';
+
 import { getDeviceId, getToken } from '../api';
 import type { WsClientMessage, WsServerMessage } from '../api/types';
 

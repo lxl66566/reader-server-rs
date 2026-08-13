@@ -2,6 +2,7 @@
 import { useNavigate, useParams } from '@solidjs/router';
 import { VsEdit, VsTrash, VsWarning } from 'solid-icons/vs';
 import { createResource, createSignal, Show, type Component } from 'solid-js';
+
 import { bookApi, markerApi } from '../api';
 import type { Annotation, BookDetail, Bookmark } from '../api/types';
 import { BookMeta } from '../components/book/BookMeta';
@@ -84,7 +85,7 @@ const BookDetailPage: Component = () => {
       </Show>
       <Show when={!invalidId() && detail.loading}>
         <div class="flex justify-center py-16">
-          <Spinner class="size-6 text-muted" />
+          <Spinner class="text-muted size-6" />
         </div>
       </Show>
       <Show when={!invalidId() && !detail.loading && detail()}>
@@ -178,8 +179,8 @@ function LoadErrorPanel(props: { onBack: () => void; onRetry: () => void }) {
   const { t } = useI18n();
   return (
     <div class="flex flex-col items-center gap-4 py-16">
-      <VsWarning class="size-8 text-muted" />
-      <p class="text-sm text-muted">{t('errorLoadFailed')}</p>
+      <VsWarning class="text-muted size-8" />
+      <p class="text-muted text-sm">{t('errorLoadFailed')}</p>
       <div class="flex gap-2">
         <Button onClick={props.onBack} type="button" variant="ghost">
           {t('back')}

@@ -6,6 +6,7 @@ import {
   useContext,
   type ParentComponent,
 } from 'solid-js';
+
 import en from './en';
 import zhCN, { type DictKey } from './zh-CN';
 

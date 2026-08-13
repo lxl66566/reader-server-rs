@@ -1,6 +1,7 @@
 // Live preview mirroring the current reading settings via inline styles.
 
 import type { ParentComponent } from 'solid-js';
+
 import type { ReadingSettings } from '../../api/types';
 import { fontFamilyCss } from '../../stores/settings';
 
@@ -9,7 +10,7 @@ export const SettingsPreview: ParentComponent<{
   text: string;
 }> = props => (
   <div
-    class="rounded border border-edge p-4"
+    class="border-edge rounded border p-4"
     style={{
       'background-color': props.settings.background_color,
       color: props.settings.text_color,

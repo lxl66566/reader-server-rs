@@ -1,6 +1,7 @@
 // Generic confirm modal for admin actions.
 
 import type { ParentComponent } from 'solid-js';
+
 import { useI18n } from '../../i18n';
 import { Button, Modal } from '../ui';
 
@@ -14,7 +15,7 @@ export const ConfirmDialog: ParentComponent<{
   const { t } = useI18n();
   return (
     <Modal onClose={props.onClose} open={props.open} title={props.title}>
-      <p class="mb-4 text-sm text-muted">{props.message}</p>
+      <p class="text-muted mb-4 text-sm">{props.message}</p>
       <div class="flex justify-end gap-2">
         <Button onClick={props.onClose} variant="ghost">
           {t('cancel')}

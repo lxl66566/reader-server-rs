@@ -1,6 +1,7 @@
 // Section wrapper that owns loading / error / empty rendering for book grids.
 
 import { Show, type ParentComponent } from 'solid-js';
+
 import { useI18n } from '../../i18n';
 import { Button, EmptyState, SectionCard, Spinner } from '../ui';
 
@@ -19,7 +20,7 @@ export const BookSection: ParentComponent<{
     <SectionCard actions={props.actions} title={props.title}>
       <Show
         fallback={
-          <div class="flex flex-col items-center gap-3 py-10 text-sm text-muted">
+          <div class="text-muted flex flex-col items-center gap-3 py-10 text-sm">
             <span>{t('errorLoadFailed')}</span>
             <Button
               onClick={() => {

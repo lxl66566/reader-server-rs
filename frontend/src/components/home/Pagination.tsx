@@ -2,6 +2,7 @@
 
 import { VsChevronLeft, VsChevronRight } from 'solid-icons/vs';
 import type { ParentComponent } from 'solid-js';
+
 import { useI18n } from '../../i18n';
 import { Button } from '../ui';
 

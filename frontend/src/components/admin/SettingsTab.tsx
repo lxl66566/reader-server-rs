@@ -8,6 +8,7 @@ import {
   type Component,
 } from 'solid-js';
 import toast from 'solid-toast';
+
 import { adminApi } from '../../api';
 import { useI18n } from '../../i18n';
 import { Button, SectionCard, Spinner, Toggle } from '../ui';
@@ -77,7 +78,7 @@ export const SettingsTab: Component<{ onUnauthorized: () => void }> = props => {
       </SectionCard>
 
       <SectionCard title={t('downloadBackup')}>
-        <p class="mb-3 text-sm text-muted">{t('downloadBackupDesc')}</p>
+        <p class="text-muted mb-3 text-sm">{t('downloadBackupDesc')}</p>
         <Button disabled={backingUp()} onClick={() => void downloadBackup()}>
           {backingUp() ? (
             <Spinner class="size-4" />

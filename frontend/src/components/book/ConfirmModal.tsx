@@ -2,6 +2,7 @@
 import { VsWarning } from 'solid-icons/vs';
 import { createSignal, type Component } from 'solid-js';
 import toast from 'solid-toast';
+
 import { useI18n } from '../../i18n';
 import { Button, Modal } from '../ui';
 
@@ -28,8 +29,8 @@ export const ConfirmModal: Component<{
 
   return (
     <Modal onClose={props.onClose} open={props.open} title={t('confirmAction')}>
-      <p class="mb-4 flex items-start gap-2 text-sm text-ink">
-        <VsWarning class="mt-0.5 size-4 shrink-0 text-accent" />
+      <p class="text-ink mb-4 flex items-start gap-2 text-sm">
+        <VsWarning class="text-accent mt-0.5 size-4 shrink-0" />
         {props.message}
       </p>
       <div class="flex justify-end gap-2">

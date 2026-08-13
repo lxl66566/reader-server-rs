@@ -3,6 +3,7 @@
 import { A, useNavigate } from '@solidjs/router';
 import { createSignal, Show } from 'solid-js';
 import toast from 'solid-toast';
+
 import { ApiError } from '../api';
 import { Button, Input, Spinner } from '../components/ui';
 import { useI18n } from '../i18n';
@@ -45,16 +46,16 @@ const Register = () => {
   return (
     <div class="mx-auto max-w-sm">
       <form
-        class="rounded-lg border border-edge bg-surface p-6"
+        class="border-edge bg-surface rounded-lg border p-6"
         onSubmit={submit}
       >
         <h1 class="mb-4 text-lg font-medium">{t('register')}</h1>
         <label class="mb-3 block text-sm">
-          <span class="mb-1 block text-muted">{t('username')}</span>
+          <span class="text-muted mb-1 block">{t('username')}</span>
           <Input class="w-full" onInput={setUsername} value={username()} />
         </label>
         <label class="mb-3 block text-sm">
-          <span class="mb-1 block text-muted">{t('password')}</span>
+          <span class="text-muted mb-1 block">{t('password')}</span>
           <Input
             class="w-full"
             onInput={setPassword}
@@ -63,7 +64,7 @@ const Register = () => {
           />
         </label>
         <label class="mb-3 block text-sm">
-          <span class="mb-1 block text-muted">{t('confirmPassword')}</span>
+          <span class="text-muted mb-1 block">{t('confirmPassword')}</span>
           <Input
             class="w-full"
             onInput={setConfirmPassword}
@@ -72,7 +73,7 @@ const Register = () => {
           />
         </label>
         <label class="mb-4 block text-sm">
-          <span class="mb-1 block text-muted">{t('inviteCodeOptional')}</span>
+          <span class="text-muted mb-1 block">{t('inviteCodeOptional')}</span>
           <Input class="w-full" onInput={setInviteCode} value={inviteCode()} />
         </label>
         <Button class="w-full" disabled={submitting()} type="submit">
@@ -82,7 +83,7 @@ const Register = () => {
         </Button>
       </form>
       <A
-        class="mt-4 block text-center text-sm text-muted hover:text-ink"
+        class="text-muted hover:text-ink mt-4 block text-center text-sm"
         href="/login"
       >
         {t('goLogin')}

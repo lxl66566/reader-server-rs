@@ -8,6 +8,7 @@ import {
   type Component,
 } from 'solid-js';
 import toast from 'solid-toast';
+
 import { adminApi } from '../../api';
 import type { AdminUserItem } from '../../api/types';
 import { useI18n } from '../../i18n';
@@ -97,23 +98,23 @@ export const UsersTab: Component<{ onUnauthorized: () => void }> = props => {
         <div class="overflow-x-auto">
           <table class="w-full min-w-[640px] text-sm">
             <thead>
-              <tr class="text-left text-muted">
-                <th class="pb-2 pr-3 font-normal">{t('username')}</th>
-                <th class="pb-2 pr-3 font-normal">{t('createdAt')}</th>
-                <th class="pb-2 pr-3 font-normal">{t('bookCount')}</th>
-                <th class="pb-2 pr-3 font-normal">{t('readingTime')}</th>
+              <tr class="text-muted text-left">
+                <th class="pr-3 pb-2 font-normal">{t('username')}</th>
+                <th class="pr-3 pb-2 font-normal">{t('createdAt')}</th>
+                <th class="pr-3 pb-2 font-normal">{t('bookCount')}</th>
+                <th class="pr-3 pb-2 font-normal">{t('readingTime')}</th>
                 <th class="pb-2 font-normal">{t('actions')}</th>
               </tr>
             </thead>
             <tbody>
               <For each={list()}>
                 {(item: AdminUserItem) => (
-                  <tr class="border-t border-edge align-middle">
+                  <tr class="border-edge border-t align-middle">
                     <td class="py-2 pr-3">
                       <span class="font-medium">{item.username}</span>
                       <StatusBadge status={item.status} />
                     </td>
-                    <td class="py-2 pr-3 text-muted">
+                    <td class="text-muted py-2 pr-3">
                       {formatDateTime(item.created_at, locale())}
                     </td>
                     <td class="py-2 pr-3">{item.book_count}</td>
@@ -164,7 +165,7 @@ export const UsersTab: Component<{ onUnauthorized: () => void }> = props => {
 
       <Show when={pending()?.kind === 'reset'}>
         <Modal onClose={closePending} open title={actionTitle()}>
-          <p class="mb-3 text-sm text-muted">
+          <p class="text-muted mb-3 text-sm">
             {pending()?.user.username ?? ''}
           </p>
           <label class="mb-4 flex flex-col gap-1 text-sm">
@@ -207,7 +208,7 @@ const StatusBadge: Component<{ status: AdminUserItem['status'] }> = props => {
     <span
       class={`ml-2 rounded px-1.5 py-0.5 text-xs ${
         props.status === 'banned'
-          ? 'border border-edge bg-surface text-muted'
+          ? 'border-edge bg-surface text-muted border'
           : 'bg-accent/15 text-accent'
       }`}
     >
@@ -221,7 +222,7 @@ const ActionButton: Component<{
   onClick: () => void;
 }> = props => (
   <button
-    class="cursor-pointer rounded border border-edge px-2 py-1 text-xs text-muted hover:bg-base hover:text-ink"
+    class="border-edge text-muted hover:bg-base hover:text-ink cursor-pointer rounded border px-2 py-1 text-xs"
     onClick={() => {
       props.onClick();
     }}

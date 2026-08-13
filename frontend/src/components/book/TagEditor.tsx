@@ -2,6 +2,7 @@
 import { VsClose } from 'solid-icons/vs';
 import { createEffect, createSignal, For, type Component } from 'solid-js';
 import toast from 'solid-toast';
+
 import { useI18n } from '../../i18n';
 import { Input } from '../ui';
 
@@ -41,14 +42,14 @@ export const TagEditor: Component<{
         {tag => (
           <button
             aria-label={`${t('delete')}: ${tag}`}
-            class="flex min-h-10 cursor-pointer items-center gap-1 rounded-full border border-edge bg-base px-3 text-sm transition-colors hover:border-accent"
+            class="border-edge bg-base hover:border-accent flex min-h-10 cursor-pointer items-center gap-1 rounded-full border px-3 text-sm transition-colors"
             onClick={() => {
               removeTag(tag);
             }}
             type="button"
           >
             {tag}
-            <VsClose class="size-3.5 text-muted" />
+            <VsClose class="text-muted size-3.5" />
           </button>
         )}
       </For>

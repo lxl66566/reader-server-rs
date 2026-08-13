@@ -9,6 +9,7 @@ import {
   Show,
   type Component,
 } from 'solid-js';
+
 import { adminApi } from '../../api';
 import type { AuditLogItem } from '../../api/types';
 import { useI18n } from '../../i18n';
@@ -52,14 +53,14 @@ export const AuditLogsTab: Component<{
         <ul class="space-y-2">
           <For each={logs()?.logs ?? []}>
             {(item: AuditLogItem) => (
-              <li class="rounded-lg border border-edge bg-base p-3 text-sm">
+              <li class="border-edge bg-base rounded-lg border p-3 text-sm">
                 <div class="flex flex-wrap items-center gap-x-2 gap-y-0.5">
                   <span class="font-medium">{item.admin_username}</span>
                   <span class="text-muted">
                     {formatDateTime(item.created_at, locale())}
                   </span>
                 </div>
-                <div class="mt-1 text-muted">
+                <div class="text-muted mt-1">
                   <span class="text-ink">{item.action}</span>
                   <Show
                     when={item.target_type !== null || item.target_id !== null}
@@ -70,7 +71,7 @@ export const AuditLogsTab: Component<{
                   </Show>
                 </div>
                 <Show when={item.detail}>
-                  <p class="mt-1 text-muted">{item.detail}</p>
+                  <p class="text-muted mt-1">{item.detail}</p>
                 </Show>
               </li>
             )}
@@ -81,7 +82,7 @@ export const AuditLogsTab: Component<{
             <VsChevronLeft class="size-4" />
             {t('prevPage')}
           </Button>
-          <span class="text-sm text-muted">
+          <span class="text-muted text-sm">
             {t('pageIndicator', {
               page: page(),
               total: Math.ceil((logs()?.total ?? 0) / PAGE_LIMIT),

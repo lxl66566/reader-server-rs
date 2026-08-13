@@ -9,6 +9,7 @@ import {
   type Component,
 } from 'solid-js';
 import toast from 'solid-toast';
+
 import { adminApi } from '../../api';
 import type { AdminItem } from '../../api/types';
 import { useI18n } from '../../i18n';
@@ -76,7 +77,7 @@ export const AdminsTab: Component<{ onUnauthorized: () => void }> = props => {
           fallback={<EmptyState text={t('none')} />}
           when={list().length > 0}
         >
-          <ul class="divide-y divide-edge">
+          <ul class="divide-edge divide-y">
             <For each={list()}>
               {(item: AdminItem) => (
                 <li class="flex items-center justify-between py-2 text-sm">

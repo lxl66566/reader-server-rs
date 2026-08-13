@@ -4,6 +4,7 @@ import { A, useNavigate } from '@solidjs/router';
 import { VsAccount, VsBook, VsGraph, VsSettings } from 'solid-icons/vs';
 import { Show, type ParentComponent } from 'solid-js';
 import toast from 'solid-toast';
+
 import { useI18n } from '../i18n';
 import { useAuth } from '../stores/auth';
 
@@ -20,10 +21,10 @@ export const Layout: ParentComponent = props => {
 
   return (
     <div class="flex min-h-full flex-col">
-      <header class="safe-top sticky top-0 z-40 border-b border-edge bg-surface">
+      <header class="safe-top border-edge bg-surface sticky top-0 z-40 border-b">
         <div class="mx-auto flex h-12 max-w-4xl items-center gap-4 px-4">
           <A class="flex items-center gap-1.5 text-base font-semibold" href="/">
-            <VsBook class="size-5 text-accent" />
+            <VsBook class="text-accent size-5" />
             {t('appName')}
           </A>
           <nav class="ml-auto flex items-center gap-1 text-sm">
@@ -44,7 +45,7 @@ export const Layout: ParentComponent = props => {
                 label={t('navSettings')}
               />
               <button
-                class="flex cursor-pointer items-center gap-1 rounded px-2 py-1 text-muted hover:bg-base hover:text-ink"
+                class="text-muted hover:bg-base hover:text-ink flex cursor-pointer items-center gap-1 rounded px-2 py-1"
                 onClick={logout}
                 type="button"
               >
@@ -54,7 +55,7 @@ export const Layout: ParentComponent = props => {
             </Show>
             <Show when={!auth.isLoggedIn()}>
               <A
-                class="rounded border border-edge px-3 py-1 hover:bg-base"
+                class="border-edge hover:bg-base rounded border px-3 py-1"
                 href="/login"
               >
                 {t('login')}
@@ -77,7 +78,7 @@ const NavLink: ParentComponent<{
 }> = props => (
   <A
     activeClass="text-ink"
-    class="flex items-center gap-1 rounded px-2 py-1 text-muted hover:bg-base hover:text-ink"
+    class="text-muted hover:bg-base hover:text-ink flex items-center gap-1 rounded px-2 py-1"
     href={props.href}
   >
     {props.icon}

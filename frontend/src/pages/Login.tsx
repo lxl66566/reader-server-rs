@@ -3,6 +3,7 @@
 import { A, useNavigate } from '@solidjs/router';
 import { createSignal, Show } from 'solid-js';
 import toast from 'solid-toast';
+
 import { ApiError } from '../api';
 import { Button, Input, Spinner } from '../components/ui';
 import { useI18n } from '../i18n';
@@ -38,16 +39,16 @@ const Login = () => {
   return (
     <div class="mx-auto max-w-sm">
       <form
-        class="rounded-lg border border-edge bg-surface p-6"
+        class="border-edge bg-surface rounded-lg border p-6"
         onSubmit={submit}
       >
         <h1 class="mb-4 text-lg font-medium">{t('login')}</h1>
         <label class="mb-3 block text-sm">
-          <span class="mb-1 block text-muted">{t('username')}</span>
+          <span class="text-muted mb-1 block">{t('username')}</span>
           <Input class="w-full" onInput={setUsername} value={username()} />
         </label>
         <label class="mb-4 block text-sm">
-          <span class="mb-1 block text-muted">{t('password')}</span>
+          <span class="text-muted mb-1 block">{t('password')}</span>
           <Input
             class="w-full"
             onInput={setPassword}
@@ -62,7 +63,7 @@ const Login = () => {
         </Button>
       </form>
       <A
-        class="mt-4 block text-center text-sm text-muted hover:text-ink"
+        class="text-muted hover:text-ink mt-4 block text-center text-sm"
         href="/register"
       >
         {t('goRegister')}

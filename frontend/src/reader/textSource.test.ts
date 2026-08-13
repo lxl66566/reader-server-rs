@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+
 import { TextSource, TXT_CHUNK_SIZE } from './textSource';
 
 // fake server: chars are the decimal digits of their position, mod 10

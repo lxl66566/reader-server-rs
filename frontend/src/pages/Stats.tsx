@@ -9,6 +9,7 @@ import {
   type JSX,
   type ParentComponent,
 } from 'solid-js';
+
 import { ApiError, readingApi } from '../api';
 import type { ReadingStats } from '../api/types';
 import { Button, EmptyState, SectionCard, Spinner } from '../components/ui';
@@ -86,8 +87,8 @@ const StatCard: ParentComponent<{
   label: string;
   value: string;
 }> = props => (
-  <div class="rounded-lg border border-edge bg-surface p-4">
-    <div class="flex items-center gap-2 text-sm text-muted">
+  <div class="border-edge bg-surface rounded-lg border p-4">
+    <div class="text-muted flex items-center gap-2 text-sm">
       <span class="text-accent">{props.icon}</span>
       {props.label}
     </div>
@@ -106,7 +107,7 @@ const BarChart: ParentComponent<{
       <For each={props.days}>
         {day => (
           <div
-            class="min-w-0 flex-1 rounded-t bg-accent opacity-85 transition-opacity hover:opacity-100"
+            class="bg-accent min-w-0 flex-1 rounded-t opacity-85 transition-opacity hover:opacity-100"
             style={{ height: `${(day.reading_seconds / max()) * 100}%` }}
             title={`${formatShortDate(day.date, locale())}: ${formatDuration(day.reading_seconds, t)}`}
           />
@@ -124,7 +125,7 @@ const StateBlock: ParentComponent<{
   return (
     <div class="flex flex-col items-center gap-3 py-12">
       <Show fallback={<Spinner class="size-6" />} when={props.error}>
-        <p class="text-sm text-muted">{props.error}</p>
+        <p class="text-muted text-sm">{props.error}</p>
         <Button onClick={props.onRetry} variant="ghost">
           {t('retry')}
         </Button>
