@@ -56,8 +56,12 @@ export interface RequestOptions {
   query?: Record<string, boolean | number | string | undefined>;
   /** return raw Response (for zip downloads etc.) */
   raw?: boolean;
+  /** timeout in ms (0 = no timeout); default 15s, disabled for raw */
+  timeout?: number;
   tokenKind?: TokenKind;
 }
+
+const DEFAULT_TIMEOUT_MS = 15_000;
 
 export async function request<T>(
   method: string,
@@ -82,7 +86,20 @@ export async function request<T>(
     body = JSON.stringify(options.body);
   }
 
-  const res = await fetch(url, { body, headers, method });
+  const timeout = options.timeout ?? (options.raw ? 0 : DEFAULT_TIMEOUT_MS);
+  const signal = timeout > 0 ? AbortSignal.timeout(timeout) : undefined;
+
+  let res: Response;
+  try {
+    res = await fetch(url, { body, headers, method, signal });
+  } catch (err) {
+    // Normalize abort/network failures so callers always get ApiError
+    // (otherwise hung requests leave resources spinning forever).
+    if (err instanceof DOMException && err.name === 'TimeoutError') {
+      throw new ApiError(0, 'Request timed out');
+    }
+    throw new ApiError(0, 'Network error');
+  }
 
   if (res.status === 304 && cached) {
     return cached.data as T;

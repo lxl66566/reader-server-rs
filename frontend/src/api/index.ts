@@ -105,7 +105,8 @@ export const bookApi = {
   upload: (form: FormData) =>
     api.post<{ book_id: number } & { chapters: Chapter[] }>(
       '/api/v1/books/upload',
-      { form },
+      // large files on slow networks need a longer window
+      { form, timeout: 120_000 },
     ),
 };
 

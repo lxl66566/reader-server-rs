@@ -8,7 +8,6 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
 };
-use rand::prelude::IndexedRandom;
 use serde::Deserialize;
 use sqlx::{Pool, Sqlite};
 use tokio::{fs, io::AsyncWriteExt};
@@ -892,10 +891,8 @@ async fn get_random_public_books(
     State(pool): State<Pool<Sqlite>>,
     Query(params): Query<RandomPublicParams>,
 ) -> Result<Json<ApiResponse<RandomPublicBooksResponse>>, AppError> {
-    // 确定要返回的书籍数量
+    // 直接在 SQL 层随机抽样，避免全表加载进内存
     let count = params.count.unwrap_or(1).clamp(1, 10);
-
-    // 获取所有公开书籍
     let books = sqlx::query!(
         r#"
         SELECT b.id, b.title, b.author, b.created_at, b.total_chars, b.total_pages,
@@ -904,26 +901,26 @@ async fn get_random_public_books(
         FROM books b
         JOIN users u ON b.user_id = u.id
         WHERE b.is_public = 1
-        "#
+        ORDER BY RANDOM()
+        LIMIT ?
+        "#,
+        count
     )
     .fetch_all(&pool)
     .await?;
 
-    // 随机选择书籍
-    let mut rng = rand::rng();
-    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     let selected_books: Vec<PublicBookListItem> = books
-        .sample(&mut rng, count as usize)
+        .into_iter()
         .map(|book| PublicBookListItem {
             book_id: book.id,
-            title: book.title.clone(),
-            author: book.author.clone(),
-            owner_username: book.owner_username.clone(),
+            title: book.title,
+            author: book.author,
+            owner_username: book.owner_username,
             format: book.format,
-            created_at: book.created_at.clone(),
+            created_at: book.created_at,
             total_chars: book.total_chars,
             total_pages: book.total_pages,
-            description: book.description.clone(),
+            description: book.description,
         })
         .collect();
 
