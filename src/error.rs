@@ -87,6 +87,7 @@ pub enum AppError {
     #[error("Password cannot be empty")]
     PasswordEmpty,
 
+    #[allow(unused)]
     #[error("Password must be at least 6 characters")]
     PasswordTooShort,
 

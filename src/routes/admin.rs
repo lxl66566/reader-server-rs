@@ -229,9 +229,9 @@ async fn reset_password(
         return Err(AppError::UserNotFound);
     }
 
-    if req.new_password.chars().count() < 6 {
-        return Err(AppError::PasswordTooShort);
-    }
+    // if req.new_password.chars().count() < 6 {
+    //     return Err(AppError::PasswordTooShort);
+    // }
 
     let new_password_hash = hash_password(&req.new_password)?;
 
@@ -406,9 +406,9 @@ async fn create_admin(
     }
 
     // 验证密码格式
-    if req.password.chars().count() < 6 {
-        return Err(AppError::PasswordTooShort);
-    }
+    // if req.password.chars().count() < 6 {
+    //     return Err(AppError::PasswordTooShort);
+    // }
 
     // 检查用户名唯一
     let exists =
