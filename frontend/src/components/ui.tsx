@@ -71,15 +71,17 @@ export const Toggle: ParentComponent<{
   <label class="inline-flex cursor-pointer items-center gap-2 text-sm">
     <button
       aria-checked={props.checked}
-      class={`relative h-5 w-9 rounded-full transition-colors ${props.checked ? 'bg-accent' : 'bg-edge'}`}
+      class={`relative h-5 w-9 cursor-pointer rounded-full transition-colors ${props.checked ? 'bg-accent' : 'bg-edge'}`}
       onClick={() => {
         props.onChange(!props.checked);
       }}
       role="switch"
       type="button"
     >
+      {/* knob needs explicit left-0.5: without it the abs-positioned static
+          position follows the button's text-align:center and slides too far right */}
       <span
-        class={`bg-surface absolute top-0.5 size-4 rounded-full transition-transform ${props.checked ? 'translate-x-4.5' : 'translate-x-0.5'}`}
+        class={`bg-surface absolute top-0.5 left-0.5 size-4 rounded-full transition-transform ${props.checked ? 'translate-x-4' : 'translate-x-0'}`}
       />
     </button>
     <Show when={props.label}>{props.label}</Show>
