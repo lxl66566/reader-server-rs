@@ -21,6 +21,7 @@ reader-server-rs 是一个读书服务端软件，用户可以向服务器上传
 
 - [接口文档](doc/interface.md)，如果有接口变更，必须同步到其中。
 - 目前未投入生产，不需要考虑 db 或配置的兼容性。
+- 修改 db schema 后需要删除 target/sqlx_schema.db。
 
 ## 技术栈
 
