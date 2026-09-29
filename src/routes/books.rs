@@ -475,9 +475,11 @@ async fn get_book_detail(
         (Some(p.locator), p.percent, p.reading_time, p.last_read_at)
     } else {
         // 如果是公开书籍，为当前用户创建进度记录
+        // INSERT OR IGNORE：并发请求会同时进入此分支，裸 INSERT 会让后到的请求撞
+        // UNIQUE(user_id, book_id) 变 500，忽略冲突即可（进度行内容一致）
         if book.user_id != auth.user_id {
             sqlx::query!(
-                "INSERT INTO reading_progress (user_id, book_id) VALUES (?, ?)",
+                "INSERT OR IGNORE INTO reading_progress (user_id, book_id) VALUES (?, ?)",
                 auth.user_id,
                 book_id
             )

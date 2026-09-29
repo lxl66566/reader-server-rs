@@ -88,14 +88,20 @@ async fn get_reading_settings(
     let settings = if let Some(settings) = settings {
         settings
     } else {
-        // 创建默认设置
-        let id = sqlx::query!(
+        // 创建默认设置。IGNORE 命中（并发下已被其他请求创建）时 last_insert_rowid
+        // 返回的是过期 rowid，必须重查 id
+        sqlx::query!(
             "INSERT OR IGNORE INTO reading_settings (user_id) VALUES (?)",
             auth.user_id
         )
         .execute(&pool)
-        .await?
-        .last_insert_rowid();
+        .await?;
+        let id = sqlx::query_scalar!(
+            "SELECT id FROM reading_settings WHERE user_id = ?",
+            auth.user_id
+        )
+        .fetch_one(&pool)
+        .await?;
 
         ReadingSettings {
             id,
@@ -308,9 +314,11 @@ pub async fn process_heartbeat_logic(
     let now_str = now.to_rfc3339_opts(SecondsFormat::Millis, true);
 
     // 如果没有阅读进度记录，创建一个
+    // INSERT OR IGNORE：并发首心跳会同时进入此分支，裸 INSERT 会让后到的请求撞
+    // UNIQUE(user_id, book_id) 变 500；忽略冲突后双方各自返回自己的进度即可
     if progress.is_none() {
         sqlx::query!(
-            "INSERT INTO reading_progress 
+            "INSERT OR IGNORE INTO reading_progress 
              (user_id, book_id, locator, percent, last_read_at, last_device_id) 
              VALUES (?, ?, ?, ?, ?, ?)",
             user_id,

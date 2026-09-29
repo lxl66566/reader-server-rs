@@ -1753,3 +1753,73 @@ async fn test_backup_global_contains_db_and_books() {
 
     println!("\n===== Backup tests passed! =====");
 }
+
+#[tokio::test]
+async fn test_concurrent_first_progress_insert() {
+    // 回归测试：public 书详情与首次心跳曾用裸 INSERT 创建进度，两个并发请求同时
+    // 进入"无进度"分支时，后到的 INSERT 会撞 UNIQUE(user_id, book_id) 变 500；
+    // 改 INSERT OR IGNORE 后并发/重复调用都必须成功且只留一行进度
+    let (app, pool) = setup_test_app().await.unwrap();
+    let owner = register_and_login(&app, "race_owner", "password1").await;
+    let book = upload_test_book(&app, &owner, "并发公开书", TEST_BOOK_CONTENT, true).await;
+    let book_id = book["book_id"].as_i64().unwrap();
+    let reader_token = register_and_login(&app, "race_reader", "password1").await;
+    let reader_id: i64 = sqlx::query_scalar("SELECT id FROM users WHERE username = 'race_reader'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    // 并发首插心跳：全部成功，不得有 500/UNIQUE 冲突
+    let mut handles = Vec::new();
+    for i in 0..8 {
+        let pool = pool.clone();
+        handles.push(tokio::spawn(async move {
+            crate::routes::reading::process_heartbeat_logic(
+                &pool,
+                reader_id,
+                book_id,
+                &format!("loc{i}"),
+                0.1,
+                "dev",
+            )
+            .await
+        }));
+    }
+    for h in handles {
+        h.await.unwrap().unwrap();
+    }
+
+    // 并发请求 public 书详情（GET 内部也会为读者建进度）：全部 200
+    let mut handles = Vec::new();
+    for _ in 0..8 {
+        let app = app.clone();
+        let token = reader_token.clone();
+        handles.push(tokio::spawn(async move {
+            make_request(
+                &app,
+                Method::GET,
+                &format!("/api/v1/books/{book_id}"),
+                Body::empty(),
+                Some(&token),
+            )
+            .await
+            .status()
+        }));
+    }
+    for h in handles {
+        assert_eq!(h.await.unwrap(), StatusCode::OK);
+    }
+
+    // 最终只存在一行进度
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM reading_progress WHERE user_id = ? AND book_id = ?",
+    )
+    .bind(reader_id)
+    .bind(book_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 1);
+
+    println!("\n===== Concurrent first progress insert tests passed! =====");
+}
