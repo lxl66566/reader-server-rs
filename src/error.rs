@@ -156,6 +156,12 @@ pub enum AppError {
     #[error("Invalid font_family (must be 1-128 chars)")]
     InvalidFontFamily,
 
+    #[error("Invalid color value (expected hex format, e.g. #RRGGBB)")]
+    InvalidColor,
+
+    #[error("Setting '{0}' is out of the allowed range")]
+    SettingOutOfRange(&'static str),
+
     #[error("Failed to parse form data: {0}")]
     FormParseError(String),
 
@@ -229,6 +235,8 @@ impl IntoResponse for AppError {
             | AppError::InvalidPosition
             | AppError::InvalidTimezone
             | AppError::InvalidFontFamily
+            | AppError::InvalidColor
+            | AppError::SettingOutOfRange(_)
             | AppError::AnnotationRangeInvalid
             | AppError::SearchQueryEmpty
             | AppError::InvalidSearchScope

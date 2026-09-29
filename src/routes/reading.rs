@@ -22,6 +22,32 @@ use crate::{
 /// 默认时区（无法解析用户时区或用户未设置时使用）
 const DEFAULT_TZ: chrono_tz::Tz = chrono_tz::UTC;
 
+// —— 阅读设置取值范围 ——
+// 范围需兼容两处既有取值：前端设置面板控件（em 单位滑块，如阅读宽度 20-60）
+// 与 schema 默认值（reading_width DEFAULT 800、text_indent DEFAULT 2 等，
+// 用户原样回写默认设置也必须通过校验）。故此处取覆盖两者的宽范围，
+// 仅用于拒绝负数、零与明显异常的数值。
+/// 字号（px）
+const FONT_SIZE_RANGE: std::ops::RangeInclusive<i64> = 8..=72;
+/// 行距倍数
+const LINE_HEIGHT_RANGE: std::ops::RangeInclusive<f64> = 1.0..=3.0;
+/// 字间距（px）
+const LETTER_SPACING_RANGE: std::ops::RangeInclusive<f64> = 0.0..=20.0;
+/// 段间距（em）
+const PARAGRAPH_SPACING_RANGE: std::ops::RangeInclusive<f64> = 0.0..=10.0;
+/// 阅读区域宽度（前端按 em 使用，历史默认值为 800）
+const READING_WIDTH_RANGE: std::ops::RangeInclusive<i64> = 10..=2000;
+/// 段落首行缩进（字符数）
+const TEXT_INDENT_RANGE: std::ops::RangeInclusive<f64> = 0.0..=8.0;
+
+/// 校验 hex 颜色格式：`#RGB` 或 `#RRGGBB`（大小写不敏感）
+fn is_hex_color(s: &str) -> bool {
+    let Some(hex) = s.strip_prefix('#') else {
+        return false;
+    };
+    matches!(hex.len(), 3 | 6) && hex.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
 /// 解析时区字符串；失败时回退到 UTC
 fn parse_tz(s: &str) -> chrono_tz::Tz {
     s.parse().unwrap_or(DEFAULT_TZ)
@@ -173,34 +199,58 @@ async fn update_reading_settings(
 
     let mut has_update = false;
     if let Some(v) = req.font_size {
+        if !FONT_SIZE_RANGE.contains(&v) {
+            return Err(AppError::SettingOutOfRange("font_size"));
+        }
         sep.push("font_size = ").push_bind_unseparated(v);
         has_update = true;
     }
     if let Some(v) = req.background_color {
+        if !is_hex_color(&v) {
+            return Err(AppError::InvalidColor);
+        }
         sep.push("background_color = ").push_bind_unseparated(v);
         has_update = true;
     }
     if let Some(v) = req.text_color {
+        if !is_hex_color(&v) {
+            return Err(AppError::InvalidColor);
+        }
         sep.push("text_color = ").push_bind_unseparated(v);
         has_update = true;
     }
     if let Some(v) = req.line_height {
+        if !LINE_HEIGHT_RANGE.contains(&v) {
+            return Err(AppError::SettingOutOfRange("line_height"));
+        }
         sep.push("line_height = ").push_bind_unseparated(v);
         has_update = true;
     }
     if let Some(v) = req.letter_spacing {
+        if !LETTER_SPACING_RANGE.contains(&v) {
+            return Err(AppError::SettingOutOfRange("letter_spacing"));
+        }
         sep.push("letter_spacing = ").push_bind_unseparated(v);
         has_update = true;
     }
     if let Some(v) = req.paragraph_spacing {
+        if !PARAGRAPH_SPACING_RANGE.contains(&v) {
+            return Err(AppError::SettingOutOfRange("paragraph_spacing"));
+        }
         sep.push("paragraph_spacing = ").push_bind_unseparated(v);
         has_update = true;
     }
     if let Some(v) = req.reading_width {
+        if !READING_WIDTH_RANGE.contains(&v) {
+            return Err(AppError::SettingOutOfRange("reading_width"));
+        }
         sep.push("reading_width = ").push_bind_unseparated(v);
         has_update = true;
     }
     if let Some(v) = req.text_indent {
+        if !TEXT_INDENT_RANGE.contains(&v) {
+            return Err(AppError::SettingOutOfRange("text_indent"));
+        }
         sep.push("text_indent = ").push_bind_unseparated(v);
         has_update = true;
     }
