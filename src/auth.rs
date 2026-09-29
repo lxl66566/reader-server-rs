@@ -110,20 +110,9 @@ where
         let user_id: i64 = claims.sub.parse().map_err(|_| AppError::InvalidUserId)?;
 
         // 验证用户存在、token 版本号匹配、账户未被封禁
-        let user = sqlx::query!(
-            "SELECT token_version, status FROM users WHERE id = ?",
-            user_id
-        )
-        .fetch_optional(&pool)
-        .await
-        .map_err(AppError::Database)?;
+        crate::access::check_user_token(&pool, user_id, claims.ver).await?;
 
-        match user {
-            None => Err(AppError::UserNotFound),
-            Some(row) if row.token_version != claims.ver => Err(AppError::TokenExpiredOrInvalid),
-            Some(row) if row.status == "banned" => Err(AppError::UserBanned),
-            Some(_) => Ok(AuthUser { user_id }),
-        }
+        Ok(AuthUser { user_id })
     }
 }
 

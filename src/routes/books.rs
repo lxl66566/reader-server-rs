@@ -13,6 +13,7 @@ use sqlx::{Pool, Sqlite};
 use tokio::{fs, io::AsyncWriteExt};
 
 use crate::{
+    access::{check_book_access, ensure_book_access},
     auth::AuthUser,
     config::Config,
     error::{ApiResponse, AppError},
@@ -444,13 +445,8 @@ async fn get_book_detail(
         .await?
         .ok_or_else(|| AppError::BookNotFound)?;
 
-    // 检查权限
-    if book.user_id != auth.user_id {
-        // 如果不是书籍所有者，检查书籍是否公开
-        if !book.is_public {
-            return Err(AppError::BookAccessDenied);
-        }
-    }
+    // 检查权限（所有者或公开书）
+    ensure_book_access(auth.user_id, book.user_id, book.is_public)?;
 
     // 查询章节信息
     let chapters = sqlx::query!(
@@ -637,9 +633,7 @@ async fn download_book_file(
     .ok_or_else(|| AppError::BookNotFound)?;
 
     // 权限：所有者或公开书
-    if book.user_id != auth.user_id && !book.is_public {
-        return Err(AppError::BookAccessDenied);
-    }
+    ensure_book_access(auth.user_id, book.user_id, book.is_public)?;
 
     // 文件可能被外部清理；缺失时返回 404 而不是 500
     let path = PathBuf::from(&book.file_path);
@@ -691,10 +685,8 @@ async fn get_book_content(
     .await?
     .ok_or_else(|| AppError::BookNotFound)?;
 
-    // 检查权限
-    if book.user_id != auth.user_id && !book.is_public {
-        return Err(AppError::BookAccessDenied);
-    }
+    // 检查权限（所有者或公开书）
+    ensure_book_access(auth.user_id, book.user_id, book.is_public)?;
 
     // 仅 txt 支持；epub/pdf 应该走 /file 下载原文件后客户端渲染
     if book.format != BookFormat::Txt {
@@ -829,16 +821,8 @@ async fn jump_to_chapter(
         return Err(AppError::ChapterNotFound);
     }
 
-    // 查询书籍信息
-    let book = sqlx::query!("SELECT user_id, is_public FROM books WHERE id = ?", book_id)
-        .fetch_optional(&pool)
-        .await?
-        .ok_or_else(|| AppError::BookNotFound)?;
-
-    // 检查权限
-    if book.user_id != auth.user_id && !book.is_public {
-        return Err(AppError::BookAccessDenied);
-    }
+    // 检查书籍存在性与读权限（所有者或公开书）
+    check_book_access(&pool, auth.user_id, book_id).await?;
 
     // 查询章节信息
     let chapter = sqlx::query!(
@@ -1120,13 +1104,7 @@ async fn get_book_tags(
     Path(book_id): Path<i64>,
 ) -> Result<Json<ApiResponse<BookTagsResponse>>, AppError> {
     // 读权限：所有者或公开书
-    let book = sqlx::query!("SELECT user_id, is_public FROM books WHERE id = ?", book_id)
-        .fetch_optional(&pool)
-        .await?
-        .ok_or(AppError::BookNotFound)?;
-    if book.user_id != auth.user_id && !book.is_public {
-        return Err(AppError::BookAccessDenied);
-    }
+    check_book_access(&pool, auth.user_id, book_id).await?;
 
     let tags: Vec<String> = sqlx::query_scalar(
         "SELECT t.name FROM tags t JOIN book_tags bt ON bt.tag_id = t.id WHERE bt.book_id = ? \

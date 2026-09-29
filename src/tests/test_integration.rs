@@ -1823,3 +1823,70 @@ async fn test_concurrent_first_progress_insert() {
 
     println!("\n===== Concurrent first progress insert tests passed! =====");
 }
+
+#[tokio::test]
+async fn test_access_check_helpers() {
+    use crate::{
+        access::{check_book_access, check_user_token},
+        error::AppError,
+    };
+
+    // 统一的权限校验助手：书籍读权限（所有者或公开书）与用户 token 状态
+    // （存在 / 版本号 / 封禁），HTTP AuthUser 与 WS 握手/周期重验共用同一实现
+    let (app, pool) = setup_test_app().await.unwrap();
+    let owner = register_and_login(&app, "acc_owner", "password1").await;
+    register_and_login(&app, "acc_other", "password1").await;
+
+    let owner_id: i64 = sqlx::query_scalar("SELECT id FROM users WHERE username = 'acc_owner'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let other_id: i64 = sqlx::query_scalar("SELECT id FROM users WHERE username = 'acc_other'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    let private_book = upload_test_book(&app, &owner, "私有书", TEST_BOOK_CONTENT, false).await;
+    let private_id = private_book["book_id"].as_i64().unwrap();
+    let public_book = upload_test_book(&app, &owner, "公开书", TEST_BOOK_CONTENT, true).await;
+    let public_id = public_book["book_id"].as_i64().unwrap();
+
+    // 书籍读权限：所有者恒可读；私有书对他人 403；公开书他人可读；不存在 404
+    assert!(check_book_access(&pool, owner_id, private_id).await.is_ok());
+    assert!(matches!(
+        check_book_access(&pool, other_id, private_id).await,
+        Err(AppError::BookAccessDenied)
+    ));
+    assert!(check_book_access(&pool, other_id, public_id).await.is_ok());
+    assert!(matches!(
+        check_book_access(&pool, other_id, i64::MAX).await,
+        Err(AppError::BookNotFound)
+    ));
+
+    // 用户 token 状态：版本号不匹配 / banned / 用户不存在分别对应不同错误
+    let ver: i64 = sqlx::query_scalar("SELECT token_version FROM users WHERE id = ?")
+        .bind(other_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(check_user_token(&pool, other_id, ver).await.is_ok());
+    assert!(matches!(
+        check_user_token(&pool, other_id, ver + 1).await,
+        Err(AppError::TokenExpiredOrInvalid)
+    ));
+    assert!(matches!(
+        check_user_token(&pool, i64::MAX, ver).await,
+        Err(AppError::UserNotFound)
+    ));
+    sqlx::query("UPDATE users SET status = 'banned' WHERE id = ?")
+        .bind(other_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(matches!(
+        check_user_token(&pool, other_id, ver).await,
+        Err(AppError::UserBanned)
+    ));
+
+    println!("\n===== Access check helper tests passed! =====");
+}

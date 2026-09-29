@@ -174,7 +174,7 @@ fn check_epub_entry_sizes(data: &[u8], max_entry_bytes: u64) -> Result<(), AppEr
         let copied = std::io::copy(&mut limited, &mut std::io::sink())
             .map_err(|e| AppError::Internal(format!("EPUB entry decompress failed: {e}")))?;
         if copied > max_entry_bytes {
-            return Err(AppError::FileTooLarge);
+            return Err(AppError::EpubContentTooLarge);
         }
     }
     Ok(())
@@ -257,7 +257,7 @@ fn parse_epub_with_limits(
                 total_chars += text.chars().count();
                 // 拼接全文超过字符数上限：视为炸弹/异常文件，拒绝入库
                 if total_chars > max_total_chars {
-                    return Err(AppError::FileTooLarge);
+                    return Err(AppError::EpubContentTooLarge);
                 }
                 full_text.push_str(&text);
             }

@@ -25,6 +25,7 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use crate::{
+    access::check_user_token,
     app::AppState,
     auth::verify_token,
     error::AppError,
@@ -67,30 +68,9 @@ pub async fn ws_handler(
     let user_id: i64 = claims.sub.parse().map_err(|_| AppError::InvalidUserId)?;
 
     // 复用 AuthUser 的鉴权逻辑：验证用户存在、token 版本号、封禁状态
-    check_user_valid(&state.db, user_id, claims.ver).await?;
+    check_user_token(&state.db, user_id, claims.ver).await?;
 
     Ok(ws.on_upgrade(move |socket| handle_socket(socket, user_id, claims.ver, state)))
-}
-
-/// 校验用户存在、token 版本号匹配、未被封禁；握手鉴权与周期重验共用
-async fn check_user_valid(
-    db: &sqlx::Pool<sqlx::Sqlite>,
-    user_id: i64,
-    token_version: i64,
-) -> Result<(), AppError> {
-    let user = sqlx::query!(
-        "SELECT token_version, status FROM users WHERE id = ?",
-        user_id
-    )
-    .fetch_optional(db)
-    .await?;
-
-    match user {
-        None => Err(AppError::UserNotFound),
-        Some(row) if row.token_version != token_version => Err(AppError::TokenExpiredOrInvalid),
-        Some(row) if row.status == "banned" => Err(AppError::UserBanned),
-        Some(_) => Ok(()),
-    }
 }
 
 /// 单个连接的会话状态：本连接持有的所有订阅 key
@@ -229,7 +209,7 @@ async fn handle_socket(
 
             // 周期重验用户状态：banned / token_version 变化（改密、重置）/ 删号 → 断开
             _ = revalidate_interval.tick() => {
-                if let Err(e) = check_user_valid(&state.db, user_id, token_version).await {
+                if let Err(e) = check_user_token(&state.db, user_id, token_version).await {
                     info!(user_id, error = %e, "ws revalidation failed, closing");
                     break;
                 }

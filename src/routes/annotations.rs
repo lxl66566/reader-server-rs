@@ -9,6 +9,7 @@ use chrono::{SecondsFormat, Utc};
 use sqlx::{Pool, Sqlite};
 
 use crate::{
+    access::check_book_access,
     auth::AuthUser,
     error::{ApiResponse, AppError},
     models::{
@@ -77,23 +78,6 @@ async fn broadcast_annotation_changed(
     .await;
 }
 
-/// 检查用户对书籍的访问权限（所有者或公开书），失败返回对应 `AppError`
-async fn check_book_access(
-    pool: &Pool<Sqlite>,
-    auth: &AuthUser,
-    book_id: i64,
-) -> Result<(), AppError> {
-    let book = sqlx::query!("SELECT user_id, is_public FROM books WHERE id = ?", book_id)
-        .fetch_optional(pool)
-        .await?
-        .ok_or(AppError::BookNotFound)?;
-
-    if book.user_id != auth.user_id && !book.is_public {
-        return Err(AppError::BookAccessDenied);
-    }
-    Ok(())
-}
-
 // ============ 书签 ============
 
 pub async fn list_bookmarks(
@@ -101,7 +85,7 @@ pub async fn list_bookmarks(
     State(pool): State<Pool<Sqlite>>,
     Path(book_id): Path<i64>,
 ) -> Result<Json<ApiResponse<ListBookmarksResponse>>, AppError> {
-    check_book_access(&pool, &auth, book_id).await?;
+    check_book_access(&pool, auth.user_id, book_id).await?;
 
     let bookmarks = sqlx::query_as::<_, Bookmark>(
         "SELECT * FROM bookmarks WHERE user_id = ? AND book_id = ? ORDER BY percent ASC, id ASC",
@@ -128,7 +112,7 @@ pub async fn create_bookmark(
         return Err(AppError::EmptyLocator);
     }
     validate_percent(req.percent)?;
-    check_book_access(&pool, &auth, book_id).await?;
+    check_book_access(&pool, auth.user_id, book_id).await?;
 
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     let id = sqlx::query!(
@@ -204,7 +188,7 @@ pub async fn list_annotations(
     State(pool): State<Pool<Sqlite>>,
     Path(book_id): Path<i64>,
 ) -> Result<Json<ApiResponse<ListAnnotationsResponse>>, AppError> {
-    check_book_access(&pool, &auth, book_id).await?;
+    check_book_access(&pool, auth.user_id, book_id).await?;
 
     let annotations = sqlx::query_as::<_, Annotation>(
         "SELECT * FROM annotations WHERE user_id = ? AND book_id = ? ORDER BY start_percent ASC, \
@@ -249,7 +233,7 @@ pub async fn create_annotation(
         validate_percent(ep)?;
     }
 
-    check_book_access(&pool, &auth, book_id).await?;
+    check_book_access(&pool, auth.user_id, book_id).await?;
 
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     let id = sqlx::query!(

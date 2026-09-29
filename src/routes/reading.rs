@@ -9,6 +9,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use sqlx::{Pool, Sqlite};
 
 use crate::{
+    access::check_book_access,
     auth::AuthUser,
     error::{ApiResponse, AppError},
     models::{
@@ -288,16 +289,8 @@ pub async fn process_heartbeat_logic(
         return Err(AppError::InvalidPercent);
     }
 
-    // 检查书籍是否存在
-    let book = sqlx::query!("SELECT user_id, is_public FROM books WHERE id = ?", book_id)
-        .fetch_optional(pool)
-        .await?
-        .ok_or_else(|| AppError::BookNotFound)?;
-
-    // 检查权限
-    if book.user_id != user_id && !book.is_public {
-        return Err(AppError::BookAccessDenied);
-    }
+    // 检查书籍存在性与读权限（所有者或公开书）
+    check_book_access(pool, user_id, book_id).await?;
 
     // 获取当前进度
     let progress = sqlx::query!(
