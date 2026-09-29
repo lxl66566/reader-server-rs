@@ -4,10 +4,11 @@
 
 | HTTP status | 触发场景（典型） |
 |---|---|
-| 400 | 参数校验失败（用户名长度、密码长度、邀请码、上传文件格式/大小、批注范围、locator 为空、percent 越界、无效时区、无效搜索 scope、对非 txt 书调用 `/content` 等） |
+| 400 | 参数校验失败（用户名格式、密码长度、邀请码、上传文件格式/大小、批注范围、locator 为空、percent 越界、无效时区、无效搜索 scope、对非 txt 书调用 `/content` 等） |
 | 401 | 未登录 / token 过期 / 账户被锁定 / 账户被ban / token 角色不匹配 |
 | 403 | 无权限访问 / 修改 / 删除目标资源（如非 owner 操作他人书） |
 | 404 | 资源不存在（书 / 章节 / 用户 / 书签 / 批注 / 管理员 / 书籍原文件在磁盘上丢失） |
+| 413 | 请求体超过大小上限（`storage.max_file_size` + multipart 开销，默认约 50MB） |
 | 429 | 限流（按 IP，默认 10 rps / burst 30） |
 | 500 | 数据库 / IO / 内部错误（响应文案统一为 "Internal server error"，详情见服务端日志） |
 
@@ -93,6 +94,8 @@ type Annotation = {
 | GET | /health | - | - | 文本 "ok" |
 | POST | /api/v1/auth/register | - | Body: { username: string; password: string; invite_code?: string } | { user_id: number; username: string; token: string } |
 
+> 用户名规则：2-20 个字符，仅限中英文/字母/数字/`_`/`-`；注册、管理员 setup 与新增管理员均校验，不满足返回 400。
+
 > 全局按客户端 IP 维度限流，默认 10 rps / burst 30；超限返回 429。
 > `/health` 与带 If-None-Match 命中的请求不消耗带宽。
 | POST | /api/v1/auth/login | - | Body: { username: string; password: string } | { user_id: number; username: string; token: string } |
@@ -120,12 +123,13 @@ type Annotation = {
 | GET | /api/v1/admin/admins | Admin | - | { admins: AdminItem[] } |
 | POST | /api/v1/admin/admins | Admin | Body: { username: string; password: string } | {} |
 | GET | /api/v1/admin/audit_logs?page=number&limit=number | Admin | - | { total: number; logs: AuditLogItem[] } |
-| GET | /api/v1/admin/backup | Admin | - | application/zip 流，包含 reader.db（已 WAL checkpoint）+ 整个 books 目录（不压缩），用于全局灾难恢复 |
+| GET | /api/v1/admin/backup | Admin | - | application/zip 流，包含 reader.db（`VACUUM INTO` 生成的一致性快照）+ 整个 books 目录（不压缩），用于全局灾难恢复；任何文件缺失/读取失败会整体返回 500 而不是产出残缺备份 |
 
 ### 书籍管理
 
-> 文件大小上限默认 50MB（可在 config.json 的 `storage.max_file_size` 调整）。
+> 文件大小上限默认 50MB（可在 config.json 的 `storage.max_file_size` 调整）；超过请求体上限返回 413，超过文件大小校验返回 400。
 > 上传时服务端基于内容签名（`%PDF-`、zip magic、UTF-8 解码）自动识别格式，不依赖客户端扩展名。
+> 分页接口（`/books`、`/books/public`、`/books/search`、`/admin/audit_logs`）：`page` 小于 1 按第一页处理；`limit` 有上限（书籍列表 50、审计日志 100），超限自动钳制。
 
 | 方法 | URL | 权限 | 请求参数 | 响应 data |
 |---|---|---|---|---|

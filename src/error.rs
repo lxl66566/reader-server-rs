@@ -121,7 +121,9 @@ pub enum AppError {
     #[error("File cannot be empty")]
     FileEmpty,
 
-    #[error("File size must not exceed 50MB")]
+    // 不硬编码具体数值：实际上限由 storage.max_file_size 配置决定，
+    // 且该错误同时复用于 epub 解压上限等非上传场景
+    #[error("File size exceeds the allowed limit")]
     FileTooLarge,
 
     #[error("Request body too large")]

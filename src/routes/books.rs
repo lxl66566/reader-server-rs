@@ -36,6 +36,17 @@ pub struct PaginationParams {
     pub limit: Option<u32>,
 }
 
+impl PaginationParams {
+    /// 归一化分页参数，返回可直接用于 SQL 的 `(limit, offset)`。
+    /// page 最小为 1（避免 `(page - 1)` u32 下溢），limit 钳制在 `[1, max_limit]`
+    /// （避免无上限拉取全表）；offset 先转 i64 再乘，避免 u32 乘法溢出。
+    pub fn normalize(&self, default_limit: u32, max_limit: u32) -> (u32, i64) {
+        let page = self.page.unwrap_or(1).max(1);
+        let limit = self.limit.unwrap_or(default_limit).clamp(1, max_limit);
+        (limit, i64::from(page - 1) * i64::from(limit))
+    }
+}
+
 // 获取内容查询参数（仅 txt 格式有意义）
 #[derive(Debug, Deserialize)]
 pub struct ContentParams {
@@ -268,8 +279,12 @@ async fn upload_book(
     file.flush().await.map_err(AppError::Io)?;
     drop(file); // 确保文件句柄关闭
 
-    // 将书籍信息和章节写入数据库；失败时清理已写入的文件，避免孤儿文件
+    // 将书籍信息和章节写入数据库；失败时清理已写入的文件，避免孤儿文件。
+    // books + chapters + reading_progress 放进同一事务：任一步失败整体回滚，
+    // 避免残留的孤儿 books 行（参照 delete_book 的事务用法）
     let db_result: Result<(i64, Vec<ChapterResponse>), AppError> = async {
+        let mut tx = pool.begin().await?;
+
         let book_id = sqlx::query!(
             "INSERT INTO books (user_id, title, author, file_path, is_public, total_chars, \
              total_pages, format, content_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -283,7 +298,7 @@ async fn upload_book(
             format,
             content_hash,
         )
-        .execute(&pool)
+        .execute(&mut *tx)
         .await?
         .last_insert_rowid();
 
@@ -298,7 +313,7 @@ async fn upload_book(
                     .push_bind(title.clone())
                     .push_bind(*position);
             });
-            let result = chapter_qb.build().execute(&pool).await?;
+            let result = chapter_qb.build().execute(&mut *tx).await?;
 
             // SQLite 多行 INSERT 的 rowid 连续递增
             #[allow(clippy::cast_sign_loss, clippy::cast_possible_wrap)]
@@ -323,8 +338,10 @@ async fn upload_book(
             auth.user_id,
             book_id
         )
-        .execute(&pool)
+        .execute(&mut *tx)
         .await?;
+
+        tx.commit().await?;
 
         Ok((book_id, chapter_responses))
     }
@@ -359,10 +376,8 @@ async fn list_books(
     State(pool): State<Pool<Sqlite>>,
     Query(params): Query<PaginationParams>,
 ) -> Result<Json<ApiResponse<BookListResponse>>, AppError> {
-    // 解析分页参数
-    let page = params.page.unwrap_or(1);
-    let limit = params.limit.unwrap_or(10);
-    let offset = (page - 1) * limit;
+    // 归一化分页参数：page 最小为 1，limit 上限 50
+    let (limit, offset) = params.normalize(10, 50);
 
     // 获取总数
     let total = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM books WHERE user_id = ?")
@@ -648,13 +663,13 @@ async fn download_book_file(
     // inline 让浏览器内联展示（pdf 可直接预览，epub 会被下载）
     let disposition = format!("inline; filename=\"book_{book_id}.{}\"", format.ext());
 
-    Ok(Response::builder()
+    Response::builder()
         .header(header::CONTENT_TYPE, format.mime_type())
         .header(header::ETAG, etag.as_str())
         .header(header::CONTENT_DISPOSITION, disposition)
         .header(header::CACHE_CONTROL, "private, no-cache")
         .body(Body::from(bytes))
-        .unwrap())
+        .map_err(|e| AppError::Internal(format!("failed to build download response: {e}")))
 }
 
 // 获取书籍内容（仅 txt 格式）
@@ -846,10 +861,8 @@ async fn list_public_books(
     State(pool): State<Pool<Sqlite>>,
     Query(params): Query<PaginationParams>,
 ) -> Result<Json<ApiResponse<PublicBookListResponse>>, AppError> {
-    // 解析分页参数
-    let page = params.page.unwrap_or(1);
-    let limit = params.limit.unwrap_or(10);
-    let offset = (page - 1) * limit;
+    // 归一化分页参数：page 最小为 1，limit 上限 50
+    let (limit, offset) = params.normalize(10, 50);
 
     // 获取总数
     let total = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM books WHERE is_public = 1")
