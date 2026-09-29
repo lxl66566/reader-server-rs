@@ -152,15 +152,56 @@ pub struct EpubParseResult {
     pub author: Option<String>,
 }
 
+/// EPUB 单个 zip 条目（章节 HTML 等）解压后的字节数上限，防御 zip 炸弹
+const MAX_EPUB_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
+
+/// EPUB 解析后拼接全文的字符数上限（20M 字符，远超正常书籍体量）
+const MAX_EPUB_TOTAL_CHARS: usize = 20_000_000;
+
+/// 检查 epub（zip）每个条目的真实解压大小，超限直接拒绝。
+/// 采用流式截断读取计数，不依赖 zip 头中可被伪造的声明大小。
+fn check_epub_entry_sizes(data: &[u8], max_entry_bytes: u64) -> Result<(), AppError> {
+    use std::io::Read as _;
+
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(data))
+        .map_err(|e| AppError::Internal(format!("EPUB zip reading failed: {e}")))?;
+    for i in 0..archive.len() {
+        let entry = archive
+            .by_index(i)
+            .map_err(|e| AppError::Internal(format!("EPUB zip entry reading failed: {e}")))?;
+        // 多读 1 字节用于判断是否超限；io::copy 是流式的，不会把超限内容全量载入内存
+        let mut limited = entry.take(max_entry_bytes + 1);
+        let copied = std::io::copy(&mut limited, &mut std::io::sink())
+            .map_err(|e| AppError::Internal(format!("EPUB entry decompress failed: {e}")))?;
+        if copied > max_entry_bytes {
+            return Err(AppError::FileTooLarge);
+        }
+    }
+    Ok(())
+}
+
 /// 从 EPUB 字节数据中提取章节列表与拼接全文
 ///
 /// 设计：
 /// - 章节顺序按 spine 排列（与 epub.js / foliate 等渲染器一致）
 /// - 每个章节的 `char_offset` 是拼接全文的字符偏移，仅供服务端搜索/边界使用
 /// - `spine_index` 是前端 `EpubCFI` / 渲染时的章节序号
+/// - 防御 zip 炸弹：单条目解压大小与全文总字符数均有上限，超限拒绝
 pub fn parse_epub(data: &[u8]) -> Result<EpubParseResult, AppError> {
+    parse_epub_with_limits(data, MAX_EPUB_ENTRY_BYTES, MAX_EPUB_TOTAL_CHARS)
+}
+
+/// 可参数化上限的内部实现，便于单测构造超小上限验证拒绝逻辑
+fn parse_epub_with_limits(
+    data: &[u8],
+    max_entry_bytes: u64,
+    max_total_chars: usize,
+) -> Result<EpubParseResult, AppError> {
     use epub::doc::EpubDoc;
     use scraper::{Html, Selector};
+
+    // 先拒绝包含超大解压条目的炸弹文件，再交给 epub crate 解析
+    check_epub_entry_sizes(data, max_entry_bytes)?;
 
     let mut doc = EpubDoc::from_reader(std::io::Cursor::new(data))
         .map_err(|e| AppError::Internal(format!("EPUB parsing failed: {e}")))?;
@@ -176,6 +217,8 @@ pub fn parse_epub(data: &[u8]) -> Result<EpubParseResult, AppError> {
     let num_chapters = doc.get_num_chapters();
     let mut full_text = String::new();
     let mut chapters: Vec<EpubChapter> = Vec::new();
+    // 全文累计字符数（含拼接换行符），用于章节偏移与总量上限检查
+    let mut total_chars: usize = 0;
 
     for i in 0..num_chapters {
         doc.set_current_chapter(i);
@@ -195,7 +238,7 @@ pub fn parse_epub(data: &[u8]) -> Result<EpubParseResult, AppError> {
             .unwrap_or_else(|| format!("Chapter {}", i + 1));
 
         #[allow(clippy::cast_possible_wrap)]
-        let char_offset = full_text.chars().count() as i64;
+        let char_offset = total_chars as i64;
         chapters.push(EpubChapter {
             title: chapter_title,
             #[allow(clippy::cast_possible_wrap)]
@@ -209,6 +252,12 @@ pub fn parse_epub(data: &[u8]) -> Result<EpubParseResult, AppError> {
             if !text.is_empty() {
                 if !full_text.is_empty() {
                     full_text.push('\n');
+                    total_chars += 1;
+                }
+                total_chars += text.chars().count();
+                // 拼接全文超过字符数上限：视为炸弹/异常文件，拒绝入库
+                if total_chars > max_total_chars {
+                    return Err(AppError::FileTooLarge);
                 }
                 full_text.push_str(&text);
             }
@@ -409,6 +458,7 @@ mod tests {
         assert_eq!(chapters.len(), 2);
         assert_offsets_point_to_titles(content, &chapters);
     }
+
     /// 构造一个最小可用的 EPUB（zip）用于测试；chapter_html 为单章正文 HTML
     fn build_test_epub(chapter_html: &str) -> Vec<u8> {
         use std::io::Write as _;
@@ -467,5 +517,32 @@ mod tests {
         assert_eq!(result.chapters.len(), 1);
         assert_eq!(result.chapters[0].title, "第一章 开始");
         assert!(result.text_content.contains("第一段内容"));
+    }
+
+    #[test]
+    fn parse_epub_rejects_oversized_entry() {
+        // 单条目解压后超过 max_entry_bytes：拒绝
+        let big_body = "x".repeat(8192);
+        let epub_data = build_test_epub(&format!(
+            r#"<html xmlns="http://www.w3.org/1999/xhtml"><body><p>{big_body}</p></body></html>"#
+        ));
+        let result = parse_epub_with_limits(&epub_data, 1024, MAX_EPUB_TOTAL_CHARS);
+        assert!(result.is_err());
+        // 放宽条目上限后应可正常解析（拒绝确实由条目大小触发）
+        assert!(parse_epub_with_limits(&epub_data, 1024 * 1024, MAX_EPUB_TOTAL_CHARS).is_ok());
+    }
+
+    #[test]
+    fn parse_epub_rejects_excessive_total_chars() {
+        // 拼接全文字符数超过 max_total_chars：拒绝
+        let epub_data = build_test_epub(
+            r#"<html xmlns="http://www.w3.org/1999/xhtml"><body>
+<h1>第一章</h1><p>这是一段足够长的中文文本用于触发字符数上限检查</p>
+</body></html>"#,
+        );
+        let result = parse_epub_with_limits(&epub_data, MAX_EPUB_ENTRY_BYTES, 10);
+        assert!(result.is_err());
+        // 上限放宽后应可正常解析
+        assert!(parse_epub_with_limits(&epub_data, MAX_EPUB_ENTRY_BYTES, usize::MAX).is_ok());
     }
 }
