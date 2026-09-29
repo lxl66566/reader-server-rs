@@ -15,7 +15,11 @@ import {
 import { LoadErrorPanel } from '../components/LoadErrorPanel';
 import { useI18n } from '../i18n';
 import { fontFamilyCss, useSettings } from '../stores/settings';
-import { loadChineseConverter, toSimplified } from '../utils/opencc';
+import {
+  convertChinese,
+  convertDirection,
+  loadChineseConverter,
+} from '../utils/opencc';
 import { measureCharsPerPage, type PageTypography } from './measure';
 import { TextSource, TXT_CHUNK_SIZE } from './textSource';
 import type { FormatReaderProps } from './types';
@@ -57,15 +61,19 @@ const TxtReader = (props: FormatReaderProps) => {
     return Math.floor(props.book.percent * props.book.total_chars);
   }
 
-  // --- simplified-chinese display conversion (offsets stay on the original) ---
-  const [converterReady, setConverterReady] = createSignal(false);
+  // --- script conversion: t2s or s2t per setting (offsets stay on the original) ---
+  // 转换器加载完成后 bump 版本号，触发文本重算
+  const [converterVersion, setConverterVersion] = createSignal(0);
   createEffect(() => {
-    if (settings.simplified_chinese && !converterReady()) {
-      void loadChineseConverter().then(() => setConverterReady(true));
-    }
+    const direction = convertDirection(settings.simplified_chinese);
+    void loadChineseConverter(direction).then(() =>
+      setConverterVersion(v => v + 1),
+    );
   });
-  const displayText = (text: string) =>
-    settings.simplified_chinese && converterReady() ? toSimplified(text) : text;
+  const displayText = (text: string) => {
+    converterVersion();
+    return convertChinese(text, convertDirection(settings.simplified_chinese));
+  };
 
   const typography = createMemo((): PageTypography => {
     const family = fontFamilyCss(settings.font_family);

@@ -16,7 +16,12 @@ import { bookApi } from '../api';
 import { LoadErrorPanel } from '../components/LoadErrorPanel';
 import { Spinner } from '../components/ui';
 import { fontFamilyCss, useSettings } from '../stores/settings';
-import { loadChineseConverter, toSimplified } from '../utils/opencc';
+import {
+  type ConvertDirection,
+  convertChinese,
+  convertDirection,
+  loadChineseConverter,
+} from '../utils/opencc';
 import type { FormatReaderProps } from './types';
 
 const TAP_MAX_MS = 250;
@@ -196,31 +201,61 @@ const EpubReader = (props: FormatReaderProps) => {
   function registerContentHooks(): void {
     if (!rendition) return;
     rendition.hooks.content.register((contents: { document: Document }) => {
-      if (settings.simplified_chinese) {
-        void loadChineseConverter().then(() => {
-          convertTree(contents.document);
-        });
-      }
+      void loadChineseConverter(
+        convertDirection(settings.simplified_chinese),
+      ).then(() => {
+        if (!rendition) return;
+        // 应用时重新读当前设置，避免加载期间切换方向后应用了过期方向
+        convertTree(
+          contents.document,
+          convertDirection(settings.simplified_chinese),
+        );
+      });
       attachGestures(contents.document);
     });
   }
 
-  // re-render sections when the conversion toggle flips
-  createEffect(() => {
-    const enabled = settings.simplified_chinese;
-    if (!rendition || !ready()) return;
-    if (enabled) void loadChineseConverter();
-    const current = lastCfi;
-    rendition.clear();
-    rendition.start();
-    if (current) void displaySafe(current);
-  });
+  // 切换简繁：对已渲染的 iframe 文档就地还原原文再按新方向转换，
+  // 不销毁 rendition，避免 clear()+start() 造成的白屏闪烁
+  createEffect(
+    on(
+      () => settings.simplified_chinese,
+      simplified => {
+        if (!rendition || !ready()) return;
+        const direction = convertDirection(simplified);
+        void loadChineseConverter(direction).then(() => {
+          for (const view of rendition?.views() ?? []) {
+            // epub.js 的 View 类型未暴露 contents，但运行时存在
+            const doc = (view as { contents?: { document?: Document } })
+              .contents?.document;
+            if (doc?.body) convertTree(doc, direction);
+          }
+        });
+      },
+      { defer: true },
+    ),
+  );
 
-  function convertTree(doc: Document): void {
+  // 每个文档首次转换前缓存原文文本节点：来回切换时始终从原文出发，
+  // 避免 s2t/t2s 叠加转换造成文字劣化
+  const originalTexts = new WeakMap<Document, Map<Text, string>>();
+
+  function convertTree(doc: Document, direction: ConvertDirection): void {
+    let originals = originalTexts.get(doc);
+    if (!originals) {
+      originals = new Map();
+      originalTexts.set(doc, originals);
+    }
     const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
     let node = walker.nextNode();
     while (node) {
-      node.textContent = toSimplified(node.textContent ?? '');
+      const textNode = node as Text;
+      if (!originals.has(textNode))
+        originals.set(textNode, textNode.textContent);
+      textNode.textContent = convertChinese(
+        originals.get(textNode) ?? '',
+        direction,
+      );
       node = walker.nextNode();
     }
   }
