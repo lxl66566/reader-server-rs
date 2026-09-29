@@ -4,6 +4,7 @@ mod auth;
 mod config;
 mod db;
 mod error;
+mod frontend;
 mod models;
 mod routes;
 mod utils;
@@ -48,6 +49,11 @@ async fn main() -> Result<()> {
     let listener = TcpListener::bind((config.server.host.as_str(), config.server.port)).await?;
     let addr = listener.local_addr()?;
     tracing::info!("server listening on http://{addr}");
+    // debug 构建不内嵌前端，提示走 vite dev server；release 构建访问同一地址即可
+    #[cfg(debug_assertions)]
+    tracing::info!("debug build: frontend not embedded, run `pnpm dev` in frontend/ and visit http://localhost:5173");
+    #[cfg(not(debug_assertions))]
+    tracing::info!("frontend embedded, visit http://{addr}");
 
     // 启动服务器（必须携带 ConnectInfo，否则限流中间件无法提取客户端 IP）
     axum::serve(

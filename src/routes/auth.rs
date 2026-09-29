@@ -35,11 +35,11 @@ pub fn routes() -> Router<crate::app::AppState> {
         .route("/admin/login", post(admin_login))
 }
 
-// 校验用户名：长度 2-20（按字符计），且只允许中英文/字母/数字/下划线/连字符。
+// 校验用户名：长度 1-20（按字符计），且只允许中英文/字母/数字/下划线/连字符。
 // 必须拒绝空白与控制字符：用户名会进入导出响应的 Content-Disposition 头等位置。
 pub(crate) fn validate_username(username: &str) -> Result<(), AppError> {
     let len = username.chars().count();
-    if !(2..=20).contains(&len) {
+    if !(1..=20).contains(&len) {
         return Err(AppError::UsernameLengthInvalid);
     }
     if !username

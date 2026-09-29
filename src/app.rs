@@ -16,6 +16,7 @@ use tower_http::{
 
 use crate::{
     config::Config,
+    frontend,
     routes::{admin, auth, books, reading},
     ws::manager::ConnectionRegistry,
 };
@@ -84,6 +85,8 @@ pub fn create_app(db: Pool<Sqlite>, config: &Config) -> Router {
     Router::new()
         // 健康检查（不受限流影响，方便监控探活）
         .route("/health", get(|| async { "ok" }))
+        // 前端静态资源兜底（release 嵌入，debug 提示 pnpm dev）
+        .fallback(frontend::fallback)
         // 认证路由
         .nest("/api/v1/auth", auth::routes())
         // 书籍路由

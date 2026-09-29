@@ -80,7 +80,7 @@ pub enum AppError {
     #[error("Invalid search scope; must be one of: mine, public, all")]
     InvalidSearchScope,
 
-    #[error("Username must be between 2 and 20 characters")]
+    #[error("Username must be between 1 and 20 characters")]
     UsernameLengthInvalid,
 
     #[error("Username may only contain letters (including CJK), digits, '_' and '-'")]
