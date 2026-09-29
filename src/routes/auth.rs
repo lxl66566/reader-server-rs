@@ -300,11 +300,6 @@ async fn change_password(
         return Err(AppError::IncorrectOldPassword);
     }
 
-    // 验证新密码
-    // if req.new_password.chars().count() < 6 {
-    //     return Err(AppError::PasswordTooShort);
-    // }
-
     // 哈希新密码
     let new_password_hash = hash_password(&req.new_password)?;
 
@@ -538,11 +533,6 @@ async fn admin_setup(
 ) -> Result<Json<ApiResponse<AdminAuthResponse>>, AppError> {
     // 验证用户名格式（长度 + 字符白名单）
     validate_username(&req.username)?;
-
-    // 验证密码格式
-    // if req.password.chars().count() < 6 {
-    //     return Err(AppError::PasswordTooShort);
-    // }
 
     // 检查是否已有管理员（初始管理员只能设置一次）
     let admin_exists = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM admin)")

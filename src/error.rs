@@ -90,10 +90,6 @@ pub enum AppError {
     #[error("Password cannot be empty")]
     PasswordEmpty,
 
-    #[allow(unused)]
-    #[error("Password must be at least 6 characters")]
-    PasswordTooShort,
-
     #[error("Incorrect old password")]
     IncorrectOldPassword,
 
@@ -212,7 +208,6 @@ impl IntoResponse for AppError {
             AppError::UsernameLengthInvalid
             | AppError::UsernameCharsInvalid
             | AppError::PasswordEmpty
-            | AppError::PasswordTooShort
             | AppError::IncorrectOldPassword
             | AppError::InviteCodeRequired
             | AppError::InviteCodeExhausted
