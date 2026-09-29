@@ -24,6 +24,8 @@ const FLIP_THRESHOLD_PX = 60;
 const TAP_MAX_MS = 250;
 const TAP_MAX_MOVE_PX = 10;
 const PAGE_INDICATOR_SPACE_PX = 28;
+// 分页重测的去抖间隔：拖动滑块时每个 tick 都改排版，停下后才重测
+const MEASURE_DEBOUNCE_MS = 200;
 
 interface Paragraph {
   offset: number;
@@ -198,6 +200,11 @@ const PaginateView = (
   const [loading, setLoading] = createSignal(true);
   const [error, setError] = createSignal(false);
 
+  // 测量代际：只有最新一代的结果允许落地，避免旧参数的重测覆盖新结果
+  let measureGen = 0;
+  // 排版/尺寸变化的去抖定时器（拖动滑块时每个 tick 都会触发）
+  let measureTimer: ReturnType<typeof setTimeout> | undefined;
+
   // gesture state
   const [dx, setDx] = createSignal(0);
   const [shift, setShift] = createSignal(0);
@@ -225,11 +232,14 @@ const PaginateView = (
 
   // 主加载链路：加载样本 chunk 并测量每页字数
   const measure = async () => {
+    const gen = ++measureGen;
     const { height, width } = size();
     const typo = props.typography();
     // untracked: re-measuring on every page turn would loop forever
     const start = untrack(() => Math.max(0, props.offset - TXT_CHUNK_SIZE));
     await props.source.ensureRange(start, start + 2 * TXT_CHUNK_SIZE);
+    // 等待期间已有更新的测量启动，本次结果作废
+    if (gen !== measureGen) return;
     const sample = props.displayText(
       props.source.slice(start, start + 2 * TXT_CHUNK_SIZE),
     );
@@ -261,7 +271,14 @@ const PaginateView = (
     // tracking: converted text changes how much fits a page
     props.displayText('x');
     if (width < 50 || height < 50) return;
-    void measure().catch(onLoadError);
+    // 拖动滑块时每个 tick 都会触发，去抖后只测量最后一组参数
+    clearTimeout(measureTimer);
+    measureTimer = setTimeout(() => {
+      void measure().catch(onLoadError);
+    }, MEASURE_DEBOUNCE_MS);
+  });
+  onCleanup(() => {
+    clearTimeout(measureTimer);
   });
 
   const totalPages = createMemo(() => {
