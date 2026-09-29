@@ -15,7 +15,7 @@ mod tests;
 use std::{net::SocketAddr, path::Path};
 
 use anyhow::Result;
-use tokio::{fs, net::TcpListener};
+use tokio::{fs, net::TcpListener, signal};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
@@ -52,9 +52,37 @@ async fn main() -> Result<()> {
         TcpListener::bind(addr).await?,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
+    .with_graceful_shutdown(shutdown_signal())
     .await?;
 
     Ok(())
+}
+
+/// 等待关闭信号：Ctrl+C 或 Unix SIGTERM（容器/ systemd 停机默认发 SIGTERM）
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C signal handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = ctrl_c => {},
+        () = terminate => {},
+    }
+
+    tracing::info!("shutdown signal received, starting graceful shutdown");
 }
 
 /// 初始化 tracing：根据配置选择滚动策略，同时输出到文件和 stderr
