@@ -279,8 +279,12 @@ async fn upload_book(
     file.flush().await.map_err(AppError::Io)?;
     drop(file); // 确保文件句柄关闭
 
-    // 将书籍信息和章节写入数据库；失败时清理已写入的文件，避免孤儿文件
+    // 将书籍信息和章节写入数据库；失败时清理已写入的文件，避免孤儿文件。
+    // books + chapters + reading_progress 放进同一事务：任一步失败整体回滚，
+    // 避免残留的孤儿 books 行（参照 delete_book 的事务用法）
     let db_result: Result<(i64, Vec<ChapterResponse>), AppError> = async {
+        let mut tx = pool.begin().await?;
+
         let book_id = sqlx::query!(
             "INSERT INTO books (user_id, title, author, file_path, is_public, total_chars, \
              total_pages, format, content_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -294,7 +298,7 @@ async fn upload_book(
             format,
             content_hash,
         )
-        .execute(&pool)
+        .execute(&mut *tx)
         .await?
         .last_insert_rowid();
 
@@ -309,7 +313,7 @@ async fn upload_book(
                     .push_bind(title.clone())
                     .push_bind(*position);
             });
-            let result = chapter_qb.build().execute(&pool).await?;
+            let result = chapter_qb.build().execute(&mut *tx).await?;
 
             // SQLite 多行 INSERT 的 rowid 连续递增
             #[allow(clippy::cast_sign_loss, clippy::cast_possible_wrap)]
@@ -334,8 +338,10 @@ async fn upload_book(
             auth.user_id,
             book_id
         )
-        .execute(&pool)
+        .execute(&mut *tx)
         .await?;
+
+        tx.commit().await?;
 
         Ok((book_id, chapter_responses))
     }
