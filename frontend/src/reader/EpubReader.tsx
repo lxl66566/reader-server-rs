@@ -22,11 +22,8 @@ import {
   convertDirection,
   loadChineseConverter,
 } from '../utils/opencc';
+import { attachTapSwipeGestures } from './gestures';
 import type { FormatReaderProps } from './types';
-
-const TAP_MAX_MS = 250;
-const TAP_MAX_MOVE_PX = 10;
-const FLIP_THRESHOLD_PX = 60;
 
 const EpubReader = (props: FormatReaderProps) => {
   const { settings } = useSettings();
@@ -262,67 +259,16 @@ const EpubReader = (props: FormatReaderProps) => {
 
   // --- gestures: swipe flips a page (paginate mode), tap zones flip/toggle ---
   function attachGestures(doc: Document): void {
-    let start: null | { t: number; x: number; y: number } = null;
-    doc.addEventListener(
-      'touchstart',
-      event => {
-        const t0 = event.touches[0];
-        if (t0) start = { t: Date.now(), x: t0.clientX, y: t0.clientY };
+    attachTapSwipeGestures(doc, {
+      onFlip: dir => {
+        void flip(dir);
       },
-      { passive: true },
-    );
-    // touchend 必须非 passive：手势已消费时要 preventDefault 吞掉随后的合成
-    // click，否则一次轻点会同时走 touch 与 click 两条路径，handleTap 触发两次。
-    // （touchend 阶段的 preventDefault 只抑制合成 click，不影响滚动性能。）
-    doc.addEventListener(
-      'touchend',
-      event => {
-        if (!start) return;
-        const { t, x, y } = start;
-        start = null;
-        const t0 = event.changedTouches[0];
-        if (!t0) return;
-        const deltaX = t0.clientX - x;
-        const deltaY = t0.clientY - y;
-        if (settings.pagination_mode === 'paginate') {
-          if (
-            Math.abs(deltaX) > FLIP_THRESHOLD_PX &&
-            Math.abs(deltaX) > Math.abs(deltaY)
-          ) {
-            event.preventDefault();
-            void flip(deltaX < 0 ? 1 : -1);
-            return;
-          }
-        }
-        if (
-          Date.now() - t < TAP_MAX_MS &&
-          Math.hypot(deltaX, deltaY) < TAP_MAX_MOVE_PX
-        ) {
-          event.preventDefault();
-          handleTap(t0.clientX);
-        }
+      onTapCenter: () => {
+        props.onTapCenter();
       },
-      { passive: false },
-    );
-    doc.addEventListener('click', event => {
-      handleTap(event.clientX);
+      paginate: () => settings.pagination_mode === 'paginate',
+      width: () => container?.clientWidth ?? 1,
     });
-  }
-
-  function handleTap(clientX: number): void {
-    const width = container?.clientWidth ?? 1;
-    const ratio = clientX / width;
-    if (settings.pagination_mode === 'paginate') {
-      if (ratio < 0.33) {
-        void flip(-1);
-        return;
-      }
-      if (ratio > 0.67) {
-        void flip(1);
-        return;
-      }
-    }
-    props.onTapCenter();
   }
 
   async function flip(dir: -1 | 1): Promise<void> {

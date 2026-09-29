@@ -21,6 +21,7 @@ import {
   convertDirection,
   loadChineseConverter,
 } from '../utils/opencc';
+import { isTap, useStripFlip } from './gestures';
 import { measureCharsPerPage, type PageTypography } from './measure';
 import {
   extendWindowDown,
@@ -32,9 +33,6 @@ import {
 } from './textSource';
 import type { FormatReaderProps } from './types';
 
-const FLIP_THRESHOLD_PX = 60;
-const TAP_MAX_MS = 250;
-const TAP_MAX_MOVE_PX = 10;
 const PAGE_INDICATOR_SPACE_PX = 28;
 // 分页重测的去抖间隔：拖动滑块时每个 tick 都改排版，停下后才重测
 const MEASURE_DEBOUNCE_MS = 200;
@@ -266,11 +264,6 @@ const PaginateView = (
   // 排版/尺寸变化的去抖定时器（拖动滑块时每个 tick 都会触发）
   let measureTimer: ReturnType<typeof setTimeout> | undefined;
 
-  // gesture state
-  const [dx, setDx] = createSignal(0);
-  const [shift, setShift] = createSignal(0);
-  const [transitioning, setTransitioning] = createSignal(false);
-
   onMount(() => {
     const observer = new ResizeObserver(entries => {
       const entry = entries[0];
@@ -389,124 +382,19 @@ const PaginateView = (
   const canPrev = () => page() > 0;
   const canNext = () => page() < totalPages() - 1;
 
-  const flip = (dir: -1 | 1) => {
-    if (transitioning()) return;
-    if (dir < 0 && !canPrev()) return;
-    if (dir > 0 && !canNext()) return;
-    setTransitioning(true);
-    setShift(dir);
-  };
-
-  const onTransitionEnd = () => {
-    const moved = shift();
-    // batch: transition disabled before the transform jumps back
-    setTransitioning(false);
-    setShift(0);
-    setDx(0);
-    if (moved !== 0) {
+  // 手势与翻页动画状态（共享 strip 模型）
+  const gestures = useStripFlip({
+    canNext,
+    canPrev,
+    onCommit: dir => {
       const cpp = charsPerPage();
-      const next = page() + moved;
+      const next = page() + dir;
       props.onOffsetChange(Math.min(next * cpp, props.book.total_chars));
-    }
-  };
-
-  const stripTransform = () =>
-    `translateX(calc(${-33.3333 * (1 - shift())}% + ${dx()}px))`;
-
-  // --- touch gestures: horizontal drag flips, tap zones flip / open chrome ---
-  let touch: null | {
-    id: number;
-    moved: boolean;
-    startT: number;
-    startX: number;
-    startY: number;
-  } = null;
-
-  const onTouchStart = (event: TouchEvent) => {
-    const t0 = event.touches[0];
-    if (!t0 || transitioning()) return;
-    touch = {
-      id: t0.identifier,
-      moved: false,
-      startT: Date.now(),
-      startX: t0.clientX,
-      startY: t0.clientY,
-    };
-  };
-
-  const onTouchMove = (event: TouchEvent) => {
-    if (!touch) return;
-    const t0 = [...event.touches].find(x => x.identifier === touch?.id);
-    if (!t0) return;
-    const deltaX = t0.clientX - touch.startX;
-    const deltaY = t0.clientY - touch.startY;
-    if (!touch.moved) {
-      if (
-        Math.abs(deltaX) < TAP_MAX_MOVE_PX &&
-        Math.abs(deltaY) < TAP_MAX_MOVE_PX
-      ) {
-        return;
-      }
-      // vertical-dominant movement is not ours (paginate has no vertical scroll)
-      if (Math.abs(deltaY) > Math.abs(deltaX)) {
-        touch = null;
-        return;
-      }
-      touch.moved = true;
-    }
-    event.preventDefault();
-    let value = deltaX;
-    // resistance at the first/last page
-    if ((value > 0 && !canPrev()) || (value < 0 && !canNext())) value *= 0.3;
-    setDx(value);
-  };
-
-  const onTouchEnd = (event: TouchEvent) => {
-    if (!touch) return;
-    const current = touch;
-    touch = null;
-    // swallow the synthetic click that follows the touch
-    event.preventDefault();
-    if (current.moved) {
-      const distance = dx();
-      if (Math.abs(distance) >= FLIP_THRESHOLD_PX) {
-        flip(distance < 0 ? 1 : -1);
-      } else {
-        // animate the snap back
-        setTransitioning(true);
-        setDx(0);
-      }
-      return;
-    }
-    if (Date.now() - current.startT > TAP_MAX_MS) return;
-    const endX = event.changedTouches[0]?.clientX ?? current.startX;
-    handleTap(endX);
-  };
-
-  const handleTap = (clientX: number) => {
-    if (transitioning()) return;
-    const width = container?.clientWidth ?? 1;
-    const ratio = clientX / width;
-    if (ratio < 0.33) flip(-1);
-    else if (ratio > 0.67) flip(1);
-    else props.onTapCenter();
-  };
-
-  // desktop: click zones + keyboard
-  const onClick = (event: MouseEvent) => {
-    handleTap(event.clientX);
-  };
-
-  const onKeyDown = (event: KeyboardEvent) => {
-    if (event.key === 'ArrowLeft') flip(-1);
-    if (event.key === 'ArrowRight') flip(1);
-  };
-
-  onMount(() => {
-    window.addEventListener('keydown', onKeyDown);
-    onCleanup(() => {
-      window.removeEventListener('keydown', onKeyDown);
-    });
+    },
+    onTapCenter: () => {
+      props.onTapCenter();
+    },
+    width: () => container?.clientWidth ?? 1,
   });
 
   const typo = () => props.typography();
@@ -514,10 +402,10 @@ const PaginateView = (
   return (
     <div
       class="relative mx-auto h-full w-full overflow-hidden"
-      onClick={onClick}
-      onTouchEnd={onTouchEnd}
-      onTouchMove={onTouchMove}
-      onTouchStart={onTouchStart}
+      onClick={gestures.onClick}
+      onTouchEnd={gestures.onTouchEnd}
+      onTouchMove={gestures.onTouchMove}
+      onTouchStart={gestures.onTouchStart}
       ref={container}
       style={{
         'max-width': `${props.readingWidth()}em`,
@@ -528,10 +416,11 @@ const PaginateView = (
         <div
           class="flex h-full"
           classList={{
-            'transition-transform duration-200 ease-out': transitioning(),
+            'transition-transform duration-200 ease-out':
+              gestures.transitioning(),
           }}
-          onTransitionEnd={onTransitionEnd}
-          style={{ transform: stripTransform(), width: '300%' }}
+          onTransitionEnd={gestures.onTransitionEnd}
+          style={{ transform: gestures.stripTransform(), width: '300%' }}
         >
           <Index each={pageTexts()}>
             {text => (
@@ -845,8 +734,7 @@ const ScrollView = (
     if (!downAt) return;
     const { t, x, y } = downAt;
     downAt = null;
-    const moved = Math.hypot(event.clientX - x, event.clientY - y);
-    if (Date.now() - t < TAP_MAX_MS && moved < TAP_MAX_MOVE_PX) {
+    if (isTap(Date.now() - t, event.clientX - x, event.clientY - y)) {
       props.onTapCenter();
     }
   };

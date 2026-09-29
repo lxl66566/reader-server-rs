@@ -7,63 +7,22 @@ import { createSignal, Show, type JSX, type ParentComponent } from 'solid-js';
 import toast from 'solid-toast';
 
 import { ApiError, authApi } from '../api';
-import type { PaginationMode, ThemeMode } from '../api/types';
-import {
-  ColorControl,
-  RangeControl,
-  SelectControl,
-  SettingRow,
-  StepperControl,
-} from '../components/settings/controls';
+import { SelectControl, SettingRow } from '../components/settings/controls';
+import { ReaderSettingRows } from '../components/settings/ReaderSettingRows';
 import { SettingsPreview } from '../components/settings/SettingsPreview';
-import {
-  Button,
-  Input,
-  Modal,
-  SectionCard,
-  Spinner,
-  Toggle,
-} from '../components/ui';
+import { Button, Input, Modal, SectionCard, Spinner } from '../components/ui';
 import { LOCALES, useI18n } from '../i18n';
 import type { DictKey } from '../i18n/zh-CN';
 import { useAuth, useRequireAuth } from '../stores/auth';
-import {
-  FONT_FAMILY_OPTIONS,
-  PAGINATION_OPTIONS,
-  THEME_OPTIONS,
-  useSettings,
-  type FontFamilyOption,
-} from '../stores/settings';
+import { useSettings } from '../stores/settings';
 import { formatDuration } from '../utils/format';
-
-const FONT_LABELS: Record<FontFamilyOption, DictKey> = {
-  default: 'fontDefault',
-  sans: 'fontSans',
-  serif: 'fontSerif',
-};
-
-const THEME_LABELS: Record<ThemeMode, DictKey> = {
-  dark: 'themeDark',
-  light: 'themeLight',
-  sepia: 'themeSepia',
-  system: 'themeSystem',
-};
-
-const PAGINATION_LABELS: Record<PaginationMode, DictKey> = {
-  paginate: 'modePaginate',
-  scroll: 'modeScroll',
-};
-
-// Neutral preset swatches; stored in the DB, not theme-aware.
-const BACKGROUND_PRESETS = ['#201f1b', '#eef1f5', '#f8f1e1', '#faf9f6'];
-const TEXT_PRESETS = ['#2b2a26', '#4a3f2d', '#5b6b8c', '#e8e6e0'];
 
 const Settings = () => {
   useRequireAuth();
   const { locale, setLocale, t } = useI18n();
   const auth = useAuth();
   const navigate = useNavigate();
-  const { settings, update } = useSettings();
+  const { settings } = useSettings();
 
   const showError = (error: unknown, fallback: DictKey) => {
     toast.error(error instanceof ApiError ? error.message : t(fallback));
@@ -154,172 +113,7 @@ const Settings = () => {
       <h1 class="text-lg font-medium">{t('navSettings')}</h1>
 
       <SectionCard title={t('readerSettings')}>
-        <SettingRow
-          label={t('settingsFontSize')}
-          right={
-            <StepperControl
-              max={28}
-              min={12}
-              onChange={value => {
-                update({ font_size: value });
-              }}
-              value={settings.font_size}
-            />
-          }
-        />
-        <SettingRow
-          label={t('settingsLineHeight')}
-          right={
-            <RangeControl
-              max={2.4}
-              min={1.2}
-              onChange={value => {
-                update({ line_height: value });
-              }}
-              step={0.1}
-              value={settings.line_height}
-            />
-          }
-        />
-        <SettingRow
-          label={t('settingsLetterSpacing')}
-          right={
-            <RangeControl
-              max={4}
-              min={0}
-              onChange={value => {
-                update({ letter_spacing: value });
-              }}
-              step={0.5}
-              value={settings.letter_spacing}
-            />
-          }
-        />
-        <SettingRow
-          label={t('settingsParagraphSpacing')}
-          right={
-            <RangeControl
-              max={2}
-              min={0}
-              onChange={value => {
-                update({ paragraph_spacing: value });
-              }}
-              step={0.1}
-              value={settings.paragraph_spacing}
-            />
-          }
-        />
-        <SettingRow
-          label={t('settingsReadingWidth')}
-          right={
-            <RangeControl
-              max={60}
-              min={20}
-              onChange={value => {
-                update({ reading_width: value });
-              }}
-              step={1}
-              unit="em"
-              value={settings.reading_width}
-            />
-          }
-        />
-        <SettingRow
-          label={t('settingsTextIndent')}
-          right={
-            <SelectControl
-              onChange={value => {
-                update({ text_indent: Number(value) });
-              }}
-              options={[
-                { label: t('indentNone'), value: '0' },
-                { label: t('indentOne'), value: '1' },
-                { label: t('indentTwo'), value: '2' },
-              ]}
-              value={String(settings.text_indent)}
-            />
-          }
-        />
-        <SettingRow
-          label={t('settingsFontFamily')}
-          right={
-            <SelectControl
-              onChange={value => {
-                update({ font_family: value });
-              }}
-              options={FONT_FAMILY_OPTIONS.map(option => ({
-                label: t(FONT_LABELS[option]),
-                value: option,
-              }))}
-              value={settings.font_family}
-            />
-          }
-        />
-        <SettingRow
-          label={t('settingsBackground')}
-          right={
-            <ColorControl
-              onChange={value => {
-                update({ background_color: value });
-              }}
-              presets={BACKGROUND_PRESETS}
-              value={settings.background_color}
-            />
-          }
-        />
-        <SettingRow
-          label={t('settingsTextColor')}
-          right={
-            <ColorControl
-              onChange={value => {
-                update({ text_color: value });
-              }}
-              presets={TEXT_PRESETS}
-              value={settings.text_color}
-            />
-          }
-        />
-        <SettingRow
-          label={t('settingsSimplified')}
-          right={
-            <Toggle
-              checked={settings.simplified_chinese}
-              onChange={checked => {
-                update({ simplified_chinese: checked });
-              }}
-            />
-          }
-        />
-        <SettingRow
-          label={t('settingsTheme')}
-          right={
-            <SelectControl
-              onChange={value => {
-                update({ theme: value as ThemeMode });
-              }}
-              options={THEME_OPTIONS.map(option => ({
-                label: t(THEME_LABELS[option]),
-                value: option,
-              }))}
-              value={settings.theme}
-            />
-          }
-        />
-        <SettingRow
-          label={t('settingsPaginationMode')}
-          right={
-            <SelectControl
-              onChange={value => {
-                update({ pagination_mode: value as PaginationMode });
-              }}
-              options={PAGINATION_OPTIONS.map(option => ({
-                label: t(PAGINATION_LABELS[option]),
-                value: option,
-              }))}
-              value={settings.pagination_mode}
-            />
-          }
-        />
+        <ReaderSettingRows withTheme />
       </SectionCard>
 
       <SectionCard title={t('settingsPreview')}>

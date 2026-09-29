@@ -11,8 +11,9 @@ import toast from 'solid-toast';
 
 import { adminApi } from '../../api';
 import { useI18n } from '../../i18n';
+import { toastError } from '../../utils/toast';
 import { Button, SectionCard, Spinner, Toggle } from '../ui';
-import { isUnauthorized, toastError } from './utils';
+import { isUnauthorized } from './utils';
 
 export const SettingsTab: Component<{ onUnauthorized: () => void }> = props => {
   const { t } = useI18n();

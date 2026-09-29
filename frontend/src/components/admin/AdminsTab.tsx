@@ -14,8 +14,9 @@ import { adminApi } from '../../api';
 import type { AdminItem } from '../../api/types';
 import { useI18n } from '../../i18n';
 import { formatDateTime } from '../../utils/format';
+import { toastError } from '../../utils/toast';
 import { Button, EmptyState, Input, SectionCard, Spinner } from '../ui';
-import { isUnauthorized, toastError } from './utils';
+import { isUnauthorized } from './utils';
 
 export const AdminsTab: Component<{ onUnauthorized: () => void }> = props => {
   const { locale, t } = useI18n();

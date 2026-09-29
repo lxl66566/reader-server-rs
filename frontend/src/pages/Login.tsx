@@ -2,13 +2,11 @@
 
 import { A, useNavigate } from '@solidjs/router';
 import { createSignal, Show } from 'solid-js';
-import toast from 'solid-toast';
 
-import { ApiError } from '../api';
 import { Button, Input, Spinner } from '../components/ui';
 import { useI18n } from '../i18n';
-import type { DictKey } from '../i18n/zh-CN';
 import { useAuth } from '../stores/auth';
+import { toastError } from '../utils/toast';
 
 const Login = () => {
   const { t } = useI18n();
@@ -30,7 +28,7 @@ const Login = () => {
       await auth.login(username().trim(), password());
       navigate('/', { replace: true });
     } catch (error) {
-      showError(error, t);
+      toastError(error, t);
     } finally {
       setSubmitting(false);
     }
@@ -71,15 +69,5 @@ const Login = () => {
     </div>
   );
 };
-
-function showError(error: unknown, t: (key: DictKey) => string): void {
-  if (error instanceof ApiError && error.status === 429) {
-    toast.error(t('errorRateLimit'));
-  } else if (error instanceof Error) {
-    toast.error(error.message);
-  } else {
-    toast.error(t('errorGeneric'));
-  }
-}
 
 export default Login;

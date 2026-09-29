@@ -13,9 +13,10 @@ import { adminApi } from '../../api';
 import type { AdminUserItem } from '../../api/types';
 import { useI18n } from '../../i18n';
 import { formatDateTime, formatDuration } from '../../utils/format';
+import { toastError } from '../../utils/toast';
 import { Button, EmptyState, Input, Modal, SectionCard, Spinner } from '../ui';
 import { ConfirmDialog } from './ConfirmDialog';
-import { isUnauthorized, toastError } from './utils';
+import { isUnauthorized } from './utils';
 
 type PendingAction =
   | { kind: 'ban'; user: AdminUserItem }
