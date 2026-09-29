@@ -143,6 +143,8 @@ const en: Dict = {
   readerHighlight: 'Highlight',
   readerNotePlaceholder: 'Write your thoughts…',
   readerPageOf: '{page} / {total}',
+  readerReconnectFailed:
+    'Failed to reach the server, check your network or sign in again',
   readerReconnecting: 'Connection lost, reconnecting…',
   readerSaveNote: 'Save note',
   readerSettings: 'Settings',
