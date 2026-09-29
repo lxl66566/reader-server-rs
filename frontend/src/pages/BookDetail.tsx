@@ -1,6 +1,6 @@
 // Book detail page: parallel metadata, owner management and content tabs.
 import { useNavigate, useParams } from '@solidjs/router';
-import { VsEdit, VsTrash, VsWarning } from 'solid-icons/vs';
+import { VsEdit, VsTrash } from 'solid-icons/vs';
 import { createResource, createSignal, Show, type Component } from 'solid-js';
 
 import { bookApi, markerApi } from '../api';
@@ -13,6 +13,7 @@ import {
   type BookPatch,
 } from '../components/book/EditBookModal';
 import { TagEditor } from '../components/book/TagEditor';
+import { LoadErrorPanel } from '../components/LoadErrorPanel';
 import { Button, SectionCard, Spinner } from '../components/ui';
 import { useI18n } from '../i18n';
 
@@ -171,24 +172,6 @@ function BookView(props: {
         onConfirm={props.onBookDelete}
         open={deleteOpen()}
       />
-    </div>
-  );
-}
-
-function LoadErrorPanel(props: { onBack: () => void; onRetry: () => void }) {
-  const { t } = useI18n();
-  return (
-    <div class="flex flex-col items-center gap-4 py-16">
-      <VsWarning class="text-muted size-8" />
-      <p class="text-muted text-sm">{t('errorLoadFailed')}</p>
-      <div class="flex gap-2">
-        <Button onClick={props.onBack} type="button" variant="ghost">
-          {t('back')}
-        </Button>
-        <Button onClick={props.onRetry} type="button">
-          {t('retry')}
-        </Button>
-      </div>
     </div>
   );
 }

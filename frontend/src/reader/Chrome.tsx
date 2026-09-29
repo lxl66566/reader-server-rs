@@ -15,24 +15,10 @@ import toast from 'solid-toast';
 
 import { markerApi } from '../api';
 import type { Annotation, BookDetail, Bookmark } from '../api/types';
-import {
-  ColorControl,
-  RangeControl,
-  SelectControl,
-  SettingRow,
-  StepperControl,
-} from '../components/settings/controls';
-import {
-  Button,
-  EmptyState,
-  Input,
-  Modal,
-  Spinner,
-  Toggle,
-} from '../components/ui';
+import { ReaderSettingRows } from '../components/settings/ReaderSettingRows';
+import { Button, EmptyState, Input, Modal, Spinner } from '../components/ui';
 import { useI18n } from '../i18n';
 import type { DictKey } from '../i18n/zh-CN';
-import { FONT_FAMILY_OPTIONS, useSettings } from '../stores/settings';
 import { formatPercent } from '../utils/format';
 import type { ReaderNavigator } from './types';
 
@@ -50,9 +36,6 @@ export interface ChromeProps {
 }
 
 type Panel = 'annotations' | 'bookmarks' | 'settings' | 'toc' | null;
-
-const BG_PRESETS = ['#faf9f6', '#f8f1e1', '#201f1b', '#eef1f5'];
-const FG_PRESETS = ['#2b2a26', '#4a3f2d', '#e8e6e0', '#5b6b8c'];
 
 const Chrome = (props: ChromeProps) => {
   const { t } = useI18n();
@@ -492,16 +475,6 @@ const AnnotationsPanel = (panelProps: {
 
 const SettingsPanel = (panelProps: { onClose: () => void; open: boolean }) => {
   const { t } = useI18n();
-  const { settings, update } = useSettings();
-
-  const fontLabel = (option: string): string => {
-    const keys: Record<string, DictKey> = {
-      default: 'fontDefault',
-      sans: 'fontSans',
-      serif: 'fontSerif',
-    };
-    return t(keys[option] ?? 'fontDefault');
-  };
 
   return (
     <Modal
@@ -510,161 +483,7 @@ const SettingsPanel = (panelProps: { onClose: () => void; open: boolean }) => {
       title={t('readerSettings')}
     >
       <div class="max-h-[60vh] overflow-y-auto pr-1">
-        <SettingRow
-          label={t('settingsFontSize')}
-          right={
-            <StepperControl
-              max={28}
-              min={12}
-              onChange={value => {
-                update({ font_size: value });
-              }}
-              value={settings.font_size}
-            />
-          }
-        />
-        <SettingRow
-          label={t('settingsLineHeight')}
-          right={
-            <RangeControl
-              max={2.4}
-              min={1.2}
-              onChange={value => {
-                update({ line_height: value });
-              }}
-              step={0.1}
-              value={settings.line_height}
-            />
-          }
-        />
-        <SettingRow
-          label={t('settingsLetterSpacing')}
-          right={
-            <RangeControl
-              max={4}
-              min={0}
-              onChange={value => {
-                update({ letter_spacing: value });
-              }}
-              step={0.5}
-              unit="px"
-              value={settings.letter_spacing}
-            />
-          }
-        />
-        <SettingRow
-          label={t('settingsParagraphSpacing')}
-          right={
-            <RangeControl
-              max={2}
-              min={0}
-              onChange={value => {
-                update({ paragraph_spacing: value });
-              }}
-              step={0.1}
-              unit="em"
-              value={settings.paragraph_spacing}
-            />
-          }
-        />
-        <SettingRow
-          label={t('settingsReadingWidth')}
-          right={
-            <RangeControl
-              max={60}
-              min={20}
-              onChange={value => {
-                update({ reading_width: value });
-              }}
-              step={1}
-              unit="em"
-              value={settings.reading_width}
-            />
-          }
-        />
-        <SettingRow
-          label={t('settingsTextIndent')}
-          right={
-            <SelectControl
-              onChange={value => {
-                update({ text_indent: Number(value) });
-              }}
-              options={[
-                { label: t('indentNone'), value: '0' },
-                { label: t('indentOne'), value: '1' },
-                { label: t('indentTwo'), value: '2' },
-              ]}
-              value={String(settings.text_indent)}
-            />
-          }
-        />
-        <SettingRow
-          label={t('settingsFontFamily')}
-          right={
-            <SelectControl
-              onChange={value => {
-                update({ font_family: value });
-              }}
-              options={FONT_FAMILY_OPTIONS.map(option => ({
-                label: fontLabel(option),
-                value: option,
-              }))}
-              value={settings.font_family}
-            />
-          }
-        />
-        <SettingRow
-          label={t('settingsBackground')}
-          right={
-            <ColorControl
-              onChange={value => {
-                update({ background_color: value });
-              }}
-              presets={BG_PRESETS}
-              value={settings.background_color}
-            />
-          }
-        />
-        <SettingRow
-          label={t('settingsTextColor')}
-          right={
-            <ColorControl
-              onChange={value => {
-                update({ text_color: value });
-              }}
-              presets={FG_PRESETS}
-              value={settings.text_color}
-            />
-          }
-        />
-        <SettingRow
-          label={t('settingsSimplified')}
-          right={
-            <Toggle
-              checked={settings.simplified_chinese}
-              onChange={checked => {
-                update({ simplified_chinese: checked });
-              }}
-            />
-          }
-        />
-        <SettingRow
-          label={t('settingsPaginationMode')}
-          right={
-            <SelectControl
-              onChange={value => {
-                update({
-                  pagination_mode: value === 'scroll' ? 'scroll' : 'paginate',
-                });
-              }}
-              options={[
-                { label: t('modeScroll'), value: 'scroll' },
-                { label: t('modePaginate'), value: 'paginate' },
-              ]}
-              value={settings.pagination_mode}
-            />
-          }
-        />
+        <ReaderSettingRows />
       </div>
     </Modal>
   );
