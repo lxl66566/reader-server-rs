@@ -134,6 +134,8 @@ pub struct Settings {
 #[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct InviteCode {
     pub id: i64,
+    /// 对外接口与前端统一使用 invite_code（DB 列名仍为 code）
+    #[serde(rename = "invite_code")]
     pub code: String,
     pub limit_times: i64,
     pub used_times: i64,
