@@ -1,6 +1,8 @@
 name: CI
 
 on:
+  push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -30,3 +32,24 @@ jobs:
         run: cargo clippy --all-targets --all-features --locked -- -D warnings
       - name: cargo test
         run: cargo nextest run --all-features --locked --no-tests pass && cargo test --all-features --locked --doc
+
+  frontend:
+    name: frontend verify
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: frontend/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: verify
+        run: pnpm verify
