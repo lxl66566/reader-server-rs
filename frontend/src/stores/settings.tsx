@@ -22,7 +22,7 @@ const FALLBACK: ReadingSettings = {
   pagination_mode: 'paginate',
   paragraph_spacing: 0.8,
   reading_width: 40,
-  simplified_chinese: false,
+  simplified_chinese: true, // 与服务端 schema 默认值（DEFAULT 1）保持一致
   text_color: '#2b2a26',
   text_indent: 2,
   theme: 'system',
