@@ -292,7 +292,7 @@ async fn test_full_integration() {
     .await;
     assert_eq!(resp.status(), StatusCode::OK);
     let json = response_json(resp).await;
-    assert!(!json["data"]["content"].as_str().unwrap().is_empty());
+    assert_ne!(json["data"]["content"].as_str().unwrap(), "");
     assert!(json["data"]["next_position"].as_i64().unwrap() > 0);
 
     // D6: update book (change title + is_public=false)
