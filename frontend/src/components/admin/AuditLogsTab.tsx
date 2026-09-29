@@ -55,7 +55,7 @@ export const AuditLogsTab: Component<{
             {(item: AuditLogItem) => (
               <li class="border-edge bg-base rounded-lg border p-3 text-sm">
                 <div class="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                  <span class="font-medium">{item.admin_username}</span>
+                  <span class="font-medium">{item.admin_username ?? '—'}</span>
                   <span class="text-muted">
                     {formatDateTime(item.created_at, locale())}
                   </span>

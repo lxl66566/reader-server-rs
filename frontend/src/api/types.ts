@@ -41,8 +41,9 @@ export interface ApiResponse<T> {
 
 export interface AuditLogItem {
   action: string;
-  admin_id: number;
-  admin_username: string;
+  // 登录类事件发生在认证之前，无操作管理员，故可空
+  admin_id: null | number;
+  admin_username: null | string;
   created_at: string;
   detail: null | string;
   id: number;
