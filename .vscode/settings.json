@@ -1,0 +1,5 @@
+{
+  "[typescript][typescriptreact][javascript][javascriptreact]": {
+    "editor.defaultFormatter": "oxc.oxc-vscode"
+  }
+}

@@ -173,8 +173,7 @@ const zhCN = {
   settingsParagraphSpacing: '段间距',
   settingsPreview: '预览',
 
-  settingsPreviewText:
-    '阅读是随身携带的避难所。调整上面的选项，这里的文字会实时变化。',
+  settingsPreviewText: '调整上面的选项，这里的文字会实时变化。',
   settingsReadingWidth: '阅读宽度',
   settingsSimplified: '转换为简体',
   settingsTextColor: '文字颜色',

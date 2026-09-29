@@ -177,8 +177,7 @@ const en: Dict = {
   settingsParagraphSpacing: 'Paragraph spacing',
   settingsPreview: 'Preview',
 
-  settingsPreviewText:
-    'Reading is a refuge you carry with you. Tune the options above and this text updates live.',
+  settingsPreviewText: 'Tune the options above and this text updates live.',
   settingsReadingWidth: 'Reading width',
   settingsSimplified: 'Convert to Simplified Chinese',
   settingsTextColor: 'Text color',

@@ -84,8 +84,8 @@ impl Default for Config {
                 rotation: "daily".to_string(),
             },
             rate_limit: RateLimitConfig {
-                per_second: 10,
-                burst_size: 30,
+                per_second: 20,
+                burst_size: 70,
             },
         }
     }
