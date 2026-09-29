@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { TextSource, TXT_CHUNK_SIZE } from './textSource';
+import {
+  extendWindowDown,
+  extendWindowUp,
+  jumpWindow,
+  MAX_SCROLL_WINDOW_CHUNKS,
+  TextSource,
+  TXT_CHUNK_SIZE,
+} from './textSource';
 
 // fake server: chars are the decimal digits of their position, mod 10
 const TOTAL = TXT_CHUNK_SIZE * 2 + 1234;
@@ -65,5 +72,82 @@ describe('TextSource', () => {
     expect(source.slice(TXT_CHUNK_SIZE - 10, TXT_CHUNK_SIZE + 10)).toBe(
       expected(TXT_CHUNK_SIZE - 10, TXT_CHUNK_SIZE),
     );
+  });
+});
+
+describe('scroll window', () => {
+  const TOTAL_CHUNKS = 30;
+
+  it('extends down freely while under the cap', () => {
+    const win = { end: 3, start: 0 };
+    expect(extendWindowDown(win, TOTAL_CHUNKS, true)).toEqual({
+      end: 4,
+      start: 0,
+    });
+  });
+
+  it('drops the top chunk when growing past the cap', () => {
+    const win = { end: MAX_SCROLL_WINDOW_CHUNKS, start: 0 };
+    expect(extendWindowDown(win, TOTAL_CHUNKS, true)).toEqual({
+      end: MAX_SCROLL_WINDOW_CHUNKS + 1,
+      start: 1,
+    });
+  });
+
+  it('keeps growing past the cap when the top cannot be dropped', () => {
+    const win = { end: MAX_SCROLL_WINDOW_CHUNKS, start: 0 };
+    expect(extendWindowDown(win, TOTAL_CHUNKS, false)).toEqual({
+      end: MAX_SCROLL_WINDOW_CHUNKS + 1,
+      start: 0,
+    });
+  });
+
+  it('clamps at the last chunk of the book', () => {
+    const win = { end: TOTAL_CHUNKS, start: TOTAL_CHUNKS - 3 };
+    expect(extendWindowDown(win, TOTAL_CHUNKS, true)).toEqual({
+      end: TOTAL_CHUNKS,
+      start: TOTAL_CHUNKS - 3,
+    });
+  });
+
+  it('extends up freely while under the cap', () => {
+    const win = { end: 8, start: 5 };
+    expect(extendWindowUp(win, true)).toEqual({ end: 8, start: 4 });
+  });
+
+  it('drops the bottom chunk when growing past the cap', () => {
+    const win = { end: 20, start: 20 - MAX_SCROLL_WINDOW_CHUNKS };
+    expect(extendWindowUp(win, true)).toEqual({
+      end: 19,
+      start: 20 - MAX_SCROLL_WINDOW_CHUNKS - 1,
+    });
+  });
+
+  it('keeps growing past the cap when the bottom cannot be dropped', () => {
+    const win = { end: 20, start: 20 - MAX_SCROLL_WINDOW_CHUNKS };
+    expect(extendWindowUp(win, false)).toEqual({
+      end: 20,
+      start: 20 - MAX_SCROLL_WINDOW_CHUNKS - 1,
+    });
+  });
+
+  it('clamps at the first chunk of the book', () => {
+    const win = { end: 3, start: 0 };
+    expect(extendWindowUp(win, true)).toEqual({ end: 3, start: 0 });
+  });
+
+  it('keeps the window (same reference) when the jump target is inside', () => {
+    const win = { end: 8, start: 5 };
+    expect(jumpWindow(win, 6, TOTAL_CHUNKS)).toBe(win);
+  });
+
+  it('resets the window around a distant jump target', () => {
+    const win = { end: 8, start: 5 };
+    expect(jumpWindow(win, 25, TOTAL_CHUNKS)).toEqual({ end: 26, start: 25 });
+    // 跳到末尾附近时 end 受 totalChunks 约束
+    expect(jumpWindow(win, TOTAL_CHUNKS - 1, TOTAL_CHUNKS)).toEqual({
+      end: TOTAL_CHUNKS,
+      start: TOTAL_CHUNKS - 1,
+    });
   });
 });

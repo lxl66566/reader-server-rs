@@ -5,6 +5,17 @@ import { bookApi } from '../api';
 
 export const TXT_CHUNK_SIZE = 6000;
 
+/** 滚动窗口最多保留的 chunk 数，超出后按滚动方向回收远端，避免 DOM 无界增长 */
+export const MAX_SCROLL_WINDOW_CHUNKS = 9;
+
+/** 滚动模式已加载的 chunk 窗口 [start, end) */
+export interface ScrollWindow {
+  /** 末尾 chunk 索引（exclusive） */
+  end: number;
+  /** 起始 chunk 索引 */
+  start: number;
+}
+
 interface Chunk {
   /** server-reported char offset right after this chunk */
   next: number;
@@ -84,4 +95,50 @@ export class TextSource {
     this.pending.set(at, job);
     return job;
   }
+}
+
+/**
+ * 向下扩展一个 chunk。超过上限且 `canDropTop` 时回收顶部 chunk；
+ * `canDropTop` 为 false（视口仍停留在顶部 chunk）时允许暂时超限。
+ */
+export function extendWindowDown(
+  win: ScrollWindow,
+  totalChunks: number,
+  canDropTop: boolean,
+): ScrollWindow {
+  const end = Math.min(win.end + 1, totalChunks);
+  const start =
+    canDropTop && end - win.start > MAX_SCROLL_WINDOW_CHUNKS
+      ? win.start + 1
+      : win.start;
+  return { end, start };
+}
+
+/**
+ * 向上扩展一个 chunk。超过上限且 `canDropBottom` 时回收底部 chunk；
+ * `canDropBottom` 为 false（视口仍停留在底部 chunk）时允许暂时超限。
+ */
+export function extendWindowUp(
+  win: ScrollWindow,
+  canDropBottom: boolean,
+): ScrollWindow {
+  const start = Math.max(0, win.start - 1);
+  const end =
+    canDropBottom && win.end - start > MAX_SCROLL_WINDOW_CHUNKS
+      ? win.end - 1
+      : win.end;
+  return { end, start };
+}
+
+/**
+ * 跳转时的窗口换算：目标 chunk 已在窗口内则原样返回（保持引用相等），
+ * 否则重置为以目标为起点的窗口，避免远距离跳转把窗口拉得过大。
+ */
+export function jumpWindow(
+  win: ScrollWindow,
+  target: number,
+  totalChunks: number,
+): ScrollWindow {
+  if (target >= win.start && target < win.end) return win;
+  return { end: Math.min(target + 1, totalChunks), start: target };
 }
