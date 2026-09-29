@@ -78,6 +78,7 @@ pub struct Admin {
     pub username: String,
     #[serde(skip_serializing)]
     pub password_hash: String,
+    pub token_version: i64,
     pub created_at: String,
 }
 

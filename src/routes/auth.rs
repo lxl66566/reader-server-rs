@@ -571,8 +571,8 @@ async fn admin_setup(
         .execute(&pool)
         .await?;
 
-    // 生成JWT令牌
-    let claims = Claims::new_admin(admin_id, &config);
+    // 生成JWT令牌（新管理员 token_version 默认为 0）
+    let claims = Claims::new_admin(admin_id, 0, &config);
     let token = create_token(&claims, &config)?;
 
     // 返回管理员令牌
@@ -600,7 +600,7 @@ async fn admin_login(
     }
 
     // 生成JWT令牌
-    let claims = Claims::new_admin(admin.id, &config);
+    let claims = Claims::new_admin(admin.id, admin.token_version, &config);
     let token = create_token(&claims, &config)?;
 
     // 返回管理员令牌

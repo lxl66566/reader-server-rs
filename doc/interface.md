@@ -111,6 +111,7 @@ type Annotation = {
 | 方法 | URL | 权限 | 请求参数 | 响应 data |
 |---|---|---|---|---|
 | GET | /api/v1/admin/check_setup | - | - | { is_setup: boolean } |
+| POST | /api/v1/admin/password | Admin | Body: { old_password: string; new_password: string } | {}；改密后所有旧 admin_token 立即失效 |
 | POST | /api/v1/admin/invite_code | Admin | Body: { limit_times: number; description?: string } | { invite_code: string; limit_times: number; description: string \| null } |
 | GET | /api/v1/admin/invite_codes | Admin | - | { invite_codes: InviteCodeItem[] } |
 | GET | /api/v1/admin/settings | Admin | - | { invite_code_required: boolean } |

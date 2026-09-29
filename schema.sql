@@ -24,6 +24,8 @@ CREATE TABLE
     id INTEGER PRIMARY KEY,
     username TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
+    -- token 版本号：改密时递增，使已签发的旧 admin JWT 立即失效
+    token_version INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (
       strftime (
         '%Y-%m-%dT%H:%M:%S.' || substr (strftime ('%f'), 4, 6) || 'Z'

@@ -1890,3 +1890,79 @@ async fn test_access_check_helpers() {
 
     println!("\n===== Access check helper tests passed! =====");
 }
+
+#[tokio::test]
+async fn test_admin_change_password_revokes_tokens() {
+    let (app, _pool) = setup_test_app().await.unwrap();
+    let (admin_token, _) = setup_admin(&app).await;
+
+    // 改密前 token 可用
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/v1/admin/settings",
+        Body::empty(),
+        Some(&admin_token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 旧密码错误 → 400
+    let resp = make_json_request(
+        &app,
+        Method::POST,
+        "/api/v1/admin/password",
+        &serde_json::json!({"old_password": "wrong", "new_password": "newpass123"}),
+        Some(&admin_token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // 改密成功
+    let resp = make_json_request(
+        &app,
+        Method::POST,
+        "/api/v1/admin/password",
+        &serde_json::json!({"old_password": "admin123", "new_password": "newpass123"}),
+        Some(&admin_token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 旧 admin token 立即失效（token_version 已递增）
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/v1/admin/settings",
+        Body::empty(),
+        Some(&admin_token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // 旧密码登录失败，新密码登录成功且新 token 可用
+    let resp = login_as_admin(&app).await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    let resp = make_json_request(
+        &app,
+        Method::POST,
+        "/api/v1/auth/admin/login",
+        &serde_json::json!({"username": "admin", "password": "newpass123"}),
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = response_json(resp).await;
+    let new_token = json["data"]["admin_token"].as_str().unwrap().to_string();
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/v1/admin/settings",
+        Body::empty(),
+        Some(&new_token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    println!("\n===== Admin change password revocation test passed! =====");
+}
