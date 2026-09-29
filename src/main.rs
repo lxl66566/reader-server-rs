@@ -15,7 +15,7 @@ mod tests;
 use std::{net::SocketAddr, path::Path};
 
 use anyhow::Result;
-use tokio::{fs, net::TcpListener};
+use tokio::{fs, net::TcpListener, signal};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
@@ -42,19 +42,48 @@ async fn main() -> Result<()> {
     // 构建应用
     let app = app::create_app(db_pool, &config);
 
-    // 获取服务地址
-    let addr = SocketAddr::from(([0, 0, 0, 0], config.server.port));
-
-    tracing::info!("服务器启动在 http://{}", addr);
+    // 监听地址取自配置 server.host + server.port（host 支持 IP 或主机名），
+    // 打印实际绑定地址，避免配置与生效行为不一致
+    let listener = TcpListener::bind((config.server.host.as_str(), config.server.port)).await?;
+    let addr = listener.local_addr()?;
+    tracing::info!("server listening on http://{addr}");
 
     // 启动服务器（必须携带 ConnectInfo，否则限流中间件无法提取客户端 IP）
     axum::serve(
-        TcpListener::bind(addr).await?,
+        listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
+    .with_graceful_shutdown(shutdown_signal())
     .await?;
 
     Ok(())
+}
+
+/// 等待关闭信号：Ctrl+C 或 Unix SIGTERM（容器/ systemd 停机默认发 SIGTERM）
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C signal handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = ctrl_c => {},
+        () = terminate => {},
+    }
+
+    tracing::info!("shutdown signal received, starting graceful shutdown");
 }
 
 /// 初始化 tracing：根据配置选择滚动策略，同时输出到文件和 stderr
@@ -62,8 +91,10 @@ async fn main() -> Result<()> {
 fn init_tracing(
     config: &config::Config,
 ) -> Result<Option<tracing_appender::non_blocking::WorkerGuard>> {
+    // 注意：bin target 名为 reader-server，日志过滤的 crate 名应为 reader_server，
+    // 否则本 crate（含启动日志、ws 日志）会被默认级别 ERROR 静默吞掉
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| "reader_server_rs=debug,tower_http=debug,axum=debug".into());
+        .unwrap_or_else(|_| "reader_server=debug,tower_http=debug,axum=debug".into());
 
     let rotation = config.log.rotation.trim().to_ascii_lowercase();
     if rotation == "never" {

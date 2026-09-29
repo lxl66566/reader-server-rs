@@ -29,7 +29,10 @@ use crate::{
     auth::verify_token,
     error::AppError,
     routes::reading::process_heartbeat_logic,
-    ws::protocol::{ClientMessage, ServerMessage},
+    ws::{
+        manager::OUTBOUND_CAPACITY,
+        protocol::{ClientMessage, ServerMessage},
+    },
 };
 
 /// 连接保活：超过该时长收不到任何客户端消息即判定为僵尸连接
@@ -104,14 +107,21 @@ impl Session {
 
 async fn handle_socket(socket: axum::extract::ws::WebSocket, user_id: i64, state: AppState) {
     let (mut sink, mut stream) = socket.split();
-    // 每个连接一个无界通道：广播方 send，主循环 recv 后通过 sink 发出。
-    // UnboundedSender: Clone 后共享队列，因此注册到 registry 时 clone 即可。
-    let (out_tx, mut out_rx) = mpsc::unbounded_channel::<ServerMessage>();
+    // 每个连接一个有界出站队列：广播方 try_send（满则把该订阅驱逐出注册表），
+    // 主循环 recv 后通过 sink 发出。handler 自身回包也用非阻塞 try_send，
+    // 回包失败（队列满 = 对端只收不读）即断开连接，绝不阻塞心跳处理。
+    let (out_tx, mut out_rx) = mpsc::channel::<ServerMessage>(OUTBOUND_CAPACITY);
 
     let mut session = Session::new(user_id);
     let mut ping_interval = tokio::time::interval(PING_INTERVAL);
     // interval 首次 tick 立即完成，跳过避免连接刚建立就发 ping
     ping_interval.tick().await;
+
+    // idle 计时器必须固定在循环外：在 select! 分支里临时构造 sleep 会每轮重建，永不触发。
+    // 仅客户端上行数据帧（Text/Binary）重置计时，服务端自己的 ping/pong 不算活跃证据，
+    // 否则 TCP 半开连接会被服务端 ping 永久保活、泄漏订阅。
+    let idle_sleep = tokio::time::sleep(IDLE_TIMEOUT);
+    tokio::pin!(idle_sleep);
 
     info!(user_id, "ws connected");
 
@@ -121,16 +131,32 @@ async fn handle_socket(socket: axum::extract::ws::WebSocket, user_id: i64, state
             msg = stream.next() => match msg {
                 Some(Ok(m)) => match m {
                     axum::extract::ws::Message::Text(text) => {
-                        handle_text(text.as_str(), &state, &out_tx, &mut session).await;
+                        // 收到上行数据帧，重置 idle 计时
+                        idle_sleep
+                            .as_mut()
+                            .reset(tokio::time::Instant::now() + IDLE_TIMEOUT);
+                        if !handle_text(text.as_str(), &state, &out_tx, &mut session).await {
+                            break;
+                        }
                     }
                     axum::extract::ws::Message::Binary(b) => {
+                        idle_sleep
+                            .as_mut()
+                            .reset(tokio::time::Instant::now() + IDLE_TIMEOUT);
                         // 兼容二进制承载的 JSON
                         match std::str::from_utf8(&b) {
-                            Ok(s) => handle_text(s, &state, &out_tx, &mut session).await,
+                            Ok(s) => {
+                                if !handle_text(s, &state, &out_tx, &mut session).await {
+                                    break;
+                                }
+                            }
                             Err(_) => {
-                                let _ = out_tx.send(ServerMessage::error(
-                                    "binary payload must be valid UTF-8 JSON",
-                                ));
+                                if !reply(
+                                    &out_tx,
+                                    ServerMessage::error("binary payload must be valid UTF-8 JSON"),
+                                ) {
+                                    break;
+                                }
                             }
                         }
                     }
@@ -173,8 +199,8 @@ async fn handle_socket(socket: axum::extract::ws::WebSocket, user_id: i64, state
                 }
             }
 
-            // 长时间无任何上行消息（无心跳、无 pong）→ 视为僵尸连接
-            () = tokio::time::sleep(IDLE_TIMEOUT) => {
+            // 长时间无任何上行数据帧（无心跳、无二进制消息）→ 视为僵尸连接
+            () = &mut idle_sleep => {
                 warn!(user_id, "ws idle timeout, closing");
                 break;
             }
@@ -190,26 +216,28 @@ async fn handle_socket(socket: axum::extract::ws::WebSocket, user_id: i64, state
     info!(user_id, "ws disconnected");
 }
 
-/// 处理一条文本消息：反序列化 → 派发到对应业务
+/// 处理一条文本消息：反序列化 → 派发到对应业务。
+/// 返回 `false` 表示回包失败（对端只收不读），调用方应断开连接。
 async fn handle_text(
     text: &str,
     state: &AppState,
-    out_tx: &mpsc::UnboundedSender<ServerMessage>,
+    out_tx: &mpsc::Sender<ServerMessage>,
     session: &mut Session,
-) {
+) -> bool {
     let msg: ClientMessage = match serde_json::from_str(text) {
         Ok(m) => m,
         Err(e) => {
-            let _ = out_tx.send(ServerMessage::error(format!("invalid message: {e}")));
-            return;
+            return reply(
+                out_tx,
+                ServerMessage::error(format!("invalid message: {e}")),
+            )
         },
     };
 
     match msg {
         ClientMessage::Subscribe { book_id, device_id } => {
             if device_id.trim().is_empty() {
-                let _ = out_tx.send(ServerMessage::error("device_id must not be empty"));
-                return;
+                return reply(out_tx, ServerMessage::error("device_id must not be empty"));
             }
             // 已订阅同书 → 视为重复订阅，先退订再用新 device_id 注册
             // （通常不会发生，但防御性处理）
@@ -220,7 +248,7 @@ async fn handle_text(
             // clone 出一个 sender 给 registry：广播方通过它把消息塞进本连接的接收队列
             state.ws.subscribe(key, out_tx.clone()).await;
             session.subs.insert(book_id, device_id);
-            let _ = out_tx.send(ServerMessage::Subscribed { book_id });
+            reply(out_tx, ServerMessage::Subscribed { book_id })
         },
         ClientMessage::Heartbeat {
             book_id,
@@ -228,10 +256,10 @@ async fn handle_text(
             percent,
         } => {
             let Some(device_id) = session.subs.get(&book_id).cloned() else {
-                let _ = out_tx.send(ServerMessage::error(
-                    "not subscribed to this book; send subscribe first",
-                ));
-                return;
+                return reply(
+                    out_tx,
+                    ServerMessage::error("not subscribed to this book; send subscribe first"),
+                );
             };
             match process_heartbeat_logic(
                 &state.db,
@@ -244,13 +272,15 @@ async fn handle_text(
             .await
             {
                 Ok(result) => {
-                    let _ = out_tx.send(ServerMessage::HeartbeatAck {
+                    if !reply(out_tx, ServerMessage::HeartbeatAck {
                         book_id,
                         synced: result.synced,
                         locator: result.locator.clone(),
                         percent: result.percent,
                         reading_time: result.reading_time,
-                    });
+                    }) {
+                        return false;
+                    }
                     // 仅当进度真正被更新时才广播给其他设备
                     if result.updated {
                         state
@@ -269,10 +299,9 @@ async fn handle_text(
                             )
                             .await;
                     }
+                    true
                 },
-                Err(e) => {
-                    let _ = out_tx.send(ServerMessage::error(e.to_string()));
-                },
+                Err(e) => reply(out_tx, ServerMessage::error(e.to_string())),
             }
         },
         ClientMessage::Unsubscribe { book_id } => {
@@ -280,7 +309,19 @@ async fn handle_text(
                 state.ws.unsubscribe(&key).await;
             }
             session.subs.remove(&book_id);
-            let _ = out_tx.send(ServerMessage::Unsubscribed { book_id });
+            reply(out_tx, ServerMessage::Unsubscribed { book_id })
+        },
+    }
+}
+
+/// 非阻塞回包。返回 `false` 表示队列满（对端只收不读）或通道异常——
+/// 该连接应被断开（其订阅已在注册表中被驱逐或将随断开清理），不能为回包阻塞心跳处理
+fn reply(out_tx: &mpsc::Sender<ServerMessage>, msg: ServerMessage) -> bool {
+    match out_tx.try_send(msg) {
+        Ok(()) => true,
+        Err(e) => {
+            warn!(error = %e, "drop ws outbound message: client queue full or closed");
+            false
         },
     }
 }
