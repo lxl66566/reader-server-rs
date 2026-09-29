@@ -369,8 +369,6 @@ async fn export_data(
     auth: AuthUser,
     State(pool): State<Pool<Sqlite>>,
 ) -> Result<Response, AppError> {
-    use std::io::Write;
-
     let user: User = sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = ?")
         .bind(auth.user_id)
         .fetch_one(&pool)
@@ -463,52 +461,60 @@ async fn export_data(
     let metadata_bytes =
         serde_json::to_vec_pretty(&metadata).map_err(|e| AppError::Internal(e.to_string()))?;
 
-    // 在内存里构建 zip：用户的书通常不多，单用户全量导出可控
-    let mut zip_buf: Vec<u8> = Vec::with_capacity(8 * 1024);
-    {
-        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut zip_buf));
-        let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated);
+    // 在内存里构建 zip：用户的书通常不多，单用户全量导出可控；
+    // 压缩与文件读取是同步阻塞操作，放入 spawn_blocking 避免占用 tokio worker
+    let zip_buf = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, AppError> {
+        use std::io::Write;
 
-        zip.start_file("metadata.json", opts)
-            .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
-        zip.write_all(&metadata_bytes)
-            .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
+        let mut zip_buf: Vec<u8> = Vec::with_capacity(8 * 1024);
+        {
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut zip_buf));
+            let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
 
-        // 把每本书的源文件加入 zip；文件名加序号前缀防止重名
-        for (idx, b) in books.iter().enumerate() {
-            let path = std::path::Path::new(&b.file_path);
-            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("txt");
-            // 文件名做基础净化（去掉路径分隔符）
-            let safe_title: String = b
-                .title
-                .chars()
-                .map(|c| match c {
-                    '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
-                    other => other,
-                })
-                .collect();
-            let entry = format!("{idx:03}_{safe_title}.{ext}");
-            zip.start_file(entry, opts)
+            zip.start_file("metadata.json", opts)
                 .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
-            match tokio::fs::read(&b.file_path).await {
-                Ok(bytes) => {
-                    zip.write_all(&bytes)
-                        .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
-                },
-                Err(e) => {
-                    tracing::warn!(error = %e, file_path = %b.file_path, "skip book file in export");
-                    // 写入一个 README 说明
-                    let note = format!("# 文件读取失败：{e}\n原路径：{}\n", b.file_path);
-                    zip.write_all(note.as_bytes())
-                        .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
-                },
-            }
-        }
+            zip.write_all(&metadata_bytes)
+                .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
 
-        zip.finish()
-            .map_err(|e| AppError::Internal(format!("zip finalize: {e}")))?;
-    }
+            // 把每本书的源文件加入 zip；文件名加序号前缀防止重名
+            for (idx, b) in books.iter().enumerate() {
+                let path = std::path::Path::new(&b.file_path);
+                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("txt");
+                // 文件名做基础净化（去掉路径分隔符）
+                let safe_title: String = b
+                    .title
+                    .chars()
+                    .map(|c| match c {
+                        '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+                        other => other,
+                    })
+                    .collect();
+                let entry = format!("{idx:03}_{safe_title}.{ext}");
+                zip.start_file(entry, opts)
+                    .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
+                match std::fs::read(&b.file_path) {
+                    Ok(bytes) => {
+                        zip.write_all(&bytes)
+                            .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
+                    },
+                    Err(e) => {
+                        tracing::warn!(error = %e, file_path = %b.file_path, "skip book file in export");
+                        // 写入一个 README 说明
+                        let note = format!("# 文件读取失败：{e}\n原路径：{}\n", b.file_path);
+                        zip.write_all(note.as_bytes())
+                            .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
+                    },
+                }
+            }
+
+            zip.finish()
+                .map_err(|e| AppError::Internal(format!("zip finalize: {e}")))?;
+        }
+        Ok(zip_buf)
+    })
+    .await
+    .map_err(|e| AppError::Internal(format!("export task failed: {e}")))??;
 
     let timestamp = Utc::now().format("%Y%m%d_%H%M%S");
     let filename = format!("{}_{timestamp}.zip", user.username);

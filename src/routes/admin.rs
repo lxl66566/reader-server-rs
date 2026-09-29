@@ -471,8 +471,6 @@ async fn backup_global(
     State(pool): State<Pool<Sqlite>>,
     State(config): State<Config>,
 ) -> Result<Response, AppError> {
-    use std::io::Write;
-
     log_audit(&pool, &admin, "backup_global", None, None, None).await?;
 
     // 用 VACUUM INTO 生成数据库一致性快照（SQLite 在线备份）：
@@ -493,58 +491,65 @@ async fn backup_global(
     // 数据库是备份的核心，快照失败必须显式拒绝
     let db_bytes = snapshot_result?;
 
-    let mut zip_buf: Vec<u8> = Vec::new();
-    {
-        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut zip_buf));
-        let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Stored);
+    // zip 压缩与书籍文件读取是同步阻塞操作，放入 spawn_blocking 避免占用 tokio worker
+    let book_dir = config.storage.book_dir.clone();
+    let zip_buf = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, AppError> {
+        use std::io::Write;
 
-        zip.start_file("reader.db", opts)
-            .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
-        zip.write_all(&db_bytes)
-            .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
+        let mut zip_buf: Vec<u8> = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut zip_buf));
+            let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
 
-        // 写入 books 目录所有文件；任何文件读取/写入失败都记录下来，
-        // 最后整体报错拒绝，不让调用方在不知情的情况下拿到残缺备份
-        let book_dir = &config.storage.book_dir;
-        let mut entries = tokio::fs::read_dir(book_dir).await.map_err(AppError::Io)?;
-        let mut failed: Vec<String> = Vec::new();
-        while let Some(entry) = entries.next_entry().await.map_err(AppError::Io)? {
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
+            zip.start_file("reader.db", opts)
+                .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
+            zip.write_all(&db_bytes)
+                .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
+
+            // 写入 books 目录所有文件；任何文件读取/写入失败都记录下来，
+            // 最后整体报错拒绝，不让调用方在不知情的情况下拿到残缺备份
+            let mut failed: Vec<String> = Vec::new();
+            for entry in std::fs::read_dir(&book_dir).map_err(AppError::Io)? {
+                let entry = entry.map_err(AppError::Io)?;
+                let path = entry.path();
+                if !path.is_file() {
+                    continue;
+                }
+                let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+                    failed.push(path.display().to_string());
+                    continue;
+                };
+                let entry_name = format!("books/{name}");
+                let archive_result: Result<(), AppError> = (|| {
+                    let bytes = std::fs::read(&path).map_err(AppError::Io)?;
+                    zip.start_file(&entry_name, opts)
+                        .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
+                    zip.write_all(&bytes)
+                        .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
+                    Ok(())
+                })();
+                if let Err(e) = archive_result {
+                    tracing::error!(error = %e, file = %path.display(), "backup: failed to archive book file");
+                    failed.push(path.display().to_string());
+                }
             }
-            let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
-                failed.push(path.display().to_string());
-                continue;
-            };
-            let entry_name = format!("books/{name}");
-            let archive_result: Result<(), AppError> = async {
-                let bytes = tokio::fs::read(&path).await.map_err(AppError::Io)?;
-                zip.start_file(&entry_name, opts)
-                    .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
-                zip.write_all(&bytes)
-                    .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
-                Ok(())
-            }
-            .await;
-            if let Err(e) = archive_result {
-                tracing::error!(error = %e, file = %path.display(), "backup: failed to archive book file");
-                failed.push(path.display().to_string());
+
+            zip.finish()
+                .map_err(|e| AppError::Internal(format!("zip finalize: {e}")))?;
+
+            if !failed.is_empty() {
+                // 失败详情已记入日志；向客户端只返回固定文案（Internal 的统一行为）
+                return Err(AppError::Internal(format!(
+                    "backup incomplete: {} file(s) failed to archive",
+                    failed.len()
+                )));
             }
         }
-
-        zip.finish()
-            .map_err(|e| AppError::Internal(format!("zip finalize: {e}")))?;
-
-        if !failed.is_empty() {
-            // 失败详情已记入日志；向客户端只返回固定文案（Internal 的统一行为）
-            return Err(AppError::Internal(format!(
-                "backup incomplete: {} file(s) failed to archive",
-                failed.len()
-            )));
-        }
-    }
+        Ok(zip_buf)
+    })
+    .await
+    .map_err(|e| AppError::Internal(format!("backup task failed: {e}")))??;
 
     Ok(finalize_backup(zip_buf))
 }
