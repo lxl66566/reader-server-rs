@@ -1,7 +1,7 @@
 // Reader shell: owns the ws session, heartbeat loop, chrome and dispatches to
 // the per-format reader. Format readers report positions; the shell heartbeats.
 
-import { useParams, useSearchParams } from '@solidjs/router';
+import { useNavigate, useParams, useSearchParams } from '@solidjs/router';
 import {
   createEffect,
   createResource,
@@ -16,6 +16,7 @@ import toast from 'solid-toast';
 
 import { bookApi, markerApi } from '../api';
 import type { BookDetail } from '../api/types';
+import { LoadErrorPanel } from '../components/LoadErrorPanel';
 import { Spinner } from '../components/ui';
 import { useI18n } from '../i18n';
 import Chrome from '../reader/Chrome';
@@ -36,16 +37,39 @@ const ACTIVITY_WINDOW_MS = 60_000;
 const Reader = () => {
   useRequireAuth();
   const params = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const bookId = () => Number(params.id);
+  // 路由参数非法时跳过请求，直接进错误态
+  const invalidId = () => Number.isNaN(bookId());
 
-  const [book] = createResource(bookId, id => bookApi.detail(id));
+  const [book, { refetch }] = createResource(
+    () => (invalidId() ? null : bookId()),
+    id => bookApi.detail(id),
+  );
+  const hasError = () => invalidId() || Boolean(book.error);
 
   return (
     <Show
       fallback={
-        <div class="flex h-dvh items-center justify-center">
-          <Spinner />
-        </div>
+        <Show
+          fallback={
+            <div class="flex h-dvh items-center justify-center">
+              <Spinner />
+            </div>
+          }
+          when={hasError()}
+        >
+          <div class="flex h-dvh items-center justify-center">
+            <LoadErrorPanel
+              onBack={() => {
+                navigate('/');
+              }}
+              onRetry={() => {
+                void refetch();
+              }}
+            />
+          </div>
+        </Show>
       }
       when={book()}
     >

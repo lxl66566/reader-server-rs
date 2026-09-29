@@ -1,5 +1,6 @@
 // TXT reader: chunked loading + scroll / paginate modes + touch gestures.
 
+import { useNavigate } from '@solidjs/router';
 import {
   createEffect,
   createMemo,
@@ -11,6 +12,7 @@ import {
   untrack,
 } from 'solid-js';
 
+import { LoadErrorPanel } from '../components/LoadErrorPanel';
 import { useI18n } from '../i18n';
 import { fontFamilyCss, useSettings } from '../stores/settings';
 import { loadChineseConverter, toSimplified } from '../utils/opencc';
@@ -187,12 +189,14 @@ const PaginateView = (
   },
 ) => {
   const { t } = useI18n();
+  const navigate = useNavigate();
   let container: HTMLDivElement | undefined;
 
   const [size, setSize] = createSignal({ height: 0, width: 0 });
   const [charsPerPage, setCharsPerPage] = createSignal(0);
   const [version, setVersion] = createSignal(0); // bump after chunk loads
   const [loading, setLoading] = createSignal(true);
+  const [error, setError] = createSignal(false);
 
   // gesture state
   const [dx, setDx] = createSignal(0);
@@ -214,33 +218,50 @@ const PaginateView = (
     });
   });
 
+  const onLoadError = (err: unknown) => {
+    console.error('Failed to load txt content', err);
+    setError(true);
+  };
+
+  // 主加载链路：加载样本 chunk 并测量每页字数
+  const measure = async () => {
+    const { height, width } = size();
+    const typo = props.typography();
+    // untracked: re-measuring on every page turn would loop forever
+    const start = untrack(() => Math.max(0, props.offset - TXT_CHUNK_SIZE));
+    await props.source.ensureRange(start, start + 2 * TXT_CHUNK_SIZE);
+    const sample = props.displayText(
+      props.source.slice(start, start + 2 * TXT_CHUNK_SIZE),
+    );
+    if (!sample) return;
+    const measured = measureCharsPerPage(
+      sample,
+      typo,
+      width - 32,
+      height - PAGE_INDICATOR_SPACE_PX,
+    );
+    // 2% safety: dense-paragraph text measures taller than the sample
+    setCharsPerPage(Math.max(50, Math.floor(measured * 0.98)));
+    setLoading(false);
+    props.onInit();
+  };
+
+  const retry = () => {
+    setError(false);
+    // 成功后 bump version，让分页文本基于已加载的 chunk 重算
+    void measure()
+      .then(() => setVersion(v => v + 1))
+      .catch(onLoadError);
+  };
+
   // measure chars per page whenever typography / viewport changes
   createEffect(() => {
     const { height, width } = size();
-    const typo = props.typography();
+    props.typography();
     // tracking: converted text changes how much fits a page
     props.displayText('x');
     if (width < 50 || height < 50) return;
-    const run = async () => {
-      // untracked: re-measuring on every page turn would loop forever
-      const start = untrack(() => Math.max(0, props.offset - TXT_CHUNK_SIZE));
-      await props.source.ensureRange(start, start + 2 * TXT_CHUNK_SIZE);
-      const sample = props.displayText(
-        props.source.slice(start, start + 2 * TXT_CHUNK_SIZE),
-      );
-      if (!sample) return;
-      const measured = measureCharsPerPage(
-        sample,
-        typo,
-        width - 32,
-        height - PAGE_INDICATOR_SPACE_PX,
-      );
-      // 2% safety: dense-paragraph text measures taller than the sample
-      setCharsPerPage(Math.max(50, Math.floor(measured * 0.98)));
-      setLoading(false);
-      props.onInit();
-    };
-    void run();
+    void measure().catch(onLoadError);
   });
 
   const totalPages = createMemo(() => {
@@ -283,7 +304,8 @@ const PaginateView = (
     const end = Math.min((current + 2) * cpp, props.book.total_chars);
     void props.source
       .ensureRange(start, end)
-      .then(() => setVersion(v => v + 1));
+      .then(() => setVersion(v => v + 1))
+      .catch(onLoadError);
   });
 
   const canPrev = () => page() > 0;
@@ -448,9 +470,19 @@ const PaginateView = (
           {t('readerPageOf', { page: page() + 1, total: totalPages() })}
         </div>
       </Show>
-      <Show when={loading()}>
+      <Show when={loading() && !error()}>
         <div class="flex h-full items-center justify-center text-sm opacity-60">
           {t('loading')}
+        </div>
+      </Show>
+      <Show when={error()}>
+        <div class="absolute inset-0 flex items-center justify-center">
+          <LoadErrorPanel
+            onBack={() => {
+              navigate(`/book/${props.book.book_id}`);
+            }}
+            onRetry={retry}
+          />
         </div>
       </Show>
     </div>
@@ -471,6 +503,7 @@ const ScrollView = (
   },
 ) => {
   const { t } = useI18n();
+  const navigate = useNavigate();
   let container: HTMLDivElement | undefined;
 
   // loaded chunk window [startIdx, endIdx)
@@ -479,6 +512,7 @@ const ScrollView = (
   const [winEnd, setWinEnd] = createSignal(firstChunk + 1);
   const [version, setVersion] = createSignal(0);
   const [loadingMore, setLoadingMore] = createSignal(false);
+  const [error, setError] = createSignal(false);
   // creation order matches DOM order because <Index> never reorders nodes
   const paragraphEls: HTMLElement[] = [];
 
@@ -510,12 +544,25 @@ const ScrollView = (
     setVersion(v => v + 1);
   };
 
+  const onLoadError = (err: unknown) => {
+    console.error('Failed to load txt content', err);
+    setError(true);
+  };
+
+  // 主加载链路：失败进入错误态（可重试），而不是永远空白
+  const init = async () => {
+    await ensureWindow();
+    await jumpTo(props.initialOffset);
+    props.onInit();
+  };
+
+  const retry = () => {
+    setError(false);
+    void init().catch(onLoadError);
+  };
+
   onMount(() => {
-    void (async () => {
-      await ensureWindow();
-      await jumpTo(props.initialOffset);
-      props.onInit();
-    })();
+    void init().catch(onLoadError);
   });
 
   // jumps requested via the navigator (bookmark / chapter / cross-device sync)
@@ -600,8 +647,15 @@ const ScrollView = (
     if (loadingMore() || winEnd() >= totalChunks()) return;
     setLoadingMore(true);
     setWinEnd(winEnd() + 1);
-    await ensureWindow();
-    setLoadingMore(false);
+    try {
+      await ensureWindow();
+    } catch (err) {
+      console.error('Failed to load txt chunk', err);
+      // 回滚窗口，下一次滚动触发时会重试
+      setWinEnd(winEnd() - 1);
+    } finally {
+      setLoadingMore(false);
+    }
   }
 
   async function loadPrev(): Promise<void> {
@@ -609,7 +663,14 @@ const ScrollView = (
     setLoadingMore(true);
     const prevHeight = container?.scrollHeight ?? 0;
     setWinStart(winStart() - 1);
-    await ensureWindow();
+    try {
+      await ensureWindow();
+    } catch (err) {
+      console.error('Failed to load txt chunk', err);
+      setWinStart(winStart() + 1);
+      setLoadingMore(false);
+      return;
+    }
     // keep the viewport pinned: compensate for the prepended chunk height
     requestAnimationFrame(() => {
       if (container) {
@@ -637,44 +698,58 @@ const ScrollView = (
   const typo = () => props.typography();
 
   return (
-    <div
-      class="mx-auto h-full w-full overflow-y-auto px-4 py-6"
-      onPointerDown={onPointerDown}
-      onPointerUp={onPointerUp}
-      onScroll={onScroll}
-      ref={container}
-      style={{
-        'max-width': `${props.readingWidth()}em`,
-        ...contentStyle(typo()),
-      }}
+    <Show
+      fallback={
+        <div class="flex h-full items-center justify-center">
+          <LoadErrorPanel
+            onBack={() => {
+              navigate(`/book/${props.book.book_id}`);
+            }}
+            onRetry={retry}
+          />
+        </div>
+      }
+      when={!error()}
     >
-      <Index each={paragraphs()}>
-        {para => (
-          <p
-            data-pos={para().offset}
-            ref={el => {
-              paragraphEls.push(el);
-              onCleanup(() => {
-                const i = paragraphEls.indexOf(el);
-                if (i >= 0) paragraphEls.splice(i, 1);
-              });
-            }}
-            style={{
-              'contain-intrinsic-size': `auto ${typo().fontSize * typo().lineHeight}px`,
-              'content-visibility': 'auto',
-              margin: `0 0 ${typo().paragraphSpacing}em`,
-              'text-indent': `${typo().textIndent}em`,
-              'white-space': 'pre-wrap',
-              'word-break': 'break-word',
-            }}
-          >
-            {props.displayText(para().text) || ' '}
-          </p>
-        )}
-      </Index>
-      <Show when={loadingMore()}>
-        <div class="py-4 text-center text-sm opacity-50">{t('loading')}</div>
-      </Show>
-    </div>
+      <div
+        class="mx-auto h-full w-full overflow-y-auto px-4 py-6"
+        onPointerDown={onPointerDown}
+        onPointerUp={onPointerUp}
+        onScroll={onScroll}
+        ref={container}
+        style={{
+          'max-width': `${props.readingWidth()}em`,
+          ...contentStyle(typo()),
+        }}
+      >
+        <Index each={paragraphs()}>
+          {para => (
+            <p
+              data-pos={para().offset}
+              ref={el => {
+                paragraphEls.push(el);
+                onCleanup(() => {
+                  const i = paragraphEls.indexOf(el);
+                  if (i >= 0) paragraphEls.splice(i, 1);
+                });
+              }}
+              style={{
+                'contain-intrinsic-size': `auto ${typo().fontSize * typo().lineHeight}px`,
+                'content-visibility': 'auto',
+                margin: `0 0 ${typo().paragraphSpacing}em`,
+                'text-indent': `${typo().textIndent}em`,
+                'white-space': 'pre-wrap',
+                'word-break': 'break-word',
+              }}
+            >
+              {props.displayText(para().text) || ' '}
+            </p>
+          )}
+        </Index>
+        <Show when={loadingMore()}>
+          <div class="py-4 text-center text-sm opacity-50">{t('loading')}</div>
+        </Show>
+      </div>
+    </Show>
   );
 };

@@ -32,10 +32,13 @@ export const authApi = {
   adminLogin: (username: string, password: string) =>
     api.post<{ admin_token: string }>('/api/v1/auth/admin/login', {
       body: { password, username },
+      // 管理员凭据：401 不应触发全局 user 会话清理
+      tokenKind: 'admin',
     }),
   adminSetup: (username: string, password: string) =>
     api.post<{ admin_token: string }>('/api/v1/auth/admin/setup', {
       body: { password, username },
+      tokenKind: 'admin',
     }),
   changePassword: (oldPassword: string, newPassword: string) =>
     api.post<Record<string, never>>('/api/v1/auth/change_password', {
