@@ -63,6 +63,8 @@ const zhCN = {
   errorLoadFailed: '加载失败',
   errorNetwork: '网络错误，请稍后重试',
   errorRateLimit: '请求过于频繁，请稍后再试',
+  errorRequestFailed: '请求失败（{status}）',
+  errorTimeout: '请求超时，请稍后重试',
   exportData: '导出我的数据',
   exportDataDesc: '下载包含全部书籍与阅读记录的压缩包',
   fontDefault: '默认',

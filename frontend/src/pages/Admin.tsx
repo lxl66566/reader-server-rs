@@ -17,11 +17,11 @@ import {
   AuditLogsTab,
   InviteCodesTab,
   SettingsTab,
-  toastError,
   UsersTab,
 } from '../components/admin';
 import { Button, Input, Spinner } from '../components/ui';
 import { useI18n } from '../i18n';
+import { toastError } from '../utils/toast';
 
 type AdminTab = 'admins' | 'invite' | 'logs' | 'settings' | 'users';
 type Phase = 'checking' | 'dashboard' | 'login' | 'setup';

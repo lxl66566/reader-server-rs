@@ -26,6 +26,23 @@ interface I18nContextValue {
   t: (key: DictKey, params?: Record<string, number | string>) => string;
 }
 
+/**
+ * 组件树外（如 api 层）的翻译入口：按 localStorage 中的当前语言查表，
+ * 与 I18nProvider 使用同一存储键，语言切换后下一次调用即生效。
+ */
+export function translateGlobal(
+  key: DictKey,
+  params?: Record<string, number | string>,
+): string {
+  let text = DICTS[detectLocale()][key];
+  if (params) {
+    for (const [name, value] of Object.entries(params)) {
+      text = text.replaceAll(`{${name}}`, String(value));
+    }
+  }
+  return text;
+}
+
 function detectLocale(): Locale {
   const stored = localStorage.getItem(STORAGE_KEY);
   if (stored === 'zh-CN' || stored === 'en') return stored;

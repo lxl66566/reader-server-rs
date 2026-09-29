@@ -64,6 +64,8 @@ const en: Dict = {
   errorLoadFailed: 'Failed to load',
   errorNetwork: 'Network error, please retry later',
   errorRateLimit: 'Too many requests, slow down',
+  errorRequestFailed: 'Request failed ({status})',
+  errorTimeout: 'Request timed out, please retry later',
   exportData: 'Export my data',
   exportDataDesc: 'Download an archive of all books and reading records',
   fontDefault: 'Default',

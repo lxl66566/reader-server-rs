@@ -3,8 +3,9 @@
 import { createEffect, createSignal, type ParentComponent } from 'solid-js';
 import toast from 'solid-toast';
 
-import { ApiError, bookApi } from '../../api';
+import { bookApi } from '../../api';
 import { useI18n } from '../../i18n';
+import { toastError } from '../../utils/toast';
 import { Button, Input, Modal, Toggle } from '../ui';
 
 export const UploadModal: ParentComponent<{
@@ -59,13 +60,7 @@ export const UploadModal: ParentComponent<{
       props.onUploaded();
       props.onClose();
     } catch (error) {
-      if (error instanceof ApiError && error.status === 429) {
-        toast.error(t('errorRateLimit'));
-      } else if (error instanceof Error) {
-        toast.error(error.message);
-      } else {
-        toast.error(t('errorGeneric'));
-      }
+      toastError(error, t);
     } finally {
       setUploading(false);
     }

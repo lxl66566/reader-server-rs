@@ -1,5 +1,6 @@
 // Fetch wrapper: JSON envelope, auth header injection, ETag caching, 401 handling.
 
+import { translateGlobal } from '../i18n';
 import type { ApiResponse } from './types';
 
 export type TokenKind = 'admin' | 'user';
@@ -96,9 +97,9 @@ export async function request<T>(
     // Normalize abort/network failures so callers always get ApiError
     // (otherwise hung requests leave resources spinning forever).
     if (err instanceof DOMException && err.name === 'TimeoutError') {
-      throw new ApiError(0, 'Request timed out');
+      throw new ApiError(0, translateGlobal('errorTimeout'));
     }
-    throw new ApiError(0, 'Network error');
+    throw new ApiError(0, translateGlobal('errorNetwork'));
   }
 
   if (res.status === 304 && cached) {
@@ -153,7 +154,10 @@ async function toApiError(res: Response): Promise<ApiError> {
   } catch {
     // non-JSON error body; fall through to generic message
   }
-  return new ApiError(res.status, `Request failed (${res.status})`);
+  return new ApiError(
+    res.status,
+    translateGlobal('errorRequestFailed', { status: res.status }),
+  );
 }
 
 export const api = {

@@ -4,11 +4,10 @@ import { A, useNavigate } from '@solidjs/router';
 import { createSignal, Show } from 'solid-js';
 import toast from 'solid-toast';
 
-import { ApiError } from '../api';
 import { Button, Input, Spinner } from '../components/ui';
 import { useI18n } from '../i18n';
-import type { DictKey } from '../i18n/zh-CN';
 import { useAuth } from '../stores/auth';
+import { toastError } from '../utils/toast';
 
 const Register = () => {
   const { t } = useI18n();
@@ -37,7 +36,7 @@ const Register = () => {
       await auth.register(username().trim(), password(), code || undefined);
       navigate('/', { replace: true });
     } catch (error) {
-      showError(error, t);
+      toastError(error, t);
     } finally {
       setSubmitting(false);
     }
@@ -91,15 +90,5 @@ const Register = () => {
     </div>
   );
 };
-
-function showError(error: unknown, t: (key: DictKey) => string): void {
-  if (error instanceof ApiError && error.status === 429) {
-    toast.error(t('errorRateLimit'));
-  } else if (error instanceof Error) {
-    toast.error(error.message);
-  } else {
-    toast.error(t('errorGeneric'));
-  }
-}
 
 export default Register;
