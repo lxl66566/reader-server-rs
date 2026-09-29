@@ -3,6 +3,7 @@
 import { useNavigate } from '@solidjs/router';
 import {
   createContext,
+  createEffect,
   createResource,
   createSignal,
   useContext,
@@ -29,8 +30,16 @@ const AuthContext = createContext<AuthContextValue>();
 
 export const AuthProvider: ParentComponent = props => {
   const [hasToken, setHasToken] = createSignalHasToken();
-  const [user, { refetch }] = createResource(hasToken, () =>
-    authApi.userInfo(),
+  // source 类型参数会被推断为 true（boolean 拆入联合类型后只剩 true），
+  // 所以这里显式标注回 boolean
+  const [user, { refetch }] = createResource(
+    hasToken,
+    (tokenPresent: boolean) => {
+      // refetch 会绕过 source 门控强制执行 fetcher：登出后必须短路，
+      // 否则会多发一次不带 token、注定 401 的请求
+      if (!tokenPresent) return Promise.resolve(undefined);
+      return authApi.userInfo();
+    },
   );
 
   const logout = () => {
@@ -77,9 +86,13 @@ export function useAuth(): AuthContextValue {
 export function useRequireAuth(): void {
   const auth = useAuth();
   const navigate = useNavigate();
-  if (!auth.isLoggedIn()) {
-    navigate('/login', { replace: true });
-  }
+  // 响应式监听登录态：token 过期被全局 401 处理清理后也要跳转，
+  // 而不是只在挂载时检查一次
+  createEffect(() => {
+    if (!auth.isLoggedIn()) {
+      navigate('/login', { replace: true });
+    }
+  });
 }
 
 function createSignalHasToken(): [() => boolean, (value: boolean) => void] {

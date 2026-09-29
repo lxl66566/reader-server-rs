@@ -140,6 +140,7 @@ const zhCN = {
   readerHighlight: '高亮',
   readerNotePlaceholder: '记录你的想法…',
   readerPageOf: '{page} / {total}',
+  readerReconnectFailed: '连接服务器失败，请检查网络或重新登录',
   readerReconnecting: '连接断开，正在重连…',
   readerSaveNote: '保存笔记',
   readerSettings: '设置',
