@@ -1890,3 +1890,222 @@ async fn test_access_check_helpers() {
 
     println!("\n===== Access check helper tests passed! =====");
 }
+
+#[tokio::test]
+async fn test_admin_change_password_revokes_tokens() {
+    let (app, _pool) = setup_test_app().await.unwrap();
+    let (admin_token, _) = setup_admin(&app).await;
+
+    // 改密前 token 可用
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/v1/admin/settings",
+        Body::empty(),
+        Some(&admin_token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 旧密码错误 → 400
+    let resp = make_json_request(
+        &app,
+        Method::POST,
+        "/api/v1/admin/password",
+        &serde_json::json!({"old_password": "wrong", "new_password": "newpass123"}),
+        Some(&admin_token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // 改密成功
+    let resp = make_json_request(
+        &app,
+        Method::POST,
+        "/api/v1/admin/password",
+        &serde_json::json!({"old_password": "admin123", "new_password": "newpass123"}),
+        Some(&admin_token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 旧 admin token 立即失效（token_version 已递增）
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/v1/admin/settings",
+        Body::empty(),
+        Some(&admin_token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // 旧密码登录失败，新密码登录成功且新 token 可用
+    let resp = login_as_admin(&app).await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    let resp = make_json_request(
+        &app,
+        Method::POST,
+        "/api/v1/auth/admin/login",
+        &serde_json::json!({"username": "admin", "password": "newpass123"}),
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = response_json(resp).await;
+    let new_token = json["data"]["admin_token"].as_str().unwrap().to_string();
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/v1/admin/settings",
+        Body::empty(),
+        Some(&new_token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    println!("\n===== Admin change password revocation test passed! =====");
+}
+
+#[tokio::test]
+async fn test_admin_login_lockout() {
+    async fn wrong_login(app: &Router, password: &str) -> Response {
+        make_json_request(
+            app,
+            Method::POST,
+            "/api/v1/auth/admin/login",
+            &serde_json::json!({"username": "admin", "password": password}),
+            None,
+        )
+        .await
+    }
+
+    let (app, _pool) = setup_test_app().await.unwrap();
+    let (_admin_token, _) = setup_admin(&app).await;
+
+    // 前 4 次失败仅返回密码错误（401）
+    for _ in 0..4 {
+        let resp = wrong_login(&app, "wrong_password").await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let json = response_json(resp).await;
+        assert!(
+            json["message"]
+                .as_str()
+                .unwrap()
+                .contains("Incorrect admin password")
+        );
+    }
+
+    // 第 5 次失败触发锁定，但仍返回密码错误
+    let resp = wrong_login(&app, "wrong_password").await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    let json = response_json(resp).await;
+    assert!(
+        json["message"]
+            .as_str()
+            .unwrap()
+            .contains("Incorrect admin password")
+    );
+
+    // 锁定期间即使密码正确也返回锁定错误
+    let resp = wrong_login(&app, "admin123").await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    let json = response_json(resp).await;
+    assert!(
+        json["message"]
+            .as_str()
+            .unwrap()
+            .contains("temporarily locked")
+    );
+
+    println!("\n===== Admin login lockout test passed! =====");
+}
+
+#[tokio::test]
+async fn test_audit_logs_record_login_events() {
+    let (app, _pool) = setup_test_app().await.unwrap();
+
+    // admin_setup 事件（setup 会顺带开启 invite_code_required，注册需邀请码，
+    // 因此用户登录失败用不存在的用户名触发）
+    let (admin_token, _) = setup_admin(&app).await;
+
+    // 用户登录失败：用户名不存在
+    let resp = make_json_request(
+        &app,
+        Method::POST,
+        "/api/v1/auth/login",
+        &serde_json::json!({"username": "ghost_user", "password": "whatever"}),
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // 管理员登录失败 + 成功各一次
+    let resp = make_json_request(
+        &app,
+        Method::POST,
+        "/api/v1/auth/admin/login",
+        &serde_json::json!({"username": "admin", "password": "wrong"}),
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    let resp = login_as_admin(&app).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 审计日志应包含全部四类登录事件
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/v1/admin/audit_logs?limit=100",
+        Body::empty(),
+        Some(&admin_token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = response_json(resp).await;
+    let logs = json["data"]["logs"].as_array().unwrap();
+    let actions: Vec<&str> = logs.iter().filter_map(|l| l["action"].as_str()).collect();
+    for expected in [
+        "admin_setup",
+        "admin_login",
+        "admin_login_failed",
+        "user_login_failed",
+    ] {
+        assert!(
+            actions.contains(&expected),
+            "missing audit action {expected}: {actions:?}"
+        );
+    }
+    // 认证前的失败事件没有操作管理员，admin_id 为 null
+    let user_failed = logs
+        .iter()
+        .find(|l| l["action"] == "user_login_failed")
+        .unwrap();
+    assert!(user_failed["admin_id"].is_null(), "{user_failed:?}");
+
+    println!("\n===== Audit login events test passed! =====");
+}
+
+#[tokio::test]
+async fn test_register_requires_invite_before_setup() {
+    let (app, pool) = setup_test_app().await.unwrap();
+    // 清掉测试环境预置的 settings 行，模拟公网部署且管理员尚未 setup 的场景
+    sqlx::query("DELETE FROM settings")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // settings 行缺失时按需要邀请码处理：无邀请码注册被拒
+    let resp = register_user(&app, "early_bird", "password1", None).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let json = response_json(resp).await;
+    assert!(
+        json["message"]
+            .as_str()
+            .unwrap()
+            .contains("Invite code required")
+    );
+
+    println!("\n===== Pre-setup invite requirement test passed! =====");
+}

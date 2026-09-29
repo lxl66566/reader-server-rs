@@ -51,5 +51,10 @@ pub async fn create_test_pool() -> Result<Pool<Sqlite>> {
         .await?;
     let sql = include_str!("../schema.sql");
     sqlx::raw_sql(sql).execute(&pool).await?;
+    // 测试环境默认放开邀请码：生产逻辑在 settings 行缺失时按需要邀请码处理
+    // （安全兜底），这里预置一行 invite_code_required=0，保持既有测试免邀请码注册的语义
+    sqlx::query("INSERT INTO settings (id, invite_code_required) VALUES (1, 0)")
+        .execute(&pool)
+        .await?;
     Ok(pool)
 }

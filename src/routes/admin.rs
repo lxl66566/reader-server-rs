@@ -14,19 +14,20 @@ use crate::{
     config::Config,
     error::{ApiResponse, AppError},
     models::{
-        AdminListItem, AdminUserListItem, AuditLog, CheckSetupResponse, CreateAdminRequest,
-        CreateInviteCodeRequest, CreateInviteCodeResponse, InviteCode, ListAdminsResponse,
-        ListAuditLogsResponse, ListInviteCodesResponse, ListUsersResponse,
+        AdminListItem, AdminUserListItem, AuditLog, ChangePasswordRequest, CheckSetupResponse,
+        CreateAdminRequest, CreateInviteCodeRequest, CreateInviteCodeResponse, InviteCode,
+        ListAdminsResponse, ListAuditLogsResponse, ListInviteCodesResponse, ListUsersResponse,
         ResetUserPasswordRequest, Settings, UpdateSettingsRequest,
     },
     routes::{auth::validate_username, books::PaginationParams},
-    utils::{generate_invite_code, generate_uuid, hash_password},
+    utils::{generate_invite_code, generate_uuid, hash_password, verify_password},
 };
 
 // 管理员路由
 pub fn routes() -> Router<crate::app::AppState> {
     Router::new()
         .route("/check_setup", get(check_setup))
+        .route("/password", post(change_password))
         .route("/invite_code", post(create_invite_code))
         .route("/invite_codes", get(list_invite_codes))
         .route("/settings", get(get_settings).put(update_settings))
@@ -49,11 +50,34 @@ async fn log_audit(
     target_id: Option<i64>,
     detail: Option<&str>,
 ) -> Result<(), AppError> {
+    log_audit_event(
+        pool,
+        Some(admin.admin_id),
+        Some(&admin.username),
+        action,
+        target_type,
+        target_id,
+        detail,
+    )
+    .await
+}
+
+/// 记录审计日志（泛化版）：登录类事件发生在认证之前/之外，
+/// 可能没有操作管理员，此时 admin_id / admin_username 传 None
+pub(crate) async fn log_audit_event(
+    pool: &Pool<Sqlite>,
+    admin_id: Option<i64>,
+    admin_username: Option<&str>,
+    action: &str,
+    target_type: Option<&str>,
+    target_id: Option<i64>,
+    detail: Option<&str>,
+) -> Result<(), AppError> {
     sqlx::query!(
         "INSERT INTO audit_logs (admin_id, admin_username, action, target_type, target_id, \
          detail) VALUES (?, ?, ?, ?, ?, ?)",
-        admin.admin_id,
-        admin.username,
+        admin_id,
+        admin_username,
         action,
         target_type,
         target_id,
@@ -75,6 +99,50 @@ async fn check_setup(
     Ok(Json(ApiResponse::success(CheckSetupResponse {
         is_setup: admin_exists,
     })))
+}
+
+// 管理员修改密码：验证旧密码，写入新哈希并递增 token_version，
+// 使所有已签发的旧 admin JWT 立即失效（含当前请求使用的 token）
+async fn change_password(
+    admin: AuthAdmin,
+    State(pool): State<Pool<Sqlite>>,
+    Json(req): Json<ChangePasswordRequest>,
+) -> Result<Json<ApiResponse<()>>, AppError> {
+    let row = sqlx::query!(
+        "SELECT password_hash FROM admin WHERE id = ?",
+        admin.admin_id
+    )
+    .fetch_one(&pool)
+    .await?;
+
+    // 验证旧密码
+    if !verify_password(&req.old_password, &row.password_hash)? {
+        return Err(AppError::IncorrectOldPassword);
+    }
+
+    let new_password_hash = hash_password(&req.new_password)?;
+
+    sqlx::query!(
+        "UPDATE admin SET password_hash = ?, token_version = token_version + 1 WHERE id = ?",
+        new_password_hash,
+        admin.admin_id
+    )
+    .execute(&pool)
+    .await?;
+
+    log_audit(
+        &pool,
+        &admin,
+        "change_password",
+        Some("admin"),
+        Some(admin.admin_id),
+        None,
+    )
+    .await?;
+
+    Ok(Json(ApiResponse::<()>::message(
+        "Password changed successfully",
+    )))
 }
 
 // 创建邀请码

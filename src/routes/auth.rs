@@ -18,6 +18,7 @@ use crate::{
         Book, Bookmark, ChangePasswordRequest, CreateUserRequest, DeleteAccountRequest,
         LoginRequest, User, UserInfoResponse,
     },
+    routes::admin::log_audit_event,
     utils::{hash_password, verify_password},
 };
 
@@ -94,11 +95,14 @@ async fn register(
     }
 
     // 检查系统设置
+    // 安全取向：settings 行缺失（通常意味着管理员尚未完成 setup）时按“需要邀请码”
+    // 处理，避免公网部署下管理员 setup 前存在无邀请码的开放注册窗口；
+    // setup 完成后管理员可在管理页面关闭该开关
     let invite_code_required =
         sqlx::query_scalar::<_, bool>("SELECT invite_code_required FROM settings WHERE id = 1")
             .fetch_optional(&pool)
             .await?
-            .unwrap_or(false);
+            .unwrap_or(true);
 
     // 如果系统需要邀请码，但用户未提供
     if invite_code_required && req.invite_code.is_none() {
@@ -181,6 +185,15 @@ const MAX_FAILED_ATTEMPTS: i64 = 5;
 // 锁定时长（秒）
 const LOCK_DURATION_SECS: i64 = 15 * 60;
 
+// 失败计数达到阈值时返回锁定截止时间的 RFC3339 字符串，否则为 None。
+// 用户与管理员登录共用同一套“5 次失败锁 15 分钟”机制与状态字段。
+fn locked_until_for_attempts(attempts: i64) -> Option<String> {
+    (attempts >= MAX_FAILED_ATTEMPTS).then(|| {
+        (Utc::now() + Duration::seconds(LOCK_DURATION_SECS))
+            .to_rfc3339_opts(SecondsFormat::Millis, true)
+    })
+}
+
 // 用户登录
 async fn login(
     State(pool): State<Pool<Sqlite>>,
@@ -191,8 +204,21 @@ async fn login(
     let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE username = ?")
         .bind(&req.username)
         .fetch_optional(&pool)
-        .await?
-        .ok_or_else(|| AppError::InvalidCredentials)?;
+        .await?;
+    let Some(user) = user else {
+        // 审计：用户登录失败（用户名不存在）
+        log_audit_event(
+            &pool,
+            None,
+            None,
+            "user_login_failed",
+            None,
+            None,
+            Some(&req.username),
+        )
+        .await?;
+        return Err(AppError::InvalidCredentials);
+    };
 
     // 检查账户是否被管理员封禁（先于锁定判断，避免被封用户看到锁定提示）
     if user.status == crate::models::UserStatus::Banned {
@@ -211,26 +237,26 @@ async fn login(
     if !verify_password(&req.password, &user.password_hash)? {
         // 登录失败：增加失败计数，达到阈值时锁定
         let new_attempts = user.failed_login_attempts + 1;
-        if new_attempts >= MAX_FAILED_ATTEMPTS {
-            let locked_until = Utc::now() + Duration::seconds(LOCK_DURATION_SECS);
-            let locked_until_str = locked_until.to_rfc3339_opts(SecondsFormat::Millis, true);
-            sqlx::query!(
-                "UPDATE users SET failed_login_attempts = ?, locked_until = ? WHERE id = ?",
-                new_attempts,
-                locked_until_str,
-                user.id
-            )
-            .execute(&pool)
-            .await?;
-        } else {
-            sqlx::query!(
-                "UPDATE users SET failed_login_attempts = ? WHERE id = ?",
-                new_attempts,
-                user.id
-            )
-            .execute(&pool)
-            .await?;
-        }
+        let locked_until = locked_until_for_attempts(new_attempts);
+        sqlx::query!(
+            "UPDATE users SET failed_login_attempts = ?, locked_until = ? WHERE id = ?",
+            new_attempts,
+            locked_until,
+            user.id
+        )
+        .execute(&pool)
+        .await?;
+        // 审计：用户登录失败（密码错误）
+        log_audit_event(
+            &pool,
+            None,
+            None,
+            "user_login_failed",
+            Some("user"),
+            Some(user.id),
+            Some(&user.username),
+        )
+        .await?;
         return Err(AppError::InvalidCredentials);
     }
 
@@ -571,8 +597,20 @@ async fn admin_setup(
         .execute(&pool)
         .await?;
 
-    // 生成JWT令牌
-    let claims = Claims::new_admin(admin_id, &config);
+    // 审计：初始管理员设置完成
+    log_audit_event(
+        &pool,
+        Some(admin_id),
+        Some(&req.username),
+        "admin_setup",
+        None,
+        None,
+        None,
+    )
+    .await?;
+
+    // 生成JWT令牌（新管理员 token_version 默认为 0）
+    let claims = Claims::new_admin(admin_id, 0, &config);
     let token = create_token(&claims, &config)?;
 
     // 返回管理员令牌
@@ -591,16 +629,81 @@ async fn admin_login(
     let admin = sqlx::query_as::<_, Admin>("SELECT * FROM admin WHERE username = ?")
         .bind(&req.username)
         .fetch_optional(&pool)
-        .await?
-        .ok_or_else(|| AppError::InvalidCredentials)?;
+        .await?;
+    let Some(admin) = admin else {
+        // 审计：管理员登录失败（用户名不存在）
+        log_audit_event(
+            &pool,
+            None,
+            None,
+            "admin_login_failed",
+            None,
+            None,
+            Some(&req.username),
+        )
+        .await?;
+        return Err(AppError::InvalidCredentials);
+    };
+
+    // 检查账户是否被锁定（与普通用户登录同一套失败锁定机制）
+    if let Some(ref locked_until) = admin.locked_until
+        && let Ok(dt) = locked_until.parse::<DateTime<Utc>>()
+        && dt > Utc::now()
+    {
+        return Err(AppError::UserLockedOut);
+    }
 
     // 验证密码
     if !verify_password(&req.password, &admin.password_hash)? {
+        // 登录失败：增加失败计数，达到阈值时锁定
+        let new_attempts = admin.failed_login_attempts + 1;
+        let locked_until = locked_until_for_attempts(new_attempts);
+        sqlx::query!(
+            "UPDATE admin SET failed_login_attempts = ?, locked_until = ? WHERE id = ?",
+            new_attempts,
+            locked_until,
+            admin.id
+        )
+        .execute(&pool)
+        .await?;
+        // 审计：管理员登录失败（密码错误）
+        log_audit_event(
+            &pool,
+            Some(admin.id),
+            Some(&admin.username),
+            "admin_login_failed",
+            None,
+            None,
+            None,
+        )
+        .await?;
         return Err(AppError::IncorrectAdminPassword);
     }
 
+    // 登录成功：重置失败计数
+    if admin.failed_login_attempts > 0 || admin.locked_until.is_some() {
+        sqlx::query!(
+            "UPDATE admin SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?",
+            admin.id
+        )
+        .execute(&pool)
+        .await?;
+    }
+
+    // 审计：管理员登录成功
+    log_audit_event(
+        &pool,
+        Some(admin.id),
+        Some(&admin.username),
+        "admin_login",
+        None,
+        None,
+        None,
+    )
+    .await?;
+
     // 生成JWT令牌
-    let claims = Claims::new_admin(admin.id, &config);
+    let claims = Claims::new_admin(admin.id, admin.token_version, &config);
     let token = create_token(&claims, &config)?;
 
     // 返回管理员令牌

@@ -66,7 +66,7 @@ type PublicBook = {
 type InviteCodeItem = { id: number; invite_code: string; limit_times: number; used_times: number; description: string | null; created_at: string }
 type UserItem = { user_id: number; username: string; created_at: string; book_count: number; total_reading_time: number; status: 'active' | 'banned'; banned_at: string | null }
 type AdminItem = { admin_id: number; username: string; created_at: string }
-type AuditLogItem = { id: number; admin_id: number; admin_username: string; action: string; target_type: string | null; target_id: number | null; detail: string | null; created_at: string }
+type AuditLogItem = { id: number; admin_id: number | null; admin_username: string | null; action: string; target_type: string | null; target_id: number | null; detail: string | null; created_at: string }
 
 type Bookmark = {
   id: number; user_id: number; book_id: number;
@@ -95,6 +95,7 @@ type Annotation = {
 | POST | /api/v1/auth/register | - | Body: { username: string; password: string; invite_code?: string } | { user_id: number; username: string; token: string } |
 
 > 用户名规则：2-20 个字符，仅限中英文/字母/数字/`_`/`-`；注册、管理员 setup 与新增管理员均校验，不满足返回 400。
+> 管理员完成 setup 前（settings 未初始化）注册默认要求邀请码；setup 后管理员可在设置中关闭。
 
 > 全局按客户端 IP 维度限流，默认 10 rps / burst 30；超限返回 429。
 > `/health` 与带 If-None-Match 命中的请求不消耗带宽。
@@ -111,6 +112,7 @@ type Annotation = {
 | 方法 | URL | 权限 | 请求参数 | 响应 data |
 |---|---|---|---|---|
 | GET | /api/v1/admin/check_setup | - | - | { is_setup: boolean } |
+| POST | /api/v1/admin/password | Admin | Body: { old_password: string; new_password: string } | {}；改密后所有旧 admin_token 立即失效 |
 | POST | /api/v1/admin/invite_code | Admin | Body: { limit_times: number; description?: string } | { invite_code: string; limit_times: number; description: string \| null } |
 | GET | /api/v1/admin/invite_codes | Admin | - | { invite_codes: InviteCodeItem[] } |
 | GET | /api/v1/admin/settings | Admin | - | { invite_code_required: boolean } |
@@ -122,7 +124,7 @@ type Annotation = {
 | POST | /api/v1/admin/users/:user_id/unban | Admin | - | {} |
 | GET | /api/v1/admin/admins | Admin | - | { admins: AdminItem[] } |
 | POST | /api/v1/admin/admins | Admin | Body: { username: string; password: string } | {} |
-| GET | /api/v1/admin/audit_logs?page=number&limit=number | Admin | - | { total: number; logs: AuditLogItem[] } |
+| GET | /api/v1/admin/audit_logs?page=number&limit=number | Admin | - | { total: number; logs: AuditLogItem[] }；除管理操作外还记录登录事件（admin_setup / admin_login / admin_login_failed / user_login_failed），登录类事件的 admin_id/admin_username 可能为 null |
 | GET | /api/v1/admin/backup | Admin | - | application/zip 流，包含 reader.db（`VACUUM INTO` 生成的一致性快照）+ 整个 books 目录（不压缩），用于全局灾难恢复；任何文件缺失/读取失败会整体返回 500 而不是产出残缺备份 |
 
 ### 书籍管理

@@ -40,8 +40,8 @@ impl Claims {
         }
     }
 
-    // 创建管理员JWT声明
-    pub fn new_admin(admin_id: i64, config: &Config) -> Self {
+    // 创建管理员JWT声明（携带 admins.token_version，改密后旧 token 立即失效）
+    pub fn new_admin(admin_id: i64, token_version: i64, config: &Config) -> Self {
         let now = Utc::now();
         let expiration = i64::try_from(config.jwt.admin_expiration)
             .expect("JWT admin expiration must fit in i64");
@@ -51,7 +51,7 @@ impl Claims {
             iat: timestamp_u64(&now),
             exp: timestamp_u64(&expiry),
             role: "admin".to_string(),
-            ver: 0,
+            ver: token_version,
         }
     }
 }
@@ -147,14 +147,18 @@ where
 
         let admin_id: i64 = claims.sub.parse().map_err(|_| AppError::InvalidAdminId)?;
 
-        // 查询管理员用户名（同时验证存在性）
-        let admin = sqlx::query!("SELECT username FROM admin WHERE id = ?", admin_id)
-            .fetch_optional(&pool)
-            .await
-            .map_err(AppError::Database)?;
+        // 查询管理员用户名与 token 版本号（同时验证存在性）；版本号不匹配视为已吊销
+        let admin = sqlx::query!(
+            "SELECT username, token_version FROM admin WHERE id = ?",
+            admin_id
+        )
+        .fetch_optional(&pool)
+        .await
+        .map_err(AppError::Database)?;
 
         match admin {
             None => Err(AppError::AdminNotFound),
+            Some(row) if row.token_version != claims.ver => Err(AppError::TokenExpiredOrInvalid),
             Some(row) => Ok(AuthAdmin {
                 admin_id,
                 username: row.username,

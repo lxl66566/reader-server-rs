@@ -78,6 +78,9 @@ pub struct Admin {
     pub username: String,
     #[serde(skip_serializing)]
     pub password_hash: String,
+    pub token_version: i64,
+    pub failed_login_attempts: i64,
+    pub locked_until: Option<String>,
     pub created_at: String,
 }
 
@@ -114,8 +117,9 @@ pub struct AdminListItem {
 #[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct AuditLog {
     pub id: i64,
-    pub admin_id: i64,
-    pub admin_username: String,
+    // 登录类等认证前事件没有操作管理员，为 None
+    pub admin_id: Option<i64>,
+    pub admin_username: Option<String>,
     pub action: String,
     pub target_type: Option<String>,
     pub target_id: Option<i64>,
