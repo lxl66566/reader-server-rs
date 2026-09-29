@@ -189,7 +189,7 @@ type Annotation = {
 | type | 字段 | 说明 |
 |---|---|---|
 | `subscribed` | `book_id` | 订阅成功 |
-| `heartbeat_ack` | `book_id`, `synced: boolean`, `locator: string`, `percent: number`, `reading_time: number` | 心跳响应。`synced=false` 表示检测到其他设备正在阅读，客户端应跳转到返回的 `locator` 以保持多端同步 |
+| `heartbeat_ack` | `book_id`, `synced: boolean`, `locator: string`, `percent: number`, `reading_time: number` | 心跳响应。`synced=false` 表示上次心跳来自另一台设备：本次不写入进度/时长，但服务端已将设备标识让位给本设备（下一次心跳起正常接管写入），客户端应跳转到返回的 `locator` 以保持多端同步 |
 | `progress_update` | `book_id`, `locator: string`, `percent: number`, `reading_time: number`, `device_id: string` | 广播：同账号下另一台设备刚刚更新了进度，本设备应跳转以保持多端同步 |
 | `bookmark_changed` | `book_id`, `action: 'created' \| 'deleted'`, `bookmark_id: number` | 广播：另一端刚增删了书签；客户端收到后应重新拉取书签列表 |
 | `annotation_changed` | `book_id`, `action: 'created' \| 'updated' \| 'deleted'`, `annotation_id: number` | 广播：另一端刚增改删了批注；客户端收到后应重新拉取批注列表 |
@@ -201,7 +201,7 @@ type Annotation = {
 - 服务端每 30s 主动发送 WebSocket `Ping`；客户端无响应超过 120s 将被断开。
 - 心跳间隔需 ≤ 30s，否则相邻两次心跳的间隔不计入阅读时间。
 - 阅读时长 / 连续阅读天数按用户的 `reading_settings.timezone` 归算（默认 UTC），避免跨时区用户在日期边界错位。
-- 当某次心跳与 `last_device_id` 不一致时（用户在另一台设备阅读中），返回服务端最新进度并 `synced=false`，**不广播**。
+- 当某次心跳与 `last_device_id` 不一致时（上次心跳来自另一台设备），返回服务端最新进度并 `synced=false`，**不广播**；同时服务端将 `last_device_id` 让位给本次心跳的设备（不改进度/时长），因此该设备的下一次心跳即可正常接管写入，旧设备若继续心跳则会反过来收到 `synced=false`。
 - 书签 / 批注的 HTTP 写接口会向订阅同 (user, book) 的其它 ws 连接广播 `bookmark_changed` / `annotation_changed`；请求头 `X-Device-Id` 可用于让服务端排除发起方连接，避免回环通知。
 
 ## 前端实现指引（按 format）

@@ -1209,20 +1209,24 @@ async fn test_ws_reading_session() {
     assert_eq!(v["synced"], false);
     assert_eq!(v["locator"], "100"); // 服务端进度（来自 device1）
 
-    // 设备 1 再次心跳：广播 progress_update 给设备 2
+    // 注意：设备接管语义已变更——设备 2 上一次心跳虽 synced=false，但服务端
+    // 已将 last_device_id 让位给 device2，因此设备 2 的下一次心跳即可正常同步；
+    // 旧设备（device1）若继续心跳会反过来被判定为“其他设备”而收到 synced=false。
+    // 设备 2 再次心跳：已接管 → synced=true，广播 progress_update 给设备 1
     send_json(
-        &mut ws_a,
-        &serde_json::json!({"type":"heartbeat","book_id":book_id,"locator":"150","percent":0.08}),
+        &mut ws_b,
+        &serde_json::json!({"type":"heartbeat","book_id":book_id,"locator":"999","percent":0.99}),
     )
     .await;
-    let v = recv_json(&mut ws_a).await;
-    assert_eq!(v["type"], "heartbeat_ack");
-    assert_eq!(v["locator"], "150");
-
     let v = recv_json(&mut ws_b).await;
+    assert_eq!(v["type"], "heartbeat_ack");
+    assert_eq!(v["synced"], true);
+    assert_eq!(v["locator"], "999");
+
+    let v = recv_json(&mut ws_a).await;
     assert_eq!(v["type"], "progress_update");
-    assert_eq!(v["locator"], "150");
-    assert_eq!(v["device_id"], "device1");
+    assert_eq!(v["locator"], "999");
+    assert_eq!(v["device_id"], "device2");
 
     // unsubscribe
     send_json(
@@ -1595,4 +1599,67 @@ async fn test_percent_validation_in_heartbeat() {
     assert!(result.percent.abs() < f64::EPSILON);
 
     println!("\n===== Percent validation tests passed! =====");
+}
+
+#[tokio::test]
+async fn test_multi_device_heartbeat_takeover() {
+    // 回归测试（🔴-2）：设备 A 停止心跳后，设备 B 第一次心跳返回 synced=false
+    // 且不写进度，但服务端会让位 last_device_id；B 的第二次心跳必须能
+    // synced=true 接管并把进度/时长落库（修复前的行为是 B 永远无法接管）
+    let (app, pool) = setup_test_app().await.unwrap();
+    let token = register_and_login(&app, "takeover", "password1").await;
+    let book = upload_test_book(&app, &token, "接管", TEST_BOOK_CONTENT, false).await;
+    let book_id = book["book_id"].as_i64().unwrap();
+
+    let user_id: i64 = sqlx::query_scalar("SELECT id FROM users WHERE username = 'takeover'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    // 设备 A 首次心跳：创建进度记录
+    let r = crate::routes::reading::process_heartbeat_logic(
+        &pool, user_id, book_id, "100", 0.1, "deviceA",
+    )
+    .await
+    .unwrap();
+    assert!(r.synced);
+    assert!(r.updated);
+
+    // 设备 B 第一次心跳：synced=false，返回服务端进度，不覆盖进度/时长
+    let r = crate::routes::reading::process_heartbeat_logic(
+        &pool, user_id, book_id, "500", 0.5, "deviceB",
+    )
+    .await
+    .unwrap();
+    assert!(!r.synced);
+    assert!(!r.updated);
+    assert_eq!(r.locator, "100"); // 服务端保存的旧进度
+
+    // 间隔超过 1 秒，确保接管后的心跳产生可断言的阅读时长增量
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+
+    // 设备 B 第二次心跳：已接管 → synced=true，进度与时长正常更新
+    let r = crate::routes::reading::process_heartbeat_logic(
+        &pool, user_id, book_id, "600", 0.6, "deviceB",
+    )
+    .await
+    .unwrap();
+    assert!(r.synced);
+    assert!(r.updated);
+    assert_eq!(r.locator, "600");
+    assert!(r.reading_time >= 1);
+
+    // 进度与阅读时长确实落库
+    let (locator, reading_time): (String, i64) = sqlx::query_as(
+        "SELECT locator, reading_time FROM reading_progress WHERE user_id = ? AND book_id = ?",
+    )
+    .bind(user_id)
+    .bind(book_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(locator, "600");
+    assert!(reading_time >= 1);
+
+    println!("\n===== Multi-device heartbeat takeover tests passed! =====");
 }
