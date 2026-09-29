@@ -26,6 +26,9 @@ CREATE TABLE
     password_hash TEXT NOT NULL,
     -- token 版本号：改密时递增，使已签发的旧 admin JWT 立即失效
     token_version INTEGER NOT NULL DEFAULT 0,
+    -- 登录失败锁定（与 users 表同一套机制）：连续失败计数与锁定截止时间
+    failed_login_attempts INTEGER NOT NULL DEFAULT 0,
+    locked_until TEXT,
     created_at TEXT NOT NULL DEFAULT (
       strftime (
         '%Y-%m-%dT%H:%M:%S.' || substr (strftime ('%f'), 4, 6) || 'Z'

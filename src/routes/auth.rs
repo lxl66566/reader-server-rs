@@ -181,6 +181,15 @@ const MAX_FAILED_ATTEMPTS: i64 = 5;
 // 锁定时长（秒）
 const LOCK_DURATION_SECS: i64 = 15 * 60;
 
+// 失败计数达到阈值时返回锁定截止时间的 RFC3339 字符串，否则为 None。
+// 用户与管理员登录共用同一套“5 次失败锁 15 分钟”机制与状态字段。
+fn locked_until_for_attempts(attempts: i64) -> Option<String> {
+    (attempts >= MAX_FAILED_ATTEMPTS).then(|| {
+        (Utc::now() + Duration::seconds(LOCK_DURATION_SECS))
+            .to_rfc3339_opts(SecondsFormat::Millis, true)
+    })
+}
+
 // 用户登录
 async fn login(
     State(pool): State<Pool<Sqlite>>,
@@ -211,26 +220,15 @@ async fn login(
     if !verify_password(&req.password, &user.password_hash)? {
         // 登录失败：增加失败计数，达到阈值时锁定
         let new_attempts = user.failed_login_attempts + 1;
-        if new_attempts >= MAX_FAILED_ATTEMPTS {
-            let locked_until = Utc::now() + Duration::seconds(LOCK_DURATION_SECS);
-            let locked_until_str = locked_until.to_rfc3339_opts(SecondsFormat::Millis, true);
-            sqlx::query!(
-                "UPDATE users SET failed_login_attempts = ?, locked_until = ? WHERE id = ?",
-                new_attempts,
-                locked_until_str,
-                user.id
-            )
-            .execute(&pool)
-            .await?;
-        } else {
-            sqlx::query!(
-                "UPDATE users SET failed_login_attempts = ? WHERE id = ?",
-                new_attempts,
-                user.id
-            )
-            .execute(&pool)
-            .await?;
-        }
+        let locked_until = locked_until_for_attempts(new_attempts);
+        sqlx::query!(
+            "UPDATE users SET failed_login_attempts = ?, locked_until = ? WHERE id = ?",
+            new_attempts,
+            locked_until,
+            user.id
+        )
+        .execute(&pool)
+        .await?;
         return Err(AppError::InvalidCredentials);
     }
 
@@ -594,9 +592,38 @@ async fn admin_login(
         .await?
         .ok_or_else(|| AppError::InvalidCredentials)?;
 
+    // 检查账户是否被锁定（与普通用户登录同一套失败锁定机制）
+    if let Some(ref locked_until) = admin.locked_until
+        && let Ok(dt) = locked_until.parse::<DateTime<Utc>>()
+        && dt > Utc::now()
+    {
+        return Err(AppError::UserLockedOut);
+    }
+
     // 验证密码
     if !verify_password(&req.password, &admin.password_hash)? {
+        // 登录失败：增加失败计数，达到阈值时锁定
+        let new_attempts = admin.failed_login_attempts + 1;
+        let locked_until = locked_until_for_attempts(new_attempts);
+        sqlx::query!(
+            "UPDATE admin SET failed_login_attempts = ?, locked_until = ? WHERE id = ?",
+            new_attempts,
+            locked_until,
+            admin.id
+        )
+        .execute(&pool)
+        .await?;
         return Err(AppError::IncorrectAdminPassword);
+    }
+
+    // 登录成功：重置失败计数
+    if admin.failed_login_attempts > 0 || admin.locked_until.is_some() {
+        sqlx::query!(
+            "UPDATE admin SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?",
+            admin.id
+        )
+        .execute(&pool)
+        .await?;
     }
 
     // 生成JWT令牌

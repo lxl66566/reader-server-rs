@@ -1966,3 +1966,57 @@ async fn test_admin_change_password_revokes_tokens() {
 
     println!("\n===== Admin change password revocation test passed! =====");
 }
+
+#[tokio::test]
+async fn test_admin_login_lockout() {
+    async fn wrong_login(app: &Router, password: &str) -> Response {
+        make_json_request(
+            app,
+            Method::POST,
+            "/api/v1/auth/admin/login",
+            &serde_json::json!({"username": "admin", "password": password}),
+            None,
+        )
+        .await
+    }
+
+    let (app, _pool) = setup_test_app().await.unwrap();
+    let (_admin_token, _) = setup_admin(&app).await;
+
+    // 前 4 次失败仅返回密码错误（401）
+    for _ in 0..4 {
+        let resp = wrong_login(&app, "wrong_password").await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let json = response_json(resp).await;
+        assert!(
+            json["message"]
+                .as_str()
+                .unwrap()
+                .contains("Incorrect admin password")
+        );
+    }
+
+    // 第 5 次失败触发锁定，但仍返回密码错误
+    let resp = wrong_login(&app, "wrong_password").await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    let json = response_json(resp).await;
+    assert!(
+        json["message"]
+            .as_str()
+            .unwrap()
+            .contains("Incorrect admin password")
+    );
+
+    // 锁定期间即使密码正确也返回锁定错误
+    let resp = wrong_login(&app, "admin123").await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    let json = response_json(resp).await;
+    assert!(
+        json["message"]
+            .as_str()
+            .unwrap()
+            .contains("temporarily locked")
+    );
+
+    println!("\n===== Admin login lockout test passed! =====");
+}
