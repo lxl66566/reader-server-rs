@@ -200,6 +200,9 @@ const EpubReader = (props: FormatReaderProps) => {
       },
       { passive: true },
     );
+    // touchend 必须非 passive：手势已消费时要 preventDefault 吞掉随后的合成
+    // click，否则一次轻点会同时走 touch 与 click 两条路径，handleTap 触发两次。
+    // （touchend 阶段的 preventDefault 只抑制合成 click，不影响滚动性能。）
     doc.addEventListener(
       'touchend',
       event => {
@@ -215,6 +218,7 @@ const EpubReader = (props: FormatReaderProps) => {
             Math.abs(deltaX) > FLIP_THRESHOLD_PX &&
             Math.abs(deltaX) > Math.abs(deltaY)
           ) {
+            event.preventDefault();
             void flip(deltaX < 0 ? 1 : -1);
             return;
           }
@@ -223,10 +227,11 @@ const EpubReader = (props: FormatReaderProps) => {
           Date.now() - t < TAP_MAX_MS &&
           Math.hypot(deltaX, deltaY) < TAP_MAX_MOVE_PX
         ) {
+          event.preventDefault();
           handleTap(t0.clientX);
         }
       },
-      { passive: true },
+      { passive: false },
     );
     doc.addEventListener('click', event => {
       handleTap(event.clientX);
