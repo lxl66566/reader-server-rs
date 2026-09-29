@@ -55,12 +55,15 @@ const PdfReader = (props: FormatReaderProps) => {
     return 0;
   }
 
+  let loadingTask: null | pdfjs.PDFDocumentLoadingTask = null;
+
   // 主加载链路：失败进入错误态（可重试），而不是永远停在加载态
   const load = async () => {
     setError(false);
     try {
       const data = await bookApi.fetchFile(props.book.book_id);
-      const loaded = await pdfjs.getDocument({ data }).promise;
+      loadingTask = pdfjs.getDocument({ data });
+      const loaded = await loadingTask.promise;
       setDoc(loaded);
       setReady(true);
       report(page());
@@ -74,7 +77,8 @@ const PdfReader = (props: FormatReaderProps) => {
   onMount(() => {
     void load();
     onCleanup(() => {
-      void doc()?.cleanup();
+      // destroy 会连带销毁 worker 线程；只 cleanup 会泄漏 worker，切书后累积
+      void loadingTask?.destroy();
     });
   });
 
@@ -307,6 +311,9 @@ const PdfPageCanvas = (canvasProps: {
 }) => {
   const { settings } = useSettings();
   let canvas: HTMLCanvasElement | undefined;
+  // 串行化渲染队列：新渲染必须等旧 RenderTask settle 后才开始，
+  // 否则快速翻页/改宽时会对同一 canvas 并发 render，pdf.js 直接抛错白屏
+  let renderChain: Promise<void> = Promise.resolve();
 
   createEffect(() => {
     const width = Math.min(
@@ -319,7 +326,8 @@ const PdfPageCanvas = (canvasProps: {
     if (width < 50 || !canvas) return;
     // object ref defeats TS flow narrowing (it can't see the cleanup writes)
     const state = { cancelled: false };
-    void (async () => {
+    let task: null | pdfjs.RenderTask = null;
+    const run = async () => {
       const page = await doc.getPage(pageNumber + 1); // pdf.js is 1-based
       const base = page.getViewport({ scale: 1 });
       const dpr = Math.min(window.devicePixelRatio, 2);
@@ -332,11 +340,25 @@ const PdfPageCanvas = (canvasProps: {
       target.style.width = `${Math.floor(viewport.width / dpr)}px`;
       const context = target.getContext('2d');
       if (!context) return;
-      await page.render({ canvas: target, canvasContext: context, viewport })
-        .promise;
-    })();
+      task = page.render({ canvas: target, canvasContext: context, viewport });
+      await task.promise;
+    };
+    renderChain = renderChain
+      .catch(() => undefined)
+      .then(run)
+      .catch((err: unknown) => {
+        // 翻页/改宽触发的取消是正常路径，其余错误才上报
+        if (
+          state.cancelled ||
+          err instanceof pdfjs.RenderingCancelledException
+        ) {
+          return;
+        }
+        console.error('Failed to render pdf page', err);
+      });
     onCleanup(() => {
       state.cancelled = true;
+      task?.cancel();
     });
   });
 
