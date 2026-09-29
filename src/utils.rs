@@ -179,7 +179,8 @@ pub fn parse_epub(data: &[u8]) -> Result<EpubParseResult, AppError> {
 
     for i in 0..num_chapters {
         doc.set_current_chapter(i);
-        let Some((_mime, content)) = doc.get_current_str() else {
+        // epub crate 返回 (content, mime)，注意不要写反
+        let Some((content, _mime)) = doc.get_current_str() else {
             continue;
         };
 
@@ -407,5 +408,64 @@ mod tests {
         let chapters = extract_chapters(content);
         assert_eq!(chapters.len(), 2);
         assert_offsets_point_to_titles(content, &chapters);
+    }
+    /// 构造一个最小可用的 EPUB（zip）用于测试；chapter_html 为单章正文 HTML
+    fn build_test_epub(chapter_html: &str) -> Vec<u8> {
+        use std::io::Write as _;
+
+        let mut cursor = std::io::Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut cursor);
+            let stored = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            let deflated = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            // epub 规范要求 mimetype 为首个条目且不压缩
+            writer.start_file("mimetype", stored).unwrap();
+            writer.write_all(b"application/epub+zip").unwrap();
+            writer
+                .start_file("META-INF/container.xml", deflated)
+                .unwrap();
+            writer
+                .write_all(
+                    br#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#,
+                )
+                .unwrap();
+            writer.start_file("OEBPS/content.opf", deflated).unwrap();
+            writer
+                .write_all(
+                    br#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Test Book</dc:title><dc:creator>Tester</dc:creator>
+  </metadata>
+  <manifest><item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#,
+                )
+                .unwrap();
+            writer.start_file("OEBPS/ch1.xhtml", deflated).unwrap();
+            writer.write_all(chapter_html.as_bytes()).unwrap();
+            writer.finish().unwrap();
+        }
+        cursor.into_inner()
+    }
+
+    #[test]
+    fn parse_epub_basic() {
+        let epub_data = build_test_epub(
+            r#"<html xmlns="http://www.w3.org/1999/xhtml"><body>
+<h1>第一章 开始</h1><p>第一段内容</p><p>第二段内容</p>
+</body></html>"#,
+        );
+        let result = parse_epub(&epub_data).unwrap();
+        assert_eq!(result.title.as_deref(), Some("Test Book"));
+        assert_eq!(result.author.as_deref(), Some("Tester"));
+        assert_eq!(result.chapters.len(), 1);
+        assert_eq!(result.chapters[0].title, "第一章 开始");
+        assert!(result.text_content.contains("第一段内容"));
     }
 }
