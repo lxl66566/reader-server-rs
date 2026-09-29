@@ -105,66 +105,64 @@ async fn register(
         return Err(AppError::InviteCodeRequired);
     }
 
-    // 验证邀请码
+    // 哈希密码（耗时操作，在开启事务前完成）
+    let password_hash = hash_password(&req.password)?;
+
+    // 注册的三步写入（核销邀请码 / 创建用户 / 默认阅读设置）放进同一事务，
+    // 中途任一步失败整体回滚，不留部分状态
+    let mut tx = pool.begin().await?;
+
+    // 原子核销邀请码：在 UPDATE 的 WHERE 中判断次数上限，靠 rows_affected
+    // 判断是否核销成功，消除“先校验后核销”之间的并发超额窗口
     if let Some(invite_code) = &req.invite_code {
-        let invite = sqlx::query!(
-            "SELECT id, limit_times, used_times FROM invite_codes WHERE code = ?",
+        let redeemed = sqlx::query!(
+            "UPDATE invite_codes SET used_times = used_times + 1 WHERE code = ? AND (limit_times \
+             < 0 OR used_times < limit_times)",
             invite_code
         )
-        .fetch_optional(&pool)
-        .await?;
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
 
-        match invite {
-            Some(invite) if invite.limit_times >= 0 && invite.used_times >= invite.limit_times => {
-                return Err(AppError::InviteCodeExhausted);
-            },
-            None => {
-                return Err(AppError::InviteCodeInvalid);
-            },
-            _ => {
-                // 邀请码有效
-            },
+        if redeemed == 0 {
+            // 未核销成功：区分邀请码不存在与次数已耗尽
+            let exists = sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(SELECT 1 FROM invite_codes WHERE code = ?)",
+            )
+            .bind(invite_code)
+            .fetch_one(&mut *tx)
+            .await?;
+            return Err(if exists {
+                AppError::InviteCodeExhausted
+            } else {
+                AppError::InviteCodeInvalid
+            });
         }
     }
 
-    // 检查用户名是否已存在
-    let exists =
-        sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM users WHERE username = ?)")
-            .bind(&req.username)
-            .fetch_one(&pool)
-            .await?;
-
-    if exists {
-        return Err(AppError::UsernameAlreadyExists);
-    }
-
-    // 哈希密码
-    let password_hash = hash_password(&req.password)?;
-
-    // 创建用户
-    let user_id = sqlx::query!(
+    // 直接 INSERT，依赖 UNIQUE 约束兜底用户名冲突，消除“先查后插”的 TOCTOU；
+    // 冲突映射为既有的用户名已存在错误（400）而不是 500
+    let user_id = match sqlx::query!(
         "INSERT INTO users (username, password_hash) VALUES (?, ?)",
         req.username,
         password_hash
     )
-    .execute(&pool)
-    .await?
-    .last_insert_rowid();
-
-    // 更新邀请码使用次数
-    if let Some(invite_code) = &req.invite_code {
-        sqlx::query!(
-            "UPDATE invite_codes SET used_times = used_times + 1 WHERE code = ?",
-            invite_code
-        )
-        .execute(&pool)
-        .await?;
-    }
+    .execute(&mut *tx)
+    .await
+    {
+        Ok(result) => result.last_insert_rowid(),
+        Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
+            return Err(AppError::UsernameAlreadyExists);
+        },
+        Err(e) => return Err(AppError::Database(e)),
+    };
 
     // 为用户创建默认阅读设置
     sqlx::query!("INSERT INTO reading_settings (user_id) VALUES (?)", user_id)
-        .execute(&pool)
+        .execute(&mut *tx)
         .await?;
+
+    tx.commit().await?;
 
     // 生成JWT令牌（新用户 token_version 默认为 0）
     let claims = Claims::new_user(user_id, 0, &config);
