@@ -29,6 +29,7 @@ use crate::{
     app::AppState,
     auth::verify_token,
     error::AppError,
+    models::UserRole,
     routes::reading::process_heartbeat_logic,
     ws::{
         manager::OUTBOUND_CAPACITY,
@@ -62,7 +63,7 @@ pub async fn ws_handler(
         .ok_or(AppError::TokenNotProvided)?;
 
     let claims = verify_token(&token, &state.config)?;
-    if claims.role != "user" {
+    if claims.role != UserRole::User.as_str() {
         return Err(AppError::InvalidTokenRole);
     }
     let user_id: i64 = claims.sub.parse().map_err(|_| AppError::InvalidUserId)?;

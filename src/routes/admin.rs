@@ -17,7 +17,7 @@ use crate::{
         AdminListItem, AdminUserListItem, AuditLog, CheckSetupResponse, CreateAdminRequest,
         CreateInviteCodeRequest, CreateInviteCodeResponse, InviteCode, ListAdminsResponse,
         ListAuditLogsResponse, ListInviteCodesResponse, ListUsersResponse,
-        ResetUserPasswordRequest, Settings, UpdateSettingsRequest,
+        ResetUserPasswordRequest, Settings, UpdateSettingsRequest, UserStatus,
     },
     routes::{auth::validate_username, books::PaginationParams},
     utils::{generate_invite_code, generate_uuid, hash_password},
@@ -301,10 +301,12 @@ async fn ban_user(
 ) -> Result<Json<ApiResponse<()>>, AppError> {
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     let result = sqlx::query!(
-        "UPDATE users SET status = 'banned', banned_at = ?, token_version = token_version + 1 \
-         WHERE id = ? AND status != 'banned'",
+        "UPDATE users SET status = ?, banned_at = ?, token_version = token_version + 1 WHERE id = \
+         ? AND status != ?",
+        UserStatus::Banned,
         now,
         user_id,
+        UserStatus::Banned,
     )
     .execute(&pool)
     .await?;
@@ -334,9 +336,11 @@ async fn unban_user(
     Path(user_id): Path<i64>,
 ) -> Result<Json<ApiResponse<()>>, AppError> {
     let result = sqlx::query!(
-        "UPDATE users SET status = 'active', banned_at = NULL, failed_login_attempts = 0, \
-         locked_until = NULL WHERE id = ? AND status = 'banned'",
+        "UPDATE users SET status = ?, banned_at = NULL, failed_login_attempts = 0, locked_until = \
+         NULL WHERE id = ? AND status = ?",
+        UserStatus::Active,
         user_id,
+        UserStatus::Banned,
     )
     .execute(&pool)
     .await?;
