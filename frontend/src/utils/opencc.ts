@@ -1,5 +1,8 @@
 // Chinese script conversion, lazily loaded (opencc-js is heavy).
-// simplified_chinese=true -> t2s (原文繁体转简体展示), false -> s2t (反之).
+// chinese_conversion=simplified -> t2s（原文繁体转简体展示）；
+// traditional -> s2t（反之）；none -> 不转换（null 方向直通）。
+
+import type { ChineseConversion } from '../api/types';
 
 export type ConvertDirection = 's2t' | 't2s';
 type ConvertFn = (text: string) => string;
@@ -10,19 +13,30 @@ const loadings = new Map<ConvertDirection, Promise<ConvertFn>>();
 /** Sync convert after loadChineseConverter() resolved; passthrough before. */
 export function convertChinese(
   text: string,
-  direction: ConvertDirection,
+  direction: ConvertDirection | null,
 ): string {
+  if (direction === null) return text;
   return converters.get(direction)?.(text) ?? text;
 }
 
-/** 设置项对应的转换方向 */
-export function convertDirection(simplified: boolean): ConvertDirection {
-  return simplified ? 't2s' : 's2t';
+/** 设置项对应的转换方向；'none' 时返回 null（不转换） */
+export function convertDirection(
+  mode: ChineseConversion,
+): ConvertDirection | null {
+  switch (mode) {
+    case 'none':
+      return null;
+    case 'simplified':
+      return 't2s';
+    case 'traditional':
+      return 's2t';
+  }
 }
 
 export function loadChineseConverter(
-  direction: ConvertDirection,
+  direction: ConvertDirection | null,
 ): Promise<ConvertFn> {
+  if (direction === null) return Promise.resolve((text: string) => text);
   const cached = converters.get(direction);
   if (cached) return Promise.resolve(cached);
   let loading = loadings.get(direction);

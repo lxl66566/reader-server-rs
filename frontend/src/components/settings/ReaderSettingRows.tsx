@@ -3,7 +3,11 @@
 
 import { Show } from 'solid-js';
 
-import type { PaginationMode, ThemeMode } from '../../api/types';
+import type {
+  ChineseConversion,
+  PaginationMode,
+  ThemeMode,
+} from '../../api/types';
 import { useI18n } from '../../i18n';
 import type { DictKey } from '../../i18n/zh-CN';
 import {
@@ -13,7 +17,6 @@ import {
   THEME_OPTIONS,
   useSettings,
 } from '../../stores/settings';
-import { Toggle } from '../ui';
 import {
   ColorControl,
   RangeControl,
@@ -40,6 +43,17 @@ const PAGINATION_LABELS: Record<PaginationMode, DictKey> = {
   scroll: 'modeScroll',
 };
 
+const CONVERSION_LABELS: Record<ChineseConversion, DictKey> = {
+  none: 'conversionNone',
+  simplified: 'conversionSimplified',
+  traditional: 'conversionTraditional',
+};
+
+const CONVERSION_OPTIONS: ChineseConversion[] = [
+  'none',
+  'simplified',
+  'traditional',
+];
 // Neutral preset swatches; stored in the DB, not theme-aware.
 const BACKGROUND_PRESETS = ['#201f1b', '#eef1f5', '#f8f1e1', '#faf9f6'];
 const TEXT_PRESETS = ['#2b2a26', '#4a3f2d', '#5b6b8c', '#e8e6e0'];
@@ -178,13 +192,17 @@ export const ReaderSettingRows = (props: { withTheme?: boolean }) => {
         }
       />
       <SettingRow
-        label={t('settingsSimplified')}
+        label={t('settingsConversion')}
         right={
-          <Toggle
-            checked={settings.simplified_chinese}
-            onChange={checked => {
-              update({ simplified_chinese: checked });
+          <SelectControl
+            onChange={value => {
+              update({ chinese_conversion: value as ChineseConversion });
             }}
+            options={CONVERSION_OPTIONS.map(option => ({
+              label: t(CONVERSION_LABELS[option]),
+              value: option,
+            }))}
+            value={settings.chinese_conversion}
           />
         }
       />

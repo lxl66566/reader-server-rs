@@ -103,38 +103,45 @@ export const ColorControl: ParentComponent<{
   onChange: (value: string) => void;
   presets: string[];
   value: string;
-}> = props => (
-  <div class="flex items-center gap-1.5">
-    <For each={props.presets}>
-      {color => (
-        <button
-          aria-label={color}
-          class={`size-6 cursor-pointer rounded-full border transition-transform hover:scale-110 ${props.value === color ? 'border-accent' : 'border-edge'}`}
-          onClick={() => {
-            props.onChange(color);
-          }}
-          style={{ 'background-color': color }}
-          type="button"
+}> = props => {
+  // 当前值不在预设中（即自定义色生效）时，高亮取色圆圈
+  const isCustom = () => !props.presets.includes(props.value);
+  return (
+    <div class="flex items-center gap-1.5">
+      <For each={props.presets}>
+        {color => (
+          <button
+            aria-label={color}
+            class={`size-6 cursor-pointer rounded-full border transition-transform hover:scale-110 ${props.value === color ? 'border-accent' : 'border-edge'}`}
+            onClick={() => {
+              props.onChange(color);
+            }}
+            style={{ 'background-color': color }}
+            type="button"
+          />
+        )}
+      </For>
+      {/* 自定义取色：虚线边框 + 居中加号，与预设色块区分；
+          mix-blend-difference 保证加号在任意底色下可见 */}
+      <label
+        class={`relative size-6 cursor-pointer overflow-hidden rounded-full border border-dashed transition-transform hover:scale-110 ${isCustom() ? 'border-accent' : 'border-edge'}`}
+        title={props.value}
+      >
+        <span
+          class="absolute inset-0 block"
+          style={{ 'background-color': props.value }}
         />
-      )}
-    </For>
-    <label
-      class="border-edge relative size-6 cursor-pointer overflow-hidden rounded-full border"
-      title={props.value}
-    >
-      <span
-        class="absolute inset-0 block"
-        style={{ 'background-color': props.value }}
-      />
-      <input
-        aria-label={props.value}
-        class="absolute inset-0 cursor-pointer opacity-0"
-        onInput={event => {
-          props.onChange(event.currentTarget.value);
-        }}
-        type="color"
-        value={props.value}
-      />
-    </label>
-  </div>
-);
+        <VsAdd class="absolute inset-0 m-auto size-3.5 text-white mix-blend-difference" />
+        <input
+          aria-label={props.value}
+          class="absolute inset-0 cursor-pointer opacity-0"
+          onInput={event => {
+            props.onChange(event.currentTarget.value);
+          }}
+          type="color"
+          value={props.value}
+        />
+      </label>
+    </div>
+  );
+};

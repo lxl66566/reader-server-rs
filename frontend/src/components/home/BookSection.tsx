@@ -36,18 +36,18 @@ export const BookSection: ParentComponent<{
       >
         <Show
           fallback={
-            <Show
-              fallback={<EmptyState text={props.emptyText} />}
-              when={!props.empty}
-            >
-              {props.children}
-            </Show>
+            <div class="flex justify-center py-10">
+              <Spinner />
+            </div>
           }
           when={!props.loading || props.hasData}
         >
-          <div class="flex justify-center py-10">
-            <Spinner />
-          </div>
+          <Show
+            fallback={<EmptyState text={props.emptyText} />}
+            when={!props.empty}
+          >
+            {props.children}
+          </Show>
         </Show>
       </Show>
     </SectionCard>

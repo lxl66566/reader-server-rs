@@ -199,13 +199,13 @@ const EpubReader = (props: FormatReaderProps) => {
     if (!rendition) return;
     rendition.hooks.content.register((contents: { document: Document }) => {
       void loadChineseConverter(
-        convertDirection(settings.simplified_chinese),
+        convertDirection(settings.chinese_conversion),
       ).then(() => {
         if (!rendition) return;
         // 应用时重新读当前设置，避免加载期间切换方向后应用了过期方向
         convertTree(
           contents.document,
-          convertDirection(settings.simplified_chinese),
+          convertDirection(settings.chinese_conversion),
         );
       });
       attachGestures(contents.document);
@@ -216,10 +216,10 @@ const EpubReader = (props: FormatReaderProps) => {
   // 不销毁 rendition，避免 clear()+start() 造成的白屏闪烁
   createEffect(
     on(
-      () => settings.simplified_chinese,
-      simplified => {
+      () => settings.chinese_conversion,
+      mode => {
         if (!rendition || !ready()) return;
-        const direction = convertDirection(simplified);
+        const direction = convertDirection(mode);
         void loadChineseConverter(direction).then(() => {
           for (const view of rendition?.views() ?? []) {
             // epub.js 的 View 类型未暴露 contents，但运行时存在
@@ -237,7 +237,10 @@ const EpubReader = (props: FormatReaderProps) => {
   // 避免 s2t/t2s 叠加转换造成文字劣化
   const originalTexts = new WeakMap<Document, Map<Text, string>>();
 
-  function convertTree(doc: Document, direction: ConvertDirection): void {
+  function convertTree(
+    doc: Document,
+    direction: ConvertDirection | null,
+  ): void {
     let originals = originalTexts.get(doc);
     if (!originals) {
       originals = new Map();

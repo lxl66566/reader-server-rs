@@ -233,7 +233,8 @@ CREATE TABLE
     paragraph_spacing REAL NOT NULL DEFAULT 1.2,
     reading_width INTEGER NOT NULL DEFAULT 800,
     text_indent REAL NOT NULL DEFAULT 2,
-    simplified_chinese BOOLEAN NOT NULL DEFAULT 1,
+    -- 简繁转换：none=不转换；simplified=转简体；traditional=转繁体
+    chinese_conversion TEXT NOT NULL DEFAULT 'none' CHECK (chinese_conversion IN ('none', 'simplified', 'traditional')),
     -- 用户时区（IANA 名称，如 Asia/Shanghai），影响 daily_reading_stats 归算
     -- 与连续阅读天数判断；默认 UTC
     timezone TEXT NOT NULL DEFAULT 'UTC',

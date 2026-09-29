@@ -46,7 +46,7 @@
 
 - `GET/PUT /api/v1/reading/settings`，13 个字段：font_size、background_color、text_color、
   line_height、letter_spacing、paragraph_spacing、reading_width、text_indent、
-  simplified_chinese、timezone、font_family、theme（light|sepia|dark|system）、
+  chinese_conversion（none|simplified|traditional）、timezone、font_family、theme（light|sepia|dark|system）、
   pagination_mode（scroll|paginate）。GET 支持 ETag/304；PUT 为部分更新。
 - `GET /api/v1/reading/stats`：总时长、当前/最长连续天数、近 30 天每日时长。
 
@@ -91,7 +91,7 @@ percent 一律由前端计算上报；后端只校验范围并同步。
 ### 技术选型
 
 - 路由 `@solidjs/router`；提示 `solid-toast`；图标 `solid-icons`。
-- 简繁转换 `opencc-js`（客户端，对应 simplified_chinese 设置）。
+- 简繁转换 `opencc-js`（客户端，对应 chinese_conversion 设置，none 时不转换）。
 - epub 渲染 `epubjs`；pdf 渲染 `pdfjs-dist`（懒加载，仅进入对应书籍时引入）。
 - 请求层：自封装 fetch（token 注入、401 跳转、ETag 缓存、429 提示）。
 - 状态：solid-js context/store；i18n：字典式（zh-CN / en），light/dark/sepia/system 主题

@@ -417,7 +417,7 @@ async fn test_full_integration() {
     let json = response_json(resp).await;
     assert_eq!(json["data"]["font_size"], 18);
     assert_eq!(json["data"]["background_color"], "#F5F5DC");
-    assert_eq!(json["data"]["simplified_chinese"], true);
+    assert_eq!(json["data"]["chinese_conversion"], "none");
 
     // F2: update all fields
     let resp = make_json_request(
@@ -433,7 +433,7 @@ async fn test_full_integration() {
             "paragraph_spacing": 1.5,
             "reading_width": 700,
             "text_indent": 3.0,
-            "simplified_chinese": false
+            "chinese_conversion": "traditional"
         }),
         Some(&token1),
     )
@@ -453,7 +453,7 @@ async fn test_full_integration() {
     assert_eq!(json["data"]["font_size"], 22);
     assert_eq!(json["data"]["background_color"], "#FFFFFF");
     assert_eq!(json["data"]["text_color"], "#333333");
-    assert_eq!(json["data"]["simplified_chinese"], false);
+    assert_eq!(json["data"]["chinese_conversion"], "traditional");
 
     // F4: partial update (only font_size)
     let resp = make_json_request(

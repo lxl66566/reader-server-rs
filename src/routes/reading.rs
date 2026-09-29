@@ -13,8 +13,8 @@ use crate::{
     auth::AuthUser,
     error::{ApiResponse, AppError},
     models::{
-        DailyReadingStat, PaginationMode, ReadingSettings, ReadingStatsResponse, ReadingTheme,
-        UpdateReadingSettingsRequest,
+        ChineseConversion, DailyReadingStat, PaginationMode, ReadingSettings, ReadingStatsResponse,
+        ReadingTheme, UpdateReadingSettingsRequest,
     },
     utils::make_etag,
 };
@@ -141,7 +141,7 @@ async fn get_reading_settings(
             paragraph_spacing: 1.2,
             reading_width: 800,
             text_indent: 2.0,
-            simplified_chinese: true,
+            chinese_conversion: ChineseConversion::None,
             timezone: "UTC".to_string(),
             font_family: "serif".to_string(),
             theme: ReadingTheme::Light,
@@ -254,8 +254,8 @@ async fn update_reading_settings(
         sep.push("text_indent = ").push_bind_unseparated(v);
         has_update = true;
     }
-    if let Some(v) = req.simplified_chinese {
-        sep.push("simplified_chinese = ").push_bind_unseparated(v);
+    if let Some(v) = req.chinese_conversion {
+        sep.push("chinese_conversion = ").push_bind_unseparated(v);
         has_update = true;
     }
     if let Some(v) = req.timezone {

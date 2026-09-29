@@ -69,18 +69,18 @@ const TxtReader = (props: FormatReaderProps) => {
     return Math.floor(props.book.percent * props.book.total_chars);
   }
 
-  // --- script conversion: t2s or s2t per setting (offsets stay on the original) ---
+  // --- script conversion: t2s / s2t / none per setting (offsets stay on the original) ---
   // 转换器加载完成后 bump 版本号，触发文本重算
   const [converterVersion, setConverterVersion] = createSignal(0);
   createEffect(() => {
-    const direction = convertDirection(settings.simplified_chinese);
+    const direction = convertDirection(settings.chinese_conversion);
     void loadChineseConverter(direction).then(() =>
       setConverterVersion(v => v + 1),
     );
   });
   const displayText = (text: string) => {
     converterVersion();
-    return convertChinese(text, convertDirection(settings.simplified_chinese));
+    return convertChinese(text, convertDirection(settings.chinese_conversion));
   };
 
   const typography = createMemo((): PageTypography => {

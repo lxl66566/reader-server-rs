@@ -254,6 +254,17 @@ pub enum PaginationMode {
     Paginate,
 }
 
+/// 简繁转换方向
+/// none=不转换；simplified=转简体；traditional=转繁体
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, sqlx::Type, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+#[sqlx(type_name = "TEXT", rename_all = "lowercase")]
+pub enum ChineseConversion {
+    None,
+    Simplified,
+    Traditional,
+}
+
 // 阅读设置模型
 #[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct ReadingSettings {
@@ -267,7 +278,7 @@ pub struct ReadingSettings {
     pub paragraph_spacing: f64,
     pub reading_width: i64,
     pub text_indent: f64,
-    pub simplified_chinese: bool,
+    pub chinese_conversion: ChineseConversion,
     /// IANA 时区名（如 `Asia/Shanghai`），用于阅读统计与连续天数归算
     pub timezone: String,
     /// 字体族标识（前端解释），如 `serif`/`sans-serif`/自定义字体名
@@ -393,7 +404,7 @@ pub struct UpdateReadingSettingsRequest {
     pub paragraph_spacing: Option<f64>,
     pub reading_width: Option<i64>,
     pub text_indent: Option<f64>,
-    pub simplified_chinese: Option<bool>,
+    pub chinese_conversion: Option<ChineseConversion>,
     /// IANA 时区名；服务端会校验有效性
     pub timezone: Option<String>,
     pub font_family: Option<String>,

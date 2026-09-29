@@ -97,6 +97,8 @@ export interface Chapter {
   title: string;
 }
 
+export type ChineseConversion = 'none' | 'simplified' | 'traditional';
+
 export interface InviteCodeItem {
   created_at: string;
   description: null | string;
@@ -122,6 +124,7 @@ export interface PublicBook {
 
 export interface ReadingSettings {
   background_color: string;
+  chinese_conversion: ChineseConversion;
   font_family: string;
   font_size: number;
   letter_spacing: number;
@@ -129,7 +132,6 @@ export interface ReadingSettings {
   pagination_mode: PaginationMode;
   paragraph_spacing: number;
   reading_width: number;
-  simplified_chinese: boolean;
   text_color: string;
   text_indent: number;
   theme: ThemeMode;

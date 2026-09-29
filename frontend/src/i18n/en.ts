@@ -35,6 +35,9 @@ const en: Dict = {
   confirmAction: 'Are you sure?',
   confirmPassword: 'Confirm password',
   continueReading: 'Continue reading',
+  conversionNone: 'No conversion',
+  conversionSimplified: 'To Simplified',
+  conversionTraditional: 'To Traditional',
   copied: 'Copied',
   copy: 'Copy',
   createdAt: 'Created at',
@@ -168,6 +171,7 @@ const en: Dict = {
   searchScopeMine: 'Mine',
   searchScopePublic: 'Public',
   settingsBackground: 'Background',
+  settingsConversion: 'Chinese conversion',
 
   settingsFontFamily: 'Font family',
   settingsFontSize: 'Font size',
@@ -177,9 +181,10 @@ const en: Dict = {
   settingsParagraphSpacing: 'Paragraph spacing',
   settingsPreview: 'Preview',
 
-  settingsPreviewText: 'Tune the options above and this text updates live.',
+  // paragraphs are split on blank lines by SettingsPreview
+  settingsPreviewText:
+    'Night deepened, and one by one the lamps outside the window came on. He closed the book in his hands, his fingertips lingering on the corner of the last page, as if reluctant to let the story end.\n\nThe tea on the desk had gone cold, though he never noticed. Those words were like a quiet river, carrying him through the joys and sorrows of others, and reflecting his own heart back at him.\n\nAfter a long while, he rose and pushed the window open. The evening breeze carried the first chill of autumn. Tomorrow would come early, he thought, but for now, let him read just one more chapter.',
   settingsReadingWidth: 'Reading width',
-  settingsSimplified: 'Convert to Simplified Chinese',
   settingsTextColor: 'Text color',
 
   settingsTextIndent: 'Text indent',

@@ -35,6 +35,9 @@ const zhCN = {
   confirmAction: '确定执行该操作吗？',
   confirmPassword: '确认密码',
   continueReading: '继续阅读',
+  conversionNone: '不转换',
+  conversionSimplified: '转为简体',
+  conversionTraditional: '转为繁体',
   copied: '已复制',
   copy: '复制',
   createdAt: '创建时间',
@@ -164,6 +167,7 @@ const zhCN = {
   searchScopeMine: '我的',
   searchScopePublic: '公开',
   settingsBackground: '背景色',
+  settingsConversion: '简繁转换',
 
   settingsFontFamily: '字体',
   settingsFontSize: '字号',
@@ -173,9 +177,10 @@ const zhCN = {
   settingsParagraphSpacing: '段间距',
   settingsPreview: '预览',
 
-  settingsPreviewText: '调整上面的选项，这里的文字会实时变化。',
+  // 空行分段，SettingsPreview 会渲染成多个段落
+  settingsPreviewText:
+    '夜色渐渐深了，窗外的灯火一盏一盏亮起来。他合上手中的书，指尖还停留在最后一页的边角，仿佛不忍就此结束这个故事。\n\n书桌上的茶已经凉了，他却浑然不觉。那些文字像一条安静的河，载着他穿过别人的悲欢，也照见自己的心事。\n\n良久，他起身推开窗。晚风拂面，带着初秋的凉意。他想，明天还要早起，但此刻，就让他再读一章吧。',
   settingsReadingWidth: '阅读宽度',
-  settingsSimplified: '转换为简体',
   settingsTextColor: '文字颜色',
 
   settingsTextIndent: '首行缩进',
