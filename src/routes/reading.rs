@@ -256,7 +256,8 @@ pub struct HeartbeatResult {
 ///
 /// 设计要点：
 /// - 首次心跳会创建进度记录
-/// - 若 `last_device_id` 与本次不同，返回服务器进度（让新设备同步），不更新
+/// - 若 `last_device_id` 与本次不同，返回服务器进度（让新设备同步），不更新进度/时长， 但会将
+///   `last_device_id` 让位给本设备，使其下一次心跳即可接管写入
 /// - 同设备正常更新进度，累加阅读时间（与上次间隔 < 30s 才计入）
 /// - 使用乐观锁：若并发心跳抢先更新，本次视为未更新但返回最新进度
 ///
@@ -338,8 +339,19 @@ pub async fn process_heartbeat_logic(
     // 检查设备ID是否相同
     let is_same_device = last_device_id.as_deref().is_none_or(|id| id == device_id);
 
-    // 如果设备不同，返回服务器保存的进度（让新设备同步），不更新
+    // 如果设备不同，返回服务器保存的进度（让新设备同步），不更新进度/时长；
+    // 但将 last_device_id 让位给本设备——否则旧设备停止心跳后新设备永远无法接管，
+    // 造成进度与阅读时长永不落库（多设备接管死锁）
     if !is_same_device {
+        sqlx::query!(
+            "UPDATE reading_progress SET last_device_id = ? WHERE user_id = ? AND book_id = ?",
+            device_id,
+            user_id,
+            book_id
+        )
+        .execute(pool)
+        .await?;
+
         return Ok(HeartbeatResult {
             synced: false,
             locator: progress.locator,
