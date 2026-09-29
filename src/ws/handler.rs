@@ -113,6 +113,12 @@ async fn handle_socket(socket: axum::extract::ws::WebSocket, user_id: i64, state
     // interval 首次 tick 立即完成，跳过避免连接刚建立就发 ping
     ping_interval.tick().await;
 
+    // idle 计时器必须固定在循环外：在 select! 分支里临时构造 sleep 会每轮重建，永不触发。
+    // 仅客户端上行数据帧（Text/Binary）重置计时，服务端自己的 ping/pong 不算活跃证据，
+    // 否则 TCP 半开连接会被服务端 ping 永久保活、泄漏订阅。
+    let idle_sleep = tokio::time::sleep(IDLE_TIMEOUT);
+    tokio::pin!(idle_sleep);
+
     info!(user_id, "ws connected");
 
     loop {
@@ -121,9 +127,16 @@ async fn handle_socket(socket: axum::extract::ws::WebSocket, user_id: i64, state
             msg = stream.next() => match msg {
                 Some(Ok(m)) => match m {
                     axum::extract::ws::Message::Text(text) => {
+                        // 收到上行数据帧，重置 idle 计时
+                        idle_sleep
+                            .as_mut()
+                            .reset(tokio::time::Instant::now() + IDLE_TIMEOUT);
                         handle_text(text.as_str(), &state, &out_tx, &mut session).await;
                     }
                     axum::extract::ws::Message::Binary(b) => {
+                        idle_sleep
+                            .as_mut()
+                            .reset(tokio::time::Instant::now() + IDLE_TIMEOUT);
                         // 兼容二进制承载的 JSON
                         match std::str::from_utf8(&b) {
                             Ok(s) => handle_text(s, &state, &out_tx, &mut session).await,
@@ -173,8 +186,8 @@ async fn handle_socket(socket: axum::extract::ws::WebSocket, user_id: i64, state
                 }
             }
 
-            // 长时间无任何上行消息（无心跳、无 pong）→ 视为僵尸连接
-            () = tokio::time::sleep(IDLE_TIMEOUT) => {
+            // 长时间无任何上行数据帧（无心跳、无二进制消息）→ 视为僵尸连接
+            () = &mut idle_sleep => {
                 warn!(user_id, "ws idle timeout, closing");
                 break;
             }
