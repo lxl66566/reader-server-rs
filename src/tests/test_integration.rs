@@ -1663,3 +1663,48 @@ async fn test_multi_device_heartbeat_takeover() {
 
     println!("\n===== Multi-device heartbeat takeover tests passed! =====");
 }
+
+#[tokio::test]
+async fn test_pagination_params_clamped() {
+    // 回归测试：page=0 曾导致 `(page - 1) * limit` u32 下溢（debug panic / release 垃圾
+    // offset）；修复后 page<1 视为第一页，超大 limit 被钳制上限而不是全表扫描
+    let (app, _pool) = setup_test_app().await.unwrap();
+    // 注意：setup_admin 会开启 invite_code_required，须先注册普通用户
+    let token = register_and_login(&app, "paged_user", "password1").await;
+    upload_test_book(&app, &token, "分页书", TEST_BOOK_CONTENT, true).await;
+    let (admin_token, _) = setup_admin(&app).await;
+
+    // page=0 与超大 limit 都应正常返回第一页数据
+    for uri in [
+        "/api/v1/books?page=0&limit=10",
+        "/api/v1/books?page=1&limit=4294967295",
+        "/api/v1/books/public?page=0&limit=999999",
+    ] {
+        let resp = make_request(&app, Method::GET, uri, Body::empty(), Some(&token)).await;
+        assert_eq!(resp.status(), StatusCode::OK, "{uri} must not panic");
+        let json = response_json(resp).await;
+        assert_eq!(json["code"], 0, "{uri}: {json:?}");
+        assert_eq!(json["data"]["total"], 1, "{uri}: {json:?}");
+        assert_eq!(
+            json["data"]["books"].as_array().unwrap().len(),
+            1,
+            "{uri}: {json:?}"
+        );
+    }
+
+    // 管理端审计日志：page=0 / limit=0 同样不得下溢（limit 被钳制到最小 1）
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/v1/admin/audit_logs?page=0&limit=0",
+        Body::empty(),
+        Some(&admin_token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = response_json(resp).await;
+    assert_eq!(json["code"], 0, "{json:?}");
+    assert!(json["data"]["logs"].is_array(), "{json:?}");
+
+    println!("\n===== Pagination clamp tests passed! =====");
+}

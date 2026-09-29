@@ -448,11 +448,8 @@ async fn list_audit_logs(
     State(pool): State<Pool<Sqlite>>,
     Query(params): Query<PaginationParams>,
 ) -> Result<Json<ApiResponse<ListAuditLogsResponse>>, AppError> {
-    let page = params.page.unwrap_or(1);
-    #[allow(clippy::cast_sign_loss)]
-    let limit = params.limit.unwrap_or(20).min(100);
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let offset = i64::from((page - 1) * limit);
+    // 归一化分页参数：page 最小为 1，limit 上限 100
+    let (limit, offset) = params.normalize(20, 100);
 
     let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audit_logs")
         .fetch_one(&pool)

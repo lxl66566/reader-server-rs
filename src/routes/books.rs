@@ -36,6 +36,17 @@ pub struct PaginationParams {
     pub limit: Option<u32>,
 }
 
+impl PaginationParams {
+    /// 归一化分页参数，返回可直接用于 SQL 的 `(limit, offset)`。
+    /// page 最小为 1（避免 `(page - 1)` u32 下溢），limit 钳制在 `[1, max_limit]`
+    /// （避免无上限拉取全表）；offset 先转 i64 再乘，避免 u32 乘法溢出。
+    pub fn normalize(&self, default_limit: u32, max_limit: u32) -> (u32, i64) {
+        let page = self.page.unwrap_or(1).max(1);
+        let limit = self.limit.unwrap_or(default_limit).clamp(1, max_limit);
+        (limit, i64::from(page - 1) * i64::from(limit))
+    }
+}
+
 // 获取内容查询参数（仅 txt 格式有意义）
 #[derive(Debug, Deserialize)]
 pub struct ContentParams {
@@ -359,10 +370,8 @@ async fn list_books(
     State(pool): State<Pool<Sqlite>>,
     Query(params): Query<PaginationParams>,
 ) -> Result<Json<ApiResponse<BookListResponse>>, AppError> {
-    // 解析分页参数
-    let page = params.page.unwrap_or(1);
-    let limit = params.limit.unwrap_or(10);
-    let offset = (page - 1) * limit;
+    // 归一化分页参数：page 最小为 1，limit 上限 50
+    let (limit, offset) = params.normalize(10, 50);
 
     // 获取总数
     let total = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM books WHERE user_id = ?")
@@ -846,10 +855,8 @@ async fn list_public_books(
     State(pool): State<Pool<Sqlite>>,
     Query(params): Query<PaginationParams>,
 ) -> Result<Json<ApiResponse<PublicBookListResponse>>, AppError> {
-    // 解析分页参数
-    let page = params.page.unwrap_or(1);
-    let limit = params.limit.unwrap_or(10);
-    let offset = (page - 1) * limit;
+    // 归一化分页参数：page 最小为 1，limit 上限 50
+    let (limit, offset) = params.normalize(10, 50);
 
     // 获取总数
     let total = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM books WHERE is_public = 1")
