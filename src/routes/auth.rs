@@ -95,11 +95,14 @@ async fn register(
     }
 
     // 检查系统设置
+    // 安全取向：settings 行缺失（通常意味着管理员尚未完成 setup）时按“需要邀请码”
+    // 处理，避免公网部署下管理员 setup 前存在无邀请码的开放注册窗口；
+    // setup 完成后管理员可在管理页面关闭该开关
     let invite_code_required =
         sqlx::query_scalar::<_, bool>("SELECT invite_code_required FROM settings WHERE id = 1")
             .fetch_optional(&pool)
             .await?
-            .unwrap_or(false);
+            .unwrap_or(true);
 
     // 如果系统需要邀请码，但用户未提供
     if invite_code_required && req.invite_code.is_none() {

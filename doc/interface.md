@@ -95,6 +95,7 @@ type Annotation = {
 | POST | /api/v1/auth/register | - | Body: { username: string; password: string; invite_code?: string } | { user_id: number; username: string; token: string } |
 
 > 用户名规则：2-20 个字符，仅限中英文/字母/数字/`_`/`-`；注册、管理员 setup 与新增管理员均校验，不满足返回 400。
+> 管理员完成 setup 前（settings 未初始化）注册默认要求邀请码；setup 后管理员可在设置中关闭。
 
 > 全局按客户端 IP 维度限流，默认 10 rps / burst 30；超限返回 429。
 > `/health` 与带 If-None-Match 命中的请求不消耗带宽。

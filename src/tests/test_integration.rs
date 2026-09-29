@@ -2086,3 +2086,26 @@ async fn test_audit_logs_record_login_events() {
 
     println!("\n===== Audit login events test passed! =====");
 }
+
+#[tokio::test]
+async fn test_register_requires_invite_before_setup() {
+    let (app, pool) = setup_test_app().await.unwrap();
+    // 清掉测试环境预置的 settings 行，模拟公网部署且管理员尚未 setup 的场景
+    sqlx::query("DELETE FROM settings")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // settings 行缺失时按需要邀请码处理：无邀请码注册被拒
+    let resp = register_user(&app, "early_bird", "password1", None).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let json = response_json(resp).await;
+    assert!(
+        json["message"]
+            .as_str()
+            .unwrap()
+            .contains("Invite code required")
+    );
+
+    println!("\n===== Pre-setup invite requirement test passed! =====");
+}
