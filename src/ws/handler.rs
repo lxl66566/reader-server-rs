@@ -6,7 +6,7 @@
 //!
 //! 连接生命周期：
 //! 1. 升级握手 + 鉴权
-//! 2. 主循环 select! 四路事件：客户端消息、待发送队列、定时 ping、idle 超时
+//! 2. 主循环 select! 五路事件：客户端消息、待发送队列、定时 ping、idle 超时、周期鉴权重验
 //! 3. 任一端断开 → 退出循环 → 清理注册表中的订阅
 
 use std::collections::HashMap;
@@ -39,6 +39,9 @@ use crate::{
 const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 /// 服务端主动 ping 间隔（应明显小于 [`IDLE_TIMEOUT`]）
 const PING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+/// 周期性重验用户状态间隔：握手后 ban / 吊销 token（token_version 变化）/ 删号
+/// 不会立即断开已有连接，靠该定时重验兜底，最长延迟一个间隔
+const REVALIDATE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 
 #[derive(Debug, Deserialize, Default)]
 pub struct WsAuthQuery {
@@ -64,18 +67,29 @@ pub async fn ws_handler(
     let user_id: i64 = claims.sub.parse().map_err(|_| AppError::InvalidUserId)?;
 
     // 复用 AuthUser 的鉴权逻辑：验证用户存在、token 版本号、封禁状态
+    check_user_valid(&state.db, user_id, claims.ver).await?;
+
+    Ok(ws.on_upgrade(move |socket| handle_socket(socket, user_id, claims.ver, state)))
+}
+
+/// 校验用户存在、token 版本号匹配、未被封禁；握手鉴权与周期重验共用
+async fn check_user_valid(
+    db: &sqlx::Pool<sqlx::Sqlite>,
+    user_id: i64,
+    token_version: i64,
+) -> Result<(), AppError> {
     let user = sqlx::query!(
         "SELECT token_version, status FROM users WHERE id = ?",
         user_id
     )
-    .fetch_optional(&state.db)
+    .fetch_optional(db)
     .await?;
 
     match user {
         None => Err(AppError::UserNotFound),
-        Some(row) if row.token_version != claims.ver => Err(AppError::TokenExpiredOrInvalid),
+        Some(row) if row.token_version != token_version => Err(AppError::TokenExpiredOrInvalid),
         Some(row) if row.status == "banned" => Err(AppError::UserBanned),
-        Some(_) => Ok(ws.on_upgrade(move |socket| handle_socket(socket, user_id, state))),
+        Some(_) => Ok(()),
     }
 }
 
@@ -105,7 +119,12 @@ impl Session {
     }
 }
 
-async fn handle_socket(socket: axum::extract::ws::WebSocket, user_id: i64, state: AppState) {
+async fn handle_socket(
+    socket: axum::extract::ws::WebSocket,
+    user_id: i64,
+    token_version: i64,
+    state: AppState,
+) {
     let (mut sink, mut stream) = socket.split();
     // 每个连接一个有界出站队列：广播方 try_send（满则把该订阅驱逐出注册表），
     // 主循环 recv 后通过 sink 发出。handler 自身回包也用非阻塞 try_send，
@@ -116,6 +135,9 @@ async fn handle_socket(socket: axum::extract::ws::WebSocket, user_id: i64, state
     let mut ping_interval = tokio::time::interval(PING_INTERVAL);
     // interval 首次 tick 立即完成，跳过避免连接刚建立就发 ping
     ping_interval.tick().await;
+    let mut revalidate_interval = tokio::time::interval(REVALIDATE_INTERVAL);
+    // 同上，跳过首次立即 tick（握手时刚鉴权过）
+    revalidate_interval.tick().await;
 
     // idle 计时器必须固定在循环外：在 select! 分支里临时构造 sleep 会每轮重建，永不触发。
     // 仅客户端上行数据帧（Text/Binary）重置计时，服务端自己的 ping/pong 不算活跃证据，
@@ -203,6 +225,14 @@ async fn handle_socket(socket: axum::extract::ws::WebSocket, user_id: i64, state
             () = &mut idle_sleep => {
                 warn!(user_id, "ws idle timeout, closing");
                 break;
+            }
+
+            // 周期重验用户状态：banned / token_version 变化（改密、重置）/ 删号 → 断开
+            _ = revalidate_interval.tick() => {
+                if let Err(e) = check_user_valid(&state.db, user_id, token_version).await {
+                    info!(user_id, error = %e, "ws revalidation failed, closing");
+                    break;
+                }
             }
         }
     }
