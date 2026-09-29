@@ -1708,3 +1708,48 @@ async fn test_pagination_params_clamped() {
 
     println!("\n===== Pagination clamp tests passed! =====");
 }
+
+#[tokio::test]
+async fn test_backup_global_contains_db_and_books() {
+    // 回归测试：备份 zip 必须包含数据库快照（修复前因 db 路径前缀剥离顺序错误，
+    // zip 里根本没有 db 文件且只 warn 不报错）以及已上传的书籍文件
+    let (app, _pool) = setup_test_app().await.unwrap();
+    let token = register_and_login(&app, "backup_user", "password1").await;
+    upload_test_book(&app, &token, "备份书", TEST_BOOK_CONTENT, false).await;
+    let (admin_token, _) = setup_admin(&app).await;
+
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/v1/admin/backup",
+        Body::empty(),
+        Some(&admin_token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes[..])).unwrap();
+    let names: Vec<String> = (0..zip.len())
+        .map(|i| zip.by_index(i).unwrap().name().to_string())
+        .collect();
+    assert!(
+        names.iter().any(|n| n == "reader.db"),
+        "backup must contain db snapshot: {names:?}"
+    );
+    assert!(
+        names.iter().any(|n| n.starts_with("books/")),
+        "backup must contain book files: {names:?}"
+    );
+
+    // db 快照必须是一个完整可用的 sqlite 数据库文件（VACUUM INTO 一致性快照）
+    let mut db_bytes = Vec::new();
+    {
+        let mut db_file = zip.by_name("reader.db").unwrap();
+        std::io::Read::read_to_end(&mut db_file, &mut db_bytes).unwrap();
+    }
+    assert_eq!(&db_bytes[..16], b"SQLite format 3\0");
+    assert!(db_bytes.len() > 16);
+
+    println!("\n===== Backup tests passed! =====");
+}

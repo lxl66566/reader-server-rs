@@ -20,7 +20,7 @@ use crate::{
         ResetUserPasswordRequest, Settings, UpdateSettingsRequest,
     },
     routes::{auth::validate_username, books::PaginationParams},
-    utils::{generate_invite_code, hash_password},
+    utils::{generate_invite_code, generate_uuid, hash_password},
 };
 
 // 管理员路由
@@ -469,7 +469,8 @@ async fn list_audit_logs(
     })))
 }
 
-// 全局备份：把 db 文件 + 全部书籍文件打包成 zip 供下载
+// 全局备份：数据库一致性快照 + 全部书籍文件打包成 zip 供下载。
+// 任何组成部分缺失/失败都显式报错，绝不产出“看似成功实则缺文件”的备份。
 async fn backup_global(
     admin: AuthAdmin,
     State(pool): State<Pool<Sqlite>>,
@@ -477,12 +478,25 @@ async fn backup_global(
 ) -> Result<Response, AppError> {
     use std::io::Write;
 
-    // 强制 WAL 落盘，保证备份一致性
-    let _ = sqlx::query("PRAGMA wal_checkpoint(FULL)")
-        .execute(&pool)
-        .await;
-
     log_audit(&pool, &admin, "backup_global", None, None, None).await?;
+
+    // 用 VACUUM INTO 生成数据库一致性快照（SQLite 在线备份）：
+    // 直接读 db 文件在 WAL 模式下会漏掉未 checkpoint 的数据，且与并发写入竞争；
+    // 此前从 db url 剥离前缀的顺序也是错的（先剥 "sqlite:" 后 "sqlite://" 永不命中），
+    // 快照方式不再依赖路径解析
+    let snapshot_path = std::env::temp_dir().join(format!("reader-backup-{}.db", generate_uuid()));
+    let snapshot_result: Result<Vec<u8>, AppError> = async {
+        sqlx::query("VACUUM INTO ?")
+            .bind(snapshot_path.to_string_lossy().as_ref())
+            .execute(&pool)
+            .await?;
+        tokio::fs::read(&snapshot_path).await.map_err(AppError::Io)
+    }
+    .await;
+    // 无论成败都清理临时快照文件
+    let _ = tokio::fs::remove_file(&snapshot_path).await;
+    // 数据库是备份的核心，快照失败必须显式拒绝
+    let db_bytes = snapshot_result?;
 
     let mut zip_buf: Vec<u8> = Vec::new();
     {
@@ -490,54 +504,51 @@ async fn backup_global(
         let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Stored);
 
-        // 写入数据库文件（从配置的 url 解析路径；支持 sqlite: 前缀）
-        let db_url = &config.db.url;
-        let db_path = db_url
-            .trim_start_matches("sqlite:")
-            .trim_start_matches("sqlite://");
-        match tokio::fs::read(db_path).await {
-            Ok(bytes) => {
-                zip.start_file("reader.db", opts)
-                    .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
-                zip.write_all(&bytes)
-                    .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
-            },
-            Err(e) => {
-                tracing::warn!(error = %e, db = %db_path, "skip db file in global backup");
-            },
-        }
+        zip.start_file("reader.db", opts)
+            .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
+        zip.write_all(&db_bytes)
+            .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
 
-        // 写入 books 目录所有文件
+        // 写入 books 目录所有文件；任何文件读取/写入失败都记录下来，
+        // 最后整体报错拒绝，不让调用方在不知情的情况下拿到残缺备份
         let book_dir = &config.storage.book_dir;
-        let mut entries = match tokio::fs::read_dir(book_dir).await {
-            Ok(e) => e,
-            Err(e) => {
-                tracing::warn!(error = %e, dir = %book_dir.display(), "skip book_dir in backup");
-                zip.finish()
-                    .map_err(|e| AppError::Internal(format!("zip finalize: {e}")))?;
-                return Ok(finalize_backup(zip_buf));
-            },
-        };
-
+        let mut entries = tokio::fs::read_dir(book_dir).await.map_err(AppError::Io)?;
+        let mut failed: Vec<String> = Vec::new();
         while let Some(entry) = entries.next_entry().await.map_err(AppError::Io)? {
             let path = entry.path();
             if !path.is_file() {
                 continue;
             }
             let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+                failed.push(path.display().to_string());
                 continue;
             };
             let entry_name = format!("books/{name}");
-            if zip.start_file(&entry_name, opts).is_err() {
-                continue;
+            let archive_result: Result<(), AppError> = async {
+                let bytes = tokio::fs::read(&path).await.map_err(AppError::Io)?;
+                zip.start_file(&entry_name, opts)
+                    .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
+                zip.write_all(&bytes)
+                    .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
+                Ok(())
             }
-            if let Ok(bytes) = tokio::fs::read(&path).await {
-                let _ = zip.write_all(&bytes);
+            .await;
+            if let Err(e) = archive_result {
+                tracing::error!(error = %e, file = %path.display(), "backup: failed to archive book file");
+                failed.push(path.display().to_string());
             }
         }
 
         zip.finish()
             .map_err(|e| AppError::Internal(format!("zip finalize: {e}")))?;
+
+        if !failed.is_empty() {
+            // 失败详情已记入日志；向客户端只返回固定文案（Internal 的统一行为）
+            return Err(AppError::Internal(format!(
+                "backup incomplete: {} file(s) failed to archive",
+                failed.len()
+            )));
+        }
     }
 
     Ok(finalize_backup(zip_buf))
