@@ -18,6 +18,7 @@ use crate::{
         Book, Bookmark, ChangePasswordRequest, CreateUserRequest, DeleteAccountRequest,
         LoginRequest, User, UserInfoResponse,
     },
+    routes::admin::log_audit_event,
     utils::{hash_password, verify_password},
 };
 
@@ -200,8 +201,21 @@ async fn login(
     let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE username = ?")
         .bind(&req.username)
         .fetch_optional(&pool)
-        .await?
-        .ok_or_else(|| AppError::InvalidCredentials)?;
+        .await?;
+    let Some(user) = user else {
+        // 审计：用户登录失败（用户名不存在）
+        log_audit_event(
+            &pool,
+            None,
+            None,
+            "user_login_failed",
+            None,
+            None,
+            Some(&req.username),
+        )
+        .await?;
+        return Err(AppError::InvalidCredentials);
+    };
 
     // 检查账户是否被管理员封禁（先于锁定判断，避免被封用户看到锁定提示）
     if user.status == crate::models::UserStatus::Banned {
@@ -228,6 +242,17 @@ async fn login(
             user.id
         )
         .execute(&pool)
+        .await?;
+        // 审计：用户登录失败（密码错误）
+        log_audit_event(
+            &pool,
+            None,
+            None,
+            "user_login_failed",
+            Some("user"),
+            Some(user.id),
+            Some(&user.username),
+        )
         .await?;
         return Err(AppError::InvalidCredentials);
     }
@@ -569,6 +594,18 @@ async fn admin_setup(
         .execute(&pool)
         .await?;
 
+    // 审计：初始管理员设置完成
+    log_audit_event(
+        &pool,
+        Some(admin_id),
+        Some(&req.username),
+        "admin_setup",
+        None,
+        None,
+        None,
+    )
+    .await?;
+
     // 生成JWT令牌（新管理员 token_version 默认为 0）
     let claims = Claims::new_admin(admin_id, 0, &config);
     let token = create_token(&claims, &config)?;
@@ -589,8 +626,21 @@ async fn admin_login(
     let admin = sqlx::query_as::<_, Admin>("SELECT * FROM admin WHERE username = ?")
         .bind(&req.username)
         .fetch_optional(&pool)
-        .await?
-        .ok_or_else(|| AppError::InvalidCredentials)?;
+        .await?;
+    let Some(admin) = admin else {
+        // 审计：管理员登录失败（用户名不存在）
+        log_audit_event(
+            &pool,
+            None,
+            None,
+            "admin_login_failed",
+            None,
+            None,
+            Some(&req.username),
+        )
+        .await?;
+        return Err(AppError::InvalidCredentials);
+    };
 
     // 检查账户是否被锁定（与普通用户登录同一套失败锁定机制）
     if let Some(ref locked_until) = admin.locked_until
@@ -613,6 +663,17 @@ async fn admin_login(
         )
         .execute(&pool)
         .await?;
+        // 审计：管理员登录失败（密码错误）
+        log_audit_event(
+            &pool,
+            Some(admin.id),
+            Some(&admin.username),
+            "admin_login_failed",
+            None,
+            None,
+            None,
+        )
+        .await?;
         return Err(AppError::IncorrectAdminPassword);
     }
 
@@ -625,6 +686,18 @@ async fn admin_login(
         .execute(&pool)
         .await?;
     }
+
+    // 审计：管理员登录成功
+    log_audit_event(
+        &pool,
+        Some(admin.id),
+        Some(&admin.username),
+        "admin_login",
+        None,
+        None,
+        None,
+    )
+    .await?;
 
     // 生成JWT令牌
     let claims = Claims::new_admin(admin.id, admin.token_version, &config);

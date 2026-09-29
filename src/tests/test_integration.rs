@@ -2020,3 +2020,69 @@ async fn test_admin_login_lockout() {
 
     println!("\n===== Admin login lockout test passed! =====");
 }
+
+#[tokio::test]
+async fn test_audit_logs_record_login_events() {
+    let (app, _pool) = setup_test_app().await.unwrap();
+
+    // admin_setup 事件（setup 会顺带开启 invite_code_required，注册需邀请码，
+    // 因此用户登录失败用不存在的用户名触发）
+    let (admin_token, _) = setup_admin(&app).await;
+
+    // 用户登录失败：用户名不存在
+    let resp = make_json_request(
+        &app,
+        Method::POST,
+        "/api/v1/auth/login",
+        &serde_json::json!({"username": "ghost_user", "password": "whatever"}),
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // 管理员登录失败 + 成功各一次
+    let resp = make_json_request(
+        &app,
+        Method::POST,
+        "/api/v1/auth/admin/login",
+        &serde_json::json!({"username": "admin", "password": "wrong"}),
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    let resp = login_as_admin(&app).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 审计日志应包含全部四类登录事件
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/v1/admin/audit_logs?limit=100",
+        Body::empty(),
+        Some(&admin_token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = response_json(resp).await;
+    let logs = json["data"]["logs"].as_array().unwrap();
+    let actions: Vec<&str> = logs.iter().filter_map(|l| l["action"].as_str()).collect();
+    for expected in [
+        "admin_setup",
+        "admin_login",
+        "admin_login_failed",
+        "user_login_failed",
+    ] {
+        assert!(
+            actions.contains(&expected),
+            "missing audit action {expected}: {actions:?}"
+        );
+    }
+    // 认证前的失败事件没有操作管理员，admin_id 为 null
+    let user_failed = logs
+        .iter()
+        .find(|l| l["action"] == "user_login_failed")
+        .unwrap();
+    assert!(user_failed["admin_id"].is_null(), "{user_failed:?}");
+
+    println!("\n===== Audit login events test passed! =====");
+}

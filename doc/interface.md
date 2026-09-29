@@ -66,7 +66,7 @@ type PublicBook = {
 type InviteCodeItem = { id: number; invite_code: string; limit_times: number; used_times: number; description: string | null; created_at: string }
 type UserItem = { user_id: number; username: string; created_at: string; book_count: number; total_reading_time: number; status: 'active' | 'banned'; banned_at: string | null }
 type AdminItem = { admin_id: number; username: string; created_at: string }
-type AuditLogItem = { id: number; admin_id: number; admin_username: string; action: string; target_type: string | null; target_id: number | null; detail: string | null; created_at: string }
+type AuditLogItem = { id: number; admin_id: number | null; admin_username: string | null; action: string; target_type: string | null; target_id: number | null; detail: string | null; created_at: string }
 
 type Bookmark = {
   id: number; user_id: number; book_id: number;
@@ -123,7 +123,7 @@ type Annotation = {
 | POST | /api/v1/admin/users/:user_id/unban | Admin | - | {} |
 | GET | /api/v1/admin/admins | Admin | - | { admins: AdminItem[] } |
 | POST | /api/v1/admin/admins | Admin | Body: { username: string; password: string } | {} |
-| GET | /api/v1/admin/audit_logs?page=number&limit=number | Admin | - | { total: number; logs: AuditLogItem[] } |
+| GET | /api/v1/admin/audit_logs?page=number&limit=number | Admin | - | { total: number; logs: AuditLogItem[] }；除管理操作外还记录登录事件（admin_setup / admin_login / admin_login_failed / user_login_failed），登录类事件的 admin_id/admin_username 可能为 null |
 | GET | /api/v1/admin/backup | Admin | - | application/zip 流，包含 reader.db（`VACUUM INTO` 生成的一致性快照）+ 整个 books 目录（不压缩），用于全局灾难恢复；任何文件缺失/读取失败会整体返回 500 而不是产出残缺备份 |
 
 ### 书籍管理

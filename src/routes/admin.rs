@@ -50,11 +50,34 @@ async fn log_audit(
     target_id: Option<i64>,
     detail: Option<&str>,
 ) -> Result<(), AppError> {
+    log_audit_event(
+        pool,
+        Some(admin.admin_id),
+        Some(&admin.username),
+        action,
+        target_type,
+        target_id,
+        detail,
+    )
+    .await
+}
+
+/// 记录审计日志（泛化版）：登录类事件发生在认证之前/之外，
+/// 可能没有操作管理员，此时 admin_id / admin_username 传 None
+pub(crate) async fn log_audit_event(
+    pool: &Pool<Sqlite>,
+    admin_id: Option<i64>,
+    admin_username: Option<&str>,
+    action: &str,
+    target_type: Option<&str>,
+    target_id: Option<i64>,
+    detail: Option<&str>,
+) -> Result<(), AppError> {
     sqlx::query!(
         "INSERT INTO audit_logs (admin_id, admin_username, action, target_type, target_id, \
          detail) VALUES (?, ?, ?, ?, ?, ?)",
-        admin.admin_id,
-        admin.username,
+        admin_id,
+        admin_username,
         action,
         target_type,
         target_id,

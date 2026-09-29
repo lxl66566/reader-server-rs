@@ -40,8 +40,9 @@ CREATE TABLE
 CREATE TABLE
   IF NOT EXISTS audit_logs (
     id INTEGER PRIMARY KEY,
-    admin_id INTEGER NOT NULL,
-    admin_username TEXT NOT NULL,
+    -- 操作管理员；登录类等认证前事件没有管理员身份，这两列为 NULL
+    admin_id INTEGER,
+    admin_username TEXT,
     action TEXT NOT NULL,
     target_type TEXT,
     target_id INTEGER,
