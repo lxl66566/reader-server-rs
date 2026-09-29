@@ -34,17 +34,59 @@ pub fn routes() -> Router<crate::app::AppState> {
         .route("/admin/login", post(admin_login))
 }
 
+// 校验用户名：长度 2-20（按字符计），且只允许中英文/字母/数字/下划线/连字符。
+// 必须拒绝空白与控制字符：用户名会进入导出响应的 Content-Disposition 头等位置。
+pub(crate) fn validate_username(username: &str) -> Result<(), AppError> {
+    let len = username.chars().count();
+    if !(2..=20).contains(&len) {
+        return Err(AppError::UsernameLengthInvalid);
+    }
+    if !username
+        .chars()
+        .all(|c| c.is_alphanumeric() || matches!(c, '_' | '-'))
+    {
+        return Err(AppError::UsernameCharsInvalid);
+    }
+    Ok(())
+}
+
+// RFC 5987：把 attr-char 之外的字节做 UTF-8 percent 编码，
+// 用于 Content-Disposition 的 filename* 参数（支持中文文件名，且不会产生非法 header）。
+fn percent_encode_filename(filename: &str) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::with_capacity(filename.len());
+    for byte in filename.bytes() {
+        match byte {
+            b'A'..=b'Z'
+            | b'a'..=b'z'
+            | b'0'..=b'9'
+            | b'!'
+            | b'#'
+            | b'$'
+            | b'&'
+            | b'+'
+            | b'-'
+            | b'.'
+            | b'^'
+            | b'_'
+            | b'`'
+            | b'|'
+            | b'~' => out.push(char::from(byte)),
+            _ => write!(out, "%{byte:02X}").expect("writing to a String never fails"),
+        }
+    }
+    out
+}
+
 // 用户注册
 async fn register(
     State(pool): State<Pool<Sqlite>>,
     State(config): State<Config>,
     Json(req): Json<CreateUserRequest>,
 ) -> Result<Json<ApiResponse<AuthResponse>>, AppError> {
-    // 验证用户名格式（按字符数计，支持中英文混排）
-    let username_len = req.username.chars().count();
-    if !(2..=20).contains(&username_len) {
-        return Err(AppError::UsernameLengthInvalid);
-    }
+    // 验证用户名格式（长度 + 字符白名单）
+    validate_username(&req.username)?;
 
     // 验证密码格式
     if req.password.is_empty() {
@@ -477,15 +519,17 @@ async fn export_data(
 
     let timestamp = Utc::now().format("%Y%m%d_%H%M%S");
     let filename = format!("{}_{timestamp}.zip", user.username);
+    // RFC 5987 filename*：支持中文用户名，且避免控制字符导致的 header 注入
+    let content_disposition = format!(
+        "attachment; filename*=UTF-8''{}",
+        percent_encode_filename(&filename)
+    );
 
-    Ok(Response::builder()
+    Response::builder()
         .header(header::CONTENT_TYPE, "application/zip")
-        .header(
-            header::CONTENT_DISPOSITION,
-            format!("attachment; filename=\"{filename}\""),
-        )
+        .header(header::CONTENT_DISPOSITION, content_disposition)
         .body(Body::from(zip_buf))
-        .unwrap())
+        .map_err(|e| AppError::Internal(format!("failed to build export response: {e}")))
 }
 
 // 管理员首次设置
@@ -494,11 +538,8 @@ async fn admin_setup(
     State(config): State<Config>,
     Json(req): Json<AdminSetupRequest>,
 ) -> Result<Json<ApiResponse<AdminAuthResponse>>, AppError> {
-    // 验证用户名格式
-    let username_len = req.username.chars().count();
-    if !(2..=20).contains(&username_len) {
-        return Err(AppError::UsernameLengthInvalid);
-    }
+    // 验证用户名格式（长度 + 字符白名单）
+    validate_username(&req.username)?;
 
     // 验证密码格式
     // if req.password.chars().count() < 6 {

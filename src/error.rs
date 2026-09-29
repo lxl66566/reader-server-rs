@@ -84,6 +84,9 @@ pub enum AppError {
     #[error("Username must be between 2 and 20 characters")]
     UsernameLengthInvalid,
 
+    #[error("Username may only contain letters (including CJK), digits, '_' and '-'")]
+    UsernameCharsInvalid,
+
     #[error("Password cannot be empty")]
     PasswordEmpty,
 
@@ -205,6 +208,7 @@ impl IntoResponse for AppError {
             | AppError::AdminNotFound => StatusCode::NOT_FOUND,
 
             AppError::UsernameLengthInvalid
+            | AppError::UsernameCharsInvalid
             | AppError::PasswordEmpty
             | AppError::PasswordTooShort
             | AppError::IncorrectOldPassword
