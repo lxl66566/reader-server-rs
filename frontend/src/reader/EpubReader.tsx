@@ -1,10 +1,19 @@
 // EPUB reader: epub.js rendition with theme sync, swipe/tap gestures and
 // locator = EpubCFI, percent via generated locations.
 
+import { useNavigate } from '@solidjs/router';
 import ePub, { type Book, type Rendition } from 'epubjs';
-import { createEffect, on, onCleanup, onMount, Show } from 'solid-js';
+import {
+  createEffect,
+  createSignal,
+  on,
+  onCleanup,
+  onMount,
+  Show,
+} from 'solid-js';
 
 import { bookApi } from '../api';
+import { LoadErrorPanel } from '../components/LoadErrorPanel';
 import { Spinner } from '../components/ui';
 import { fontFamilyCss, useSettings } from '../stores/settings';
 import { loadChineseConverter, toSimplified } from '../utils/opencc';
@@ -16,24 +25,42 @@ const FLIP_THRESHOLD_PX = 60;
 
 const EpubReader = (props: FormatReaderProps) => {
   const { settings } = useSettings();
+  const navigate = useNavigate();
   let container: HTMLDivElement | undefined;
 
   let book: Book | null = null;
   let rendition: null | Rendition = null;
-  let ready = false;
+  const [ready, setReady] = createSignal(false);
+  const [error, setError] = createSignal(false);
   let pendingLocator: null | string = null;
   let locationsReady = false;
   let lastCfi: null | string = null;
 
   onMount(() => {
-    void setup();
+    void runSetup();
     onCleanup(() => {
-      ready = false;
+      setReady(false);
       book?.destroy();
       book = null;
       rendition = null;
     });
   });
+
+  // 主加载链路的统一入口：失败时进入错误态而不是永远停在加载态
+  async function runSetup(): Promise<void> {
+    setError(false);
+    try {
+      await setup();
+    } catch (err) {
+      console.error('Failed to load epub book', err);
+      // 销毁半成品实例，让重试从干净状态开始
+      book?.destroy();
+      book = null;
+      rendition = null;
+      setReady(false);
+      setError(true);
+    }
+  }
 
   async function setup(): Promise<void> {
     if (!container) return;
@@ -60,12 +87,17 @@ const EpubReader = (props: FormatReaderProps) => {
     // initial position: saved cfi, or percent-based cfi once locations exist
     const startAt = props.initialLocator;
     if (startAt && startAt.includes('epubcfi')) {
-      await rendition.display(startAt);
+      try {
+        await rendition.display(startAt);
+      } catch {
+        // 保存的 cfi 可能已过期（如书籍重新处理过）：回退到起始位置
+        await rendition.display();
+      }
     } else {
       await rendition.display();
     }
 
-    ready = true;
+    setReady(true);
     if (pendingLocator) {
       await displaySafe(pendingLocator);
       pendingLocator = null;
@@ -172,7 +204,7 @@ const EpubReader = (props: FormatReaderProps) => {
   // re-render sections when the conversion toggle flips
   createEffect(() => {
     const enabled = settings.simplified_chinese;
-    if (!rendition || !ready) return;
+    if (!rendition || !ready()) return;
     if (enabled) void loadChineseConverter();
     const current = lastCfi;
     rendition.clear();
@@ -270,8 +302,8 @@ const EpubReader = (props: FormatReaderProps) => {
         book.destroy();
         book = null;
         rendition = null;
-        ready = false;
-        void setup().then(() => {
+        setReady(false);
+        void runSetup().then(() => {
           if (current) void displaySafe(current);
         });
       },
@@ -298,7 +330,7 @@ const EpubReader = (props: FormatReaderProps) => {
       if (section) void displaySafe(section.href);
     },
     jumpToLocator: locator => {
-      if (ready) void displaySafe(locator);
+      if (ready()) void displaySafe(locator);
       else pendingLocator = locator;
     },
   });
@@ -310,9 +342,21 @@ const EpubReader = (props: FormatReaderProps) => {
         ref={container}
         style={{ 'max-width': `${settings.reading_width}em` }}
       />
-      <Show when={!ready}>
+      <Show when={!ready() && !error()}>
         <div class="absolute inset-0 flex items-center justify-center">
           <Spinner />
+        </div>
+      </Show>
+      <Show when={error()}>
+        <div class="absolute inset-0 flex items-center justify-center">
+          <LoadErrorPanel
+            onBack={() => {
+              navigate(`/book/${props.book.book_id}`);
+            }}
+            onRetry={() => {
+              void runSetup();
+            }}
+          />
         </div>
       </Show>
     </div>

@@ -1,6 +1,7 @@
 // PDF reader: pdf.js canvas rendering, page = locator ("page:N", 0-based),
 // 3-page strip with swipe/tap flipping. Pdf has no chapters on the backend.
 
+import { useNavigate } from '@solidjs/router';
 import * as pdfjs from 'pdfjs-dist';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import {
@@ -13,6 +14,7 @@ import {
 } from 'solid-js';
 
 import { bookApi } from '../api';
+import { LoadErrorPanel } from '../components/LoadErrorPanel';
 import { Spinner } from '../components/ui';
 import { useI18n } from '../i18n';
 import { useSettings } from '../stores/settings';
@@ -29,11 +31,13 @@ pdfjs.GlobalWorkerOptions.workerSrc = new URL(
 
 const PdfReader = (props: FormatReaderProps) => {
   const { t } = useI18n();
+  const navigate = useNavigate();
   let container: HTMLDivElement | undefined;
 
   const [doc, setDoc] = createSignal<null | PDFDocumentProxy>(null);
   const [page, setPage] = createSignal(initialPage());
   const [ready, setReady] = createSignal(false);
+  const [error, setError] = createSignal(false);
   const [pageWidth, setPageWidth] = createSignal(0);
 
   // gesture / animation state (same strip model as the txt paginator)
@@ -51,14 +55,24 @@ const PdfReader = (props: FormatReaderProps) => {
     return 0;
   }
 
-  onMount(() => {
-    void (async () => {
+  // 主加载链路：失败进入错误态（可重试），而不是永远停在加载态
+  const load = async () => {
+    setError(false);
+    try {
       const data = await bookApi.fetchFile(props.book.book_id);
       const loaded = await pdfjs.getDocument({ data }).promise;
       setDoc(loaded);
       setReady(true);
       report(page());
-    })();
+    } catch (err) {
+      console.error('Failed to load pdf book', err);
+      setReady(false);
+      setError(true);
+    }
+  };
+
+  onMount(() => {
+    void load();
     onCleanup(() => {
       void doc()?.cleanup();
     });
@@ -222,7 +236,23 @@ const PdfReader = (props: FormatReaderProps) => {
       ref={container}
       style={{ 'touch-action': 'pan-y' }}
     >
-      <Show fallback={<SpinnerOverlay />} when={ready() && doc()}>
+      <Show
+        fallback={
+          <Show fallback={<SpinnerOverlay />} when={error()}>
+            <div class="flex h-full items-center justify-center">
+              <LoadErrorPanel
+                onBack={() => {
+                  navigate(`/book/${props.book.book_id}`);
+                }}
+                onRetry={() => {
+                  void load();
+                }}
+              />
+            </div>
+          </Show>
+        }
+        when={ready() && doc()}
+      >
         <div
           class="flex h-full"
           classList={{
