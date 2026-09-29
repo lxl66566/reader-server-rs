@@ -310,9 +310,9 @@ async fn change_password(
     // 哈希新密码
     let new_password_hash = hash_password(&req.new_password)?;
 
-    // 更新密码
+    // 更新密码并递增 token_version：使所有已签发的旧 JWT 立即失效
     sqlx::query!(
-        "UPDATE users SET password_hash = ? WHERE id = ?",
+        "UPDATE users SET password_hash = ?, token_version = token_version + 1 WHERE id = ?",
         new_password_hash,
         auth.user_id
     )
