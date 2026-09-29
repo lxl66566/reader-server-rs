@@ -30,6 +30,9 @@ const EpubReader = (props: FormatReaderProps) => {
 
   let book: Book | null = null;
   let rendition: null | Rendition = null;
+  // 缓存首次下载的书籍文件：切换翻页模式重建 rendition 时复用，
+  // 避免每次切换都重新下载整本 epub（可达几十 MB）
+  let cachedData: ArrayBuffer | null = null;
   const [ready, setReady] = createSignal(false);
   const [error, setError] = createSignal(false);
   let pendingLocator: null | string = null;
@@ -64,8 +67,9 @@ const EpubReader = (props: FormatReaderProps) => {
 
   async function setup(): Promise<void> {
     if (!container) return;
-    const data = await bookApi.fetchFile(props.book.book_id);
-    book = ePub(data);
+    cachedData ??= await bookApi.fetchFile(props.book.book_id);
+    // 每次重建都切一份副本给 epub.js，避免其实例污染共享缓存
+    book = ePub(cachedData.slice(0));
     await book.ready;
 
     const scrolled = settings.pagination_mode === 'scroll';
