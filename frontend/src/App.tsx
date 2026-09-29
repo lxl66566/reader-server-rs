@@ -30,16 +30,16 @@ const App: Component = () => (
           position="top-center"
           toastOptions={{
             duration: 2500,
-            // use theme vars so toast matches light/sepia/dark surfaces
-            style: {
-              background: 'var(--color-surface)',
-              color: 'var(--color-fg)',
-              border: '1px solid var(--color-border)',
-              'box-shadow': '0 4px 12px rgb(0 0 0 / 0.18)',
-            },
             iconTheme: {
               primary: 'var(--color-accent)',
               secondary: 'var(--color-surface)',
+            },
+            // use theme vars so toast matches light/sepia/dark surfaces
+            style: {
+              background: 'var(--color-surface)',
+              border: '1px solid var(--color-border)',
+              'box-shadow': '0 4px 12px rgb(0 0 0 / 0.18)',
+              color: 'var(--color-fg)',
             },
           }}
         />
