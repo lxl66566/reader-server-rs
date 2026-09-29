@@ -169,6 +169,8 @@ type Annotation = {
 |---|---|---|---|---|
 | GET | /api/v1/reading/settings | Auth | Header: If-None-Match? | 200 + ETag：ReadingSettings；ETag 命中返回 304 |
 | PUT | /api/v1/reading/settings | Auth | Body: 部分字段（font_size? / background_color? / text_color? / line_height? / letter_spacing? / paragraph_spacing? / reading_width? / text_indent? / simplified_chinese? / timezone? / font_family? / theme? / pagination_mode?） | {} |
+
+> 数值字段范围：font_size 8-72（px）、line_height 1.0-3.0、letter_spacing 0-20（px）、paragraph_spacing 0-10（em）、reading_width 10-2000、text_indent 0-8（字符数）；越界返回 400。background_color/text_color 必须是 hex 颜色（`#RGB` 或 `#RRGGBB`），否则 400。theme/pagination_mode 为强类型枚举，非法值在 JSON 反序列化阶段被拒绝（422）。
 | GET | /api/v1/reading/stats | Auth | - | { total_reading_seconds: number; current_streak_days: number; longest_streak_days: number; recent_days: { date: string; reading_seconds: number }[] } |
 
 ### 推荐

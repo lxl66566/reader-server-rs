@@ -11,7 +11,7 @@ use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode}
 use serde::{Deserialize, Serialize};
 use sqlx::{Pool, Sqlite};
 
-use crate::{config::Config, error::AppError};
+use crate::{config::Config, error::AppError, models::UserRole};
 
 // JWT 声明结构
 #[derive(Debug, Serialize, Deserialize)]
@@ -103,7 +103,7 @@ where
 
         let claims = verify_token(bearer.token(), &config)?;
 
-        if claims.role != "user" {
+        if claims.role != UserRole::User.as_str() {
             return Err(AppError::InvalidTokenRole);
         }
 
@@ -141,7 +141,7 @@ where
 
         let claims = verify_token(bearer.token(), &config)?;
 
-        if claims.role != "admin" {
+        if claims.role != UserRole::Admin.as_str() {
             return Err(AppError::AdminPermissionRequired);
         }
 

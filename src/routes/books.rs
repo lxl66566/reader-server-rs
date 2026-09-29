@@ -11,6 +11,7 @@ use axum::{
 use serde::Deserialize;
 use sqlx::{Pool, Sqlite};
 use tokio::{fs, io::AsyncWriteExt};
+use tokio_util::io::ReaderStream;
 
 use crate::{
     access::{check_book_access, ensure_book_access},
@@ -642,9 +643,8 @@ async fn download_book_file(
         return Err(AppError::BookNotFound);
     }
 
-    let bytes = fs::read(&path).await.map_err(AppError::Io)?;
-
-    // ETag 基于内容 hash（上传时计算并持久化），稳定可缓存
+    // ETag 基于内容 hash（上传时计算并持久化），稳定可缓存；
+    // 命中 304 时无需打开文件
     let etag = format!("\"{}\"", book.content_hash);
     if let Some(if_none) = headers
         .get(header::IF_NONE_MATCH)
@@ -659,12 +659,18 @@ async fn download_book_file(
     // inline 让浏览器内联展示（pdf 可直接预览，epub 会被下载）
     let disposition = format!("inline; filename=\"book_{book_id}.{}\"", format.ext());
 
+    // 流式发送，避免大文件整本读入内存
+    let file = fs::File::open(&path).await.map_err(AppError::Io)?;
+    let content_length = file.metadata().await.map_err(AppError::Io)?.len();
+    let stream = ReaderStream::new(file);
+
     Response::builder()
         .header(header::CONTENT_TYPE, format.mime_type())
+        .header(header::CONTENT_LENGTH, content_length)
         .header(header::ETAG, etag.as_str())
         .header(header::CONTENT_DISPOSITION, disposition)
         .header(header::CACHE_CONTROL, "private, no-cache")
-        .body(Body::from(bytes))
+        .body(Body::from_stream(stream))
         .map_err(|e| AppError::Internal(format!("failed to build download response: {e}")))
 }
 

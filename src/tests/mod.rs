@@ -1,4 +1,5 @@
 pub mod test_integration;
+pub mod test_quality;
 
 use anyhow::Result;
 use axum::{

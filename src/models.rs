@@ -11,6 +11,25 @@ pub enum UserStatus {
     Banned,
 }
 
+/// 用户角色枚举（JWT claims.role 的取值）
+/// user=普通用户；admin=管理员
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum UserRole {
+    User,
+    Admin,
+}
+
+impl UserRole {
+    /// 角色的字符串形式（与 JWT claims.role 序列化值一致）
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            UserRole::User => "user",
+            UserRole::Admin => "admin",
+        }
+    }
+}
+
 // 用户模型
 #[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
 pub struct User {

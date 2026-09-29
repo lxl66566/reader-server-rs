@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
 use anyhow::Result;
-use sqlx::{Executor, Pool, Sqlite, SqlitePool, sqlite::SqliteConnectOptions};
+use sqlx::{Pool, Sqlite, sqlite::SqliteConnectOptions};
 use tokio::fs;
 
 use crate::config::Config;
@@ -21,8 +21,10 @@ pub async fn init_db_pool(config: &Config) -> Result<Pool<Sqlite>> {
         fs::create_dir_all(db_dir).await?;
     }
 
-    let pool = SqlitePool::connect_with(options).await?;
-    pool.execute("PRAGMA time_zone = 'UTC';").await?;
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(config.db.max_connections)
+        .connect_with(options)
+        .await?;
 
     Ok(pool)
 }

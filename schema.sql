@@ -100,7 +100,8 @@ CREATE TABLE
     description TEXT,
     -- 文件格式：'txt' / 'epub' / 'pdf'，决定前端渲染方式与 locator 语义
     format TEXT NOT NULL CHECK (format IN ('txt', 'epub', 'pdf')),
-    -- 原始文件的 SHA-256（hex），用于跨用户去重、问题溯源
+    -- 原始文件的 SHA-256（hex），仅作内容标识（ETag 缓存校验、问题溯源），
+    -- 上传时不做跨用户去重（去重涉及文件共享与引用计数，未实现）
     content_hash TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (
       strftime (

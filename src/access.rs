@@ -5,7 +5,7 @@
 
 use sqlx::{Pool, Sqlite};
 
-use crate::error::AppError;
+use crate::{error::AppError, models::UserStatus};
 
 /// 检查用户对书籍的读访问权限（所有者或公开书）
 ///
@@ -40,7 +40,7 @@ pub async fn check_user_token(
     token_version: i64,
 ) -> Result<(), AppError> {
     let user = sqlx::query!(
-        "SELECT token_version, status FROM users WHERE id = ?",
+        r#"SELECT token_version, status AS "status: UserStatus" FROM users WHERE id = ?"#,
         user_id
     )
     .fetch_optional(pool)
@@ -49,7 +49,7 @@ pub async fn check_user_token(
     match user {
         None => Err(AppError::UserNotFound),
         Some(row) if row.token_version != token_version => Err(AppError::TokenExpiredOrInvalid),
-        Some(row) if row.status == "banned" => Err(AppError::UserBanned),
+        Some(row) if row.status == UserStatus::Banned => Err(AppError::UserBanned),
         Some(_) => Ok(()),
     }
 }
