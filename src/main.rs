@@ -1,3 +1,4 @@
+mod access;
 mod app;
 mod auth;
 mod config;

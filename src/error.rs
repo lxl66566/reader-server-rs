@@ -90,10 +90,6 @@ pub enum AppError {
     #[error("Password cannot be empty")]
     PasswordEmpty,
 
-    #[allow(unused)]
-    #[error("Password must be at least 6 characters")]
-    PasswordTooShort,
-
     #[error("Incorrect old password")]
     IncorrectOldPassword,
 
@@ -121,10 +117,13 @@ pub enum AppError {
     #[error("File cannot be empty")]
     FileEmpty,
 
-    // 不硬编码具体数值：实际上限由 storage.max_file_size 配置决定，
-    // 且该错误同时复用于 epub 解压上限等非上传场景
+    // 不硬编码具体数值：实际上限由 storage.max_file_size 配置决定
     #[error("File size exceeds the allowed limit")]
     FileTooLarge,
+
+    // epub 单条目解压大小或拼接全文超上限（防御 zip 炸弹），与上传体积无关
+    #[error("Epub content too large after decompression")]
+    EpubContentTooLarge,
 
     #[error("Request body too large")]
     RequestBodyTooLarge,
@@ -212,7 +211,6 @@ impl IntoResponse for AppError {
             AppError::UsernameLengthInvalid
             | AppError::UsernameCharsInvalid
             | AppError::PasswordEmpty
-            | AppError::PasswordTooShort
             | AppError::IncorrectOldPassword
             | AppError::InviteCodeRequired
             | AppError::InviteCodeExhausted
@@ -224,6 +222,7 @@ impl IntoResponse for AppError {
             | AppError::TitleEmpty
             | AppError::FileEmpty
             | AppError::FileTooLarge
+            | AppError::EpubContentTooLarge
             | AppError::FileInvalidUtf8
             | AppError::UnsupportedFileFormat
             | AppError::PositionExceedsRange

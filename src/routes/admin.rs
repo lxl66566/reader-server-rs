@@ -229,10 +229,6 @@ async fn reset_password(
         return Err(AppError::UserNotFound);
     }
 
-    // if req.new_password.chars().count() < 6 {
-    //     return Err(AppError::PasswordTooShort);
-    // }
-
     let new_password_hash = hash_password(&req.new_password)?;
 
     // 重置密码同时解除锁定并递增 token_version，使旧 JWT 立即失效
@@ -402,11 +398,6 @@ async fn create_admin(
 ) -> Result<Json<ApiResponse<()>>, AppError> {
     // 验证用户名格式（长度 + 字符白名单）
     validate_username(&req.username)?;
-
-    // 验证密码格式
-    // if req.password.chars().count() < 6 {
-    //     return Err(AppError::PasswordTooShort);
-    // }
 
     // 检查用户名唯一
     let exists =
