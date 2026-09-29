@@ -126,6 +126,18 @@ pub fn routes() -> Router<crate::app::AppState> {
 }
 
 // 上传书籍
+/// 映射 multipart 解析错误：超过请求体上限时返回 413，其余按原有错误处理
+fn map_multipart_err(
+    e: &axum::extract::multipart::MultipartError,
+    other: impl FnOnce(String) -> AppError,
+) -> AppError {
+    if e.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        AppError::RequestBodyTooLarge
+    } else {
+        other(e.to_string())
+    }
+}
+
 async fn upload_book(
     auth: AuthUser,
     State(pool): State<Pool<Sqlite>>,
@@ -141,7 +153,7 @@ async fn upload_book(
     while let Some(field) = multipart
         .next_field()
         .await
-        .map_err(|e| AppError::FormParseError(e.to_string()))?
+        .map_err(|e| map_multipart_err(&e, AppError::FormParseError))?
     {
         let name = field.name().unwrap_or("").to_string();
 
@@ -165,10 +177,9 @@ async fn upload_book(
                 is_public = value == "true" || value == "1";
             },
             "file" => {
-                file_content =
-                    Some(field.bytes().await.map_err(|e| {
-                        AppError::FieldReadError("file".to_string(), e.to_string())
-                    })?);
+                file_content = Some(field.bytes().await.map_err(|e| {
+                    map_multipart_err(&e, |s| AppError::FieldReadError("file".to_string(), s))
+                })?);
             },
             _ => {},
         }

@@ -121,6 +121,9 @@ pub enum AppError {
     #[error("File size must not exceed 50MB")]
     FileTooLarge,
 
+    #[error("Request body too large")]
+    RequestBodyTooLarge,
+
     #[error("File encoding is not valid UTF-8")]
     FileInvalidUtf8,
 
@@ -191,6 +194,8 @@ impl IntoResponse for AppError {
             | AppError::BookModifyDenied
             | AppError::BookDeleteDenied
             | AppError::AdminPermissionRequired => StatusCode::FORBIDDEN,
+
+            AppError::RequestBodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
 
             AppError::BookNotFound
             | AppError::UserNotFound
