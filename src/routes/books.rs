@@ -663,13 +663,13 @@ async fn download_book_file(
     // inline 让浏览器内联展示（pdf 可直接预览，epub 会被下载）
     let disposition = format!("inline; filename=\"book_{book_id}.{}\"", format.ext());
 
-    Ok(Response::builder()
+    Response::builder()
         .header(header::CONTENT_TYPE, format.mime_type())
         .header(header::ETAG, etag.as_str())
         .header(header::CONTENT_DISPOSITION, disposition)
         .header(header::CACHE_CONTROL, "private, no-cache")
         .body(Body::from(bytes))
-        .unwrap())
+        .map_err(|e| AppError::Internal(format!("failed to build download response: {e}")))
 }
 
 // 获取书籍内容（仅 txt 格式）
