@@ -84,6 +84,9 @@ pub enum AppError {
     #[error("Username must be between 2 and 20 characters")]
     UsernameLengthInvalid,
 
+    #[error("Username may only contain letters (including CJK), digits, '_' and '-'")]
+    UsernameCharsInvalid,
+
     #[error("Password cannot be empty")]
     PasswordEmpty,
 
@@ -120,6 +123,9 @@ pub enum AppError {
 
     #[error("File size must not exceed 50MB")]
     FileTooLarge,
+
+    #[error("Request body too large")]
+    RequestBodyTooLarge,
 
     #[error("File encoding is not valid UTF-8")]
     FileInvalidUtf8,
@@ -192,6 +198,8 @@ impl IntoResponse for AppError {
             | AppError::BookDeleteDenied
             | AppError::AdminPermissionRequired => StatusCode::FORBIDDEN,
 
+            AppError::RequestBodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+
             AppError::BookNotFound
             | AppError::UserNotFound
             | AppError::ChapterNotFound
@@ -200,6 +208,7 @@ impl IntoResponse for AppError {
             | AppError::AdminNotFound => StatusCode::NOT_FOUND,
 
             AppError::UsernameLengthInvalid
+            | AppError::UsernameCharsInvalid
             | AppError::PasswordEmpty
             | AppError::PasswordTooShort
             | AppError::IncorrectOldPassword

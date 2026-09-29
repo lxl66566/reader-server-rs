@@ -19,7 +19,7 @@ use crate::{
         ListAuditLogsResponse, ListInviteCodesResponse, ListUsersResponse,
         ResetUserPasswordRequest, Settings, UpdateSettingsRequest,
     },
-    routes::books::PaginationParams,
+    routes::{auth::validate_username, books::PaginationParams},
     utils::{generate_invite_code, hash_password},
 };
 
@@ -235,9 +235,10 @@ async fn reset_password(
 
     let new_password_hash = hash_password(&req.new_password)?;
 
+    // 重置密码同时解除锁定并递增 token_version，使旧 JWT 立即失效
     sqlx::query!(
-        "UPDATE users SET password_hash = ?, failed_login_attempts = 0, locked_until = NULL WHERE \
-         id = ?",
+        "UPDATE users SET password_hash = ?, failed_login_attempts = 0, locked_until = NULL, \
+         token_version = token_version + 1 WHERE id = ?",
         new_password_hash,
         user_id
     )
@@ -399,11 +400,8 @@ async fn create_admin(
     State(pool): State<Pool<Sqlite>>,
     Json(req): Json<CreateAdminRequest>,
 ) -> Result<Json<ApiResponse<()>>, AppError> {
-    // 验证用户名格式
-    let username_len = req.username.chars().count();
-    if !(2..=20).contains(&username_len) {
-        return Err(AppError::UsernameLengthInvalid);
-    }
+    // 验证用户名格式（长度 + 字符白名单）
+    validate_username(&req.username)?;
 
     // 验证密码格式
     // if req.password.chars().count() < 6 {

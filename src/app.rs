@@ -1,4 +1,8 @@
-use axum::{Router, extract::FromRef, routing::get};
+use axum::{
+    Router,
+    extract::{DefaultBodyLimit, FromRef},
+    routing::get,
+};
 use sqlx::{Pool, Sqlite};
 use tower::ServiceBuilder;
 use tower_governor::{
@@ -43,6 +47,9 @@ impl FromRef<AppState> for std::sync::Arc<ConnectionRegistry> {
     }
 }
 
+// 请求体上限在配置文件大小之上额外允许的 multipart 边界/字段开销
+const MULTIPART_BODY_OVERHEAD: usize = 1024 * 1024;
+
 // 创建应用实例
 pub fn create_app(db: Pool<Sqlite>, config: &Config) -> Router {
     // 创建共享状态
@@ -51,6 +58,11 @@ pub fn create_app(db: Pool<Sqlite>, config: &Config) -> Router {
         config: config.clone(),
         ws: ConnectionRegistry::new(),
     };
+
+    // 请求体大小上限：配置的文件大小上限 + multipart 开销。
+    // axum 默认仅 2MB，会卡死正常书籍上传（DefaultBodyLimit 只影响缓冲 body 的
+    // 提取器与 Multipart，不包装 body 类型，与其它 layer 顺序无关）。
+    let body_limit = state.config.storage.max_file_size + MULTIPART_BODY_OVERHEAD;
 
     // 创建CORS中间件
     let cors = CorsLayer::new()
@@ -80,6 +92,8 @@ pub fn create_app(db: Pool<Sqlite>, config: &Config) -> Router {
         .nest("/api/v1/reading", reading::routes())
         // 管理员路由
         .nest("/api/v1/admin", admin::routes())
+        // 请求体大小上限（见上方注释）
+        .layer(DefaultBodyLimit::max(body_limit))
         // 限流：内层最先执行；放外层避免被其它 layer 包装导致 body 类型不兼容
         .layer(GovernorLayer::new(governor_config))
         // 其它中间件
