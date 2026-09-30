@@ -24,11 +24,9 @@ use crate::{
         PublicBookListResponse, RandomPublicBooksResponse, SetBookTagsRequest, UpdateBookRequest,
         UploadBookResponse,
     },
+    parser::{detect_format, extract_chapters, parse_epub, parse_pdf},
     routes::reading::etag_matches,
-    utils::{
-        Utf8Chunks, detect_format, extract_chapters, generate_uuid, make_etag, parse_epub,
-        parse_pdf, sha256_hex,
-    },
+    utils::{generate_uuid, make_etag, sha256_hex, utf8::Utf8Chunks},
 };
 
 // 分页查询参数
@@ -1168,7 +1166,7 @@ async fn set_book_tags(
 #[cfg(test)]
 mod tests {
     use super::read_char_slice;
-    use crate::utils::UTF8_CHUNK_SIZE;
+    use crate::utils::utf8::UTF8_CHUNK_SIZE;
 
     #[tokio::test]
     async fn read_char_slice_handles_multibyte_boundary() {

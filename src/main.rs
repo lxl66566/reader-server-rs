@@ -6,6 +6,7 @@ mod db;
 mod error;
 mod frontend;
 mod models;
+mod parser;
 mod routes;
 mod utils;
 mod ws;
