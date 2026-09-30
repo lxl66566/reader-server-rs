@@ -30,6 +30,9 @@ export async function sanitizeEpubArchive(
   );
   const changed = expanded.some((text, i) => text !== texts[i]);
   if (!changed) return data;
-  expanded.forEach((text, i) => zip.file(entries[i][0], text));
+  entries.forEach(([name], i) => {
+    const text = expanded[i];
+    if (text !== undefined) zip.file(name, text);
+  });
   return zip.generateAsync({ type: 'arraybuffer' });
 }
