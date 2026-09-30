@@ -26,8 +26,8 @@ use crate::{
     },
     routes::reading::etag_matches,
     utils::{
-        detect_format, extract_chapters, generate_uuid, make_etag, parse_epub, parse_pdf,
-        sha256_hex,
+        Utf8Chunks, detect_format, extract_chapters, generate_uuid, make_etag, parse_epub,
+        parse_pdf, sha256_hex,
     },
 };
 
@@ -747,72 +747,51 @@ async fn get_book_content(
 
 /// 从文件中按字符偏移流式读取一段文本。
 ///
-/// 实现要点：用 `BufReader::fill_buf` + `consume` 按块读取，
-/// 依靠 `std::str::from_utf8` 返回的 `valid_up_to()` 把块对齐到 UTF-8
-/// 字符边界，既避免一次性读入大文件，也避免字节级 seek 在多字节字符
-/// 中间切开。
+/// 实现要点：[`Utf8Chunks`] 保证每块在字符边界上结束，避免多字节字符被块边界切开。
 async fn read_char_slice(
     path: &str,
     char_offset: usize,
     char_count: usize,
 ) -> Result<String, AppError> {
-    use tokio::io::AsyncBufReadExt;
-
     let file = fs::File::open(path).await.map_err(AppError::Io)?;
-    let mut reader = tokio::io::BufReader::new(file);
+    let mut chunks = Utf8Chunks::new(file);
 
     let mut collected = String::with_capacity(char_count * 4);
     let mut skipped = 0usize;
     let mut taken = 0usize;
 
     while taken < char_count {
-        let buf = reader.fill_buf().await.map_err(AppError::Io)?;
-        if buf.is_empty() {
+        let chunk = chunks.next_chunk().await.map_err(AppError::Io)?;
+        if chunk.is_empty() {
             break; // EOF
         }
 
-        // 对齐到 UTF-8 字符边界：处理"块末尾恰好切在多字节字符中间"
-        let valid_len = match std::str::from_utf8(buf) {
-            Ok(_) => buf.len(),
-            Err(e) => {
-                let v = e.valid_up_to();
-                if v == 0 {
-                    // 块开头即不完整序列：理论上 16KB BufReader 缓冲足够
-                    // 容下任何单字符（最多 4 字节），此处为防御性兜底
-                    return Err(AppError::Internal(
-                        "UTF-8 boundary alignment failed".to_string(),
-                    ));
-                }
-                v
-            },
-        };
-
-        let chunk = std::str::from_utf8(&buf[..valid_len]).expect("verified above");
-
         // 跳过尚未到达的字符偏移
         if skipped < char_offset {
-            let chunk_chars: Vec<(usize, char)> = chunk.char_indices().collect();
-            let remaining_skip = char_offset - skipped;
-            if let Some(&(byte_off, _)) = chunk_chars.get(remaining_skip) {
-                let after = &chunk[byte_off..];
-                skipped = char_offset;
-                let take_chars: String = after.chars().take(char_count - taken).collect();
-                taken += take_chars.chars().count();
-                collected.push_str(&take_chars);
-            } else {
-                skipped += chunk_chars.len();
+            match char_boundary_at(chunk, char_offset - skipped) {
+                // 目标落在本块内：定位到起始边界后开始收集
+                Some(byte_off) => {
+                    skipped = char_offset;
+                    let take: String = chunk[byte_off..].chars().take(char_count - taken).collect();
+                    taken += take.chars().count();
+                    collected.push_str(&take);
+                },
+                // 目标在本块之后：整块跳过
+                None => skipped += chunk.chars().count(),
             }
         } else {
-            let take_chars: String = chunk.chars().take(char_count - taken).collect();
-            taken += take_chars.chars().count();
-            collected.push_str(&take_chars);
+            let take: String = chunk.chars().take(char_count - taken).collect();
+            taken += take.chars().count();
+            collected.push_str(&take);
         }
-
-        // 推进缓冲，valid_len 一定是字符边界，安全
-        reader.consume(valid_len);
     }
 
     Ok(collected)
+}
+
+/// 第 `n` 个字符的字节偏移；字符数不足 `n + 1` 时返回 `None`
+fn char_boundary_at(s: &str, n: usize) -> Option<usize> {
+    s.char_indices().nth(n).map(|(i, _)| i)
 }
 
 // 跳转到指定章节
@@ -1189,36 +1168,35 @@ async fn set_book_tags(
 #[cfg(test)]
 mod tests {
     use super::read_char_slice;
+    use crate::utils::UTF8_CHUNK_SIZE;
 
     #[tokio::test]
     async fn read_char_slice_handles_multibyte_boundary() {
-        // 构造一段含 ASCII / 中文 / emoji 的文本，emoji 是 4 字节 UTF-8
+        // 构造跨块边界的多字节字符
         let mut content = String::new();
-        // 8KB ASCII（确保超过单次 fill_buf 边界，触发多块读取）
-        for _ in 0..8000 {
+        for _ in 0..UTF8_CHUNK_SIZE - 1 {
             content.push('a');
         }
-        content.push_str("世界🌍");
-        content.push('b');
+        content.push_str("世界🌍bb");
         let tmp = std::env::temp_dir().join("reader_test_read_char_slice.txt");
         tokio::fs::write(&tmp, &content).await.unwrap();
 
         let path = tmp.to_str().unwrap();
 
-        // 1) 从 emoji 起点（8002）开始取 2 个字符 → 应得 "🌍b"
-        let s = read_char_slice(path, 8002, 2).await.unwrap();
-        assert_eq!(s, "🌍b", "emoji boundary");
+        // 1) 起点落在横跨块边界的字符上，取 4 个字符 → "世界🌍b"
+        let s = read_char_slice(path, UTF8_CHUNK_SIZE - 1, 4).await.unwrap();
+        assert_eq!(s, "世界🌍b", "char straddling chunk boundary");
 
-        // 2) 从中文起点（8000）取 3 个字符 → "世界🌍"
-        let s = read_char_slice(path, 8000, 3).await.unwrap();
-        assert_eq!(s, "世界🌍");
+        // 2) 从 emoji（CHUNK+1）取 3 个字符 → "🌍bb"
+        let s = read_char_slice(path, UTF8_CHUNK_SIZE + 1, 3).await.unwrap();
+        assert_eq!(s, "🌍bb");
 
-        // 3) 跨缓冲边界：从 7999 取 3 个字符 → "a世界"
-        let s = read_char_slice(path, 7999, 3).await.unwrap();
+        // 3) 跨边界的混合起点 → "a世界"
+        let s = read_char_slice(path, UTF8_CHUNK_SIZE - 2, 3).await.unwrap();
         assert_eq!(s, "a世界");
 
         // 4) 全文长度
-        let s = read_char_slice(path, 0, 10_000).await.unwrap();
+        let s = read_char_slice(path, 0, 100_000).await.unwrap();
         assert_eq!(s.chars().count(), content.chars().count());
 
         let _ = tokio::fs::remove_file(&tmp).await;
