@@ -1,6 +1,8 @@
 // Chars-per-page measurement for txt pagination: renders a probe with the
 // exact reader typography and binary-searches the largest fitting char count.
 
+import { stripParagraphIndent } from './paragraph';
+
 export interface PageTypography {
   fontFamily: string;
   fontSize: number;
@@ -63,7 +65,7 @@ function fillProbe(text: string, typo: PageTypography): void {
     applyTypography(p, typo);
     p.style.margin = `0 0 ${typo.paragraphSpacing}em`;
     p.style.textIndent = `${typo.textIndent}em`;
-    p.textContent = para || ' ';
+    p.textContent = stripParagraphIndent(para) || ' ';
     el.appendChild(p);
   }
 }

@@ -24,6 +24,7 @@ import {
 } from '../utils/opencc';
 import { sanitizeEpubArchive } from './epubSanitize';
 import { attachTapSwipeGestures } from './gestures';
+import { stripEpubParagraphIndent } from './paragraph';
 import type { FormatReaderProps } from './types';
 
 const EpubReader = (props: FormatReaderProps) => {
@@ -215,6 +216,8 @@ const EpubReader = (props: FormatReaderProps) => {
   function registerContentHooks(): void {
     if (!rendition) return;
     rendition.hooks.content.register((contents: { document: Document }) => {
+      // 主题对 p 强制 text-indent，剥离书源自带的段首字符缩进避免叠加
+      stripEpubParagraphIndent(contents.document);
       void loadChineseConverter(
         convertDirection(settings.chinese_conversion),
       ).then(() => {

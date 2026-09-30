@@ -23,6 +23,7 @@ import {
 } from '../utils/opencc';
 import { isTap, useStripFlip } from './gestures';
 import { measureCharsPerPage, type PageTypography } from './measure';
+import { stripParagraphIndent } from './paragraph';
 import {
   extendWindowDown,
   extendWindowUp,
@@ -174,7 +175,9 @@ function contentStyle(typo: PageTypography): Record<string, string> {
 }
 
 const PageContent = (props: { text: string; typo: PageTypography }) => {
-  const paragraphs = createMemo(() => props.text.split('\n'));
+  const paragraphs = createMemo(() =>
+    props.text.split('\n').map(stripParagraphIndent),
+  );
   return (
     <Index each={paragraphs()}>
       {para => (
@@ -512,7 +515,8 @@ const ScrollView = (
     const paras: Paragraph[] = [];
     let at = start;
     for (const piece of text.split('\n')) {
-      paras.push({ offset: at, text: piece });
+      // offset 按原文推进，text 剥离段首字符缩进（CSS 已接管缩进）
+      paras.push({ offset: at, text: stripParagraphIndent(piece) });
       at += piece.length + 1; // +1 for the newline
     }
     paraCache.set(index, { paras, text });
