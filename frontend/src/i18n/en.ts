@@ -147,8 +147,10 @@ const en: Dict = {
   readerDeleteConfirm: 'Delete this item?',
   readerExit: 'Exit',
   readerHighlight: 'Highlight',
+  readerNextChapter: 'Next chapter',
   readerNotePlaceholder: 'Write your thoughts…',
   readerPageOf: '{page} / {total}',
+  readerPrevChapter: 'Previous chapter',
   readerReconnectFailed:
     'Failed to reach the server, check your network or sign in again',
   readerReconnecting: 'Connection lost, reconnecting…',

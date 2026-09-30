@@ -23,12 +23,15 @@ import {
 } from '../utils/opencc';
 import {
   animateScrollBy,
+  bindScrollEdges,
   isTap,
   PAGE_SCROLL_RATIO,
+  scrollEdges,
   tapZoneVertical,
   useStripFlip,
 } from './gestures';
 import { measureCharsPerPage, type PageTypography } from './measure';
+import PageHint from './PageHint';
 import { stripParagraphIndent } from './paragraph';
 import {
   chapterBounds,
@@ -531,6 +534,8 @@ const ScrollView = (
   const [version, setVersion] = createSignal(0);
   const [loadingMore, setLoadingMore] = createSignal(false);
   const [error, setError] = createSignal(false);
+  // 视口是否停在当前章的边界（用于边界提示显隐）
+  const [atEdge, setAtEdge] = createSignal({ bottom: false, top: false });
   // 每个 chunk 的段落元素，按 chunk 索引分组；查找时按窗口顺序拼接
   const chunkEls = new Map<number, HTMLElement[]>();
 
@@ -606,6 +611,14 @@ const ScrollView = (
 
   onMount(() => {
     void init().catch(onLoadError);
+    // 贴边跟踪独立于 scroll 事件：短章不足一屏时从不滚动，也要能出边界提示
+    if (container) {
+      const detach = bindScrollEdges(container, setAtEdge);
+      onCleanup(() => {
+        detach();
+        cancelAnimationFrame(scrollRaf);
+      });
+    }
   });
 
   // jumps requested via the navigator (bookmark / chapter / cross-device sync)
@@ -778,13 +791,12 @@ const ScrollView = (
   // 章节边界处硬切章；中区打开 chrome（滚动本身交给原生） ---
   function pageScroll(dir: -1 | 1): void {
     if (!container) return;
-    const { clientHeight, scrollHeight, scrollTop } = container;
-    const atEdge =
-      dir > 0 ? scrollTop + clientHeight >= scrollHeight - 1 : scrollTop <= 0;
-    if (atEdge) {
+    const edges = scrollEdges(container);
+    if (dir > 0 ? edges.bottom : edges.top) {
       switchChapter(dir);
       return;
     }
+    const { clientHeight } = container;
     animateScrollBy(container, dir * clientHeight * PAGE_SCROLL_RATIO);
   }
 
@@ -802,6 +814,11 @@ const ScrollView = (
       dir > 0 ? 'top' : 'bottom',
     );
   }
+
+  // 边界提示只在存在相邻章节时显示，避免误导
+  const hasNextChapter = () => chapterIdx() + 1 < props.book.chapters.length;
+  const hasPrevChapter = () =>
+    props.book.chapters.length > 0 && chapterIdx() > 0;
 
   let downAt: null | { t: number; x: number; y: number } = null;
   const onPointerDown = (event: PointerEvent) => {
@@ -842,38 +859,45 @@ const ScrollView = (
       }
       when={!error()}
     >
-      {/* 滚动容器全宽让滚动条贴屏幕右缘，列宽由内层限制并居中 */}
-      <div
-        class="h-full w-full overflow-y-auto"
-        onPointerDown={onPointerDown}
-        onPointerUp={onPointerUp}
-        onScroll={onScroll}
-        ref={container}
-      >
+      <div class="relative h-full w-full">
+        {/* 滚动容器全宽让滚动条贴屏幕右缘，列宽由内层限制并居中 */}
         <div
-          class="mx-auto w-full px-4 py-6"
-          style={{
-            'max-width': `${props.readingWidth()}em`,
-            ...contentStyle(typo()),
-          }}
+          class="h-full w-full overflow-y-auto"
+          onPointerDown={onPointerDown}
+          onPointerUp={onPointerUp}
+          onScroll={onScroll}
+          ref={container}
         >
-          <For each={chunkIndices()}>
-            {index => (
-              <ChunkParagraphs
-                chunkEls={chunkEls}
-                displayText={props.displayText}
-                getParagraphs={chunkParagraphs}
-                index={index}
-                typo={typo}
-              />
-            )}
-          </For>
-          <Show when={loadingMore()}>
-            <div class="py-4 text-center text-sm opacity-50">
-              {t('loading')}
-            </div>
-          </Show>
+          <div
+            class="mx-auto w-full px-4 py-6"
+            style={{
+              'max-width': `${props.readingWidth()}em`,
+              ...contentStyle(typo()),
+            }}
+          >
+            <For each={chunkIndices()}>
+              {index => (
+                <ChunkParagraphs
+                  chunkEls={chunkEls}
+                  displayText={props.displayText}
+                  getParagraphs={chunkParagraphs}
+                  index={index}
+                  typo={typo}
+                />
+              )}
+            </For>
+            <Show when={loadingMore()}>
+              <div class="py-4 text-center text-sm opacity-50">
+                {t('loading')}
+              </div>
+            </Show>
+          </div>
         </div>
+        <PageHint
+          direction="down"
+          visible={atEdge().bottom && hasNextChapter()}
+        />
+        <PageHint direction="up" visible={atEdge().top && hasPrevChapter()} />
       </div>
     </Show>
   );

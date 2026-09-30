@@ -9,6 +9,7 @@ const config: UserConfig = defineConfig({
   },
   plugins: [UnoCSS(), solidPlugin()],
   server: {
+    host: '0.0.0.0',
     port: 5173,
     proxy: {
       // backend listens on :3000; ws upgrade needs ws: true

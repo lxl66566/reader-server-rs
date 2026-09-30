@@ -26,8 +26,11 @@ import { sanitizeEpubArchive } from './epubSanitize';
 import {
   animateScrollBy,
   attachTapSwipeGestures,
+  bindScrollEdges,
   PAGE_SCROLL_RATIO,
+  scrollEdges,
 } from './gestures';
+import PageHint from './PageHint';
 import { stripEpubParagraphIndent } from './paragraph';
 import type { FormatReaderProps } from './types';
 
@@ -43,14 +46,20 @@ const EpubReader = (props: FormatReaderProps) => {
   let cachedData: ArrayBuffer | null = null;
   const [ready, setReady] = createSignal(false);
   const [error, setError] = createSignal(false);
+  // 视口是否停在当前章边界 + 当前 spine 下标（边界提示显隐用）
+  const [atEdge, setAtEdge] = createSignal({ bottom: false, top: false });
+  const [sectionIndex, setSectionIndex] = createSignal<null | number>(null);
   let pendingLocator: null | string = null;
   let locationsReady = false;
   let lastCfi: null | string = null;
+  let detachScrollEdge: (() => void) | null = null;
 
   onMount(() => {
     void runSetup();
     onCleanup(() => {
       setReady(false);
+      detachScrollEdge?.();
+      detachScrollEdge = null;
       book?.destroy();
       book = null;
       rendition = null;
@@ -60,6 +69,10 @@ const EpubReader = (props: FormatReaderProps) => {
   // 主加载链路的统一入口：失败时进入错误态而不是永远停在加载态
   async function runSetup(): Promise<void> {
     setError(false);
+    detachScrollEdge?.();
+    detachScrollEdge = null;
+    setAtEdge({ bottom: false, top: false });
+    setSectionIndex(null);
     try {
       await setup();
     } catch (err) {
@@ -97,10 +110,14 @@ const EpubReader = (props: FormatReaderProps) => {
     registerTheme();
     registerContentHooks();
 
-    rendition.on('relocated', (location: { start: { cfi: string } }) => {
-      lastCfi = location.start.cfi;
-      reportPosition();
-    });
+    rendition.on(
+      'relocated',
+      (location: { start: { cfi: string; index: number } }) => {
+        lastCfi = location.start.cfi;
+        setSectionIndex(location.start.index);
+        reportPosition();
+      },
+    );
 
     // initial position: saved cfi, or percent-based cfi once locations exist
     const startAt = props.initialLocator;
@@ -115,6 +132,7 @@ const EpubReader = (props: FormatReaderProps) => {
       await rendition.display();
     }
 
+    if (scrolled) watchScrollEdge();
     setReady(true);
     if (pendingLocator) {
       await displaySafe(pendingLocator);
@@ -328,11 +346,8 @@ const EpubReader = (props: FormatReaderProps) => {
   function pageScroll(dir: -1 | 1): void {
     const el = scrolledContainer();
     if (!el) return;
-    const atEdge =
-      dir > 0
-        ? el.scrollTop + el.clientHeight >= el.scrollHeight - 1
-        : el.scrollTop <= 0;
-    if (atEdge) {
+    const edges = scrollEdges(el);
+    if (dir > 0 ? edges.bottom : edges.top) {
       void turnChapter(dir);
       return;
     }
@@ -353,6 +368,25 @@ const EpubReader = (props: FormatReaderProps) => {
       }
     }
   }
+
+  // 跟踪 manager 容器贴边状态，维护章节边界提示的显隐（仅滚动模式）
+  function watchScrollEdge(): void {
+    detachScrollEdge?.();
+    detachScrollEdge = null;
+    const el = scrolledContainer();
+    if (!el) return;
+    detachScrollEdge = bindScrollEdges(el, setAtEdge);
+  }
+
+  // 边界提示只在存在相邻章节时显示，避免误导
+  const hasNextChapter = () => {
+    const idx = sectionIndex();
+    return idx !== null && book !== null && idx < book.spine.last().index;
+  };
+  const hasPrevChapter = () => {
+    const idx = sectionIndex();
+    return idx !== null && idx > 0;
+  };
 
   async function flip(dir: -1 | 1): Promise<void> {
     if (!rendition) return;
@@ -417,6 +451,13 @@ const EpubReader = (props: FormatReaderProps) => {
               : `${settings.reading_width}em`,
         }}
       />
+      <Show when={settings.pagination_mode === 'scroll'}>
+        <PageHint
+          direction="down"
+          visible={atEdge().bottom && hasNextChapter()}
+        />
+        <PageHint direction="up" visible={atEdge().top && hasPrevChapter()} />
+      </Show>
       <Show when={!ready() && !error()}>
         <div class="absolute inset-0 flex items-center justify-center">
           <Spinner />

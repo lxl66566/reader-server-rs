@@ -1,4 +1,5 @@
-// 阅读器共享手势：tap 判定、tap 区域划分、三段式翻页（strip）触摸状态机。
+// 阅读器共享手势：tap 判定、tap 区域划分、三段式翻页（strip）触摸状态机、
+// 滚动模式的章内翻页与贴边跟踪。
 // TxtReader 分页视图与 PdfReader 共用 useStripFlip；EpubReader 在 iframe 文档上
 // 通过 attachTapSwipeGestures 接入同一套 tap/swipe 语义。
 
@@ -91,6 +92,14 @@ export function animateScrollBy(
   raf = requestAnimationFrame(step);
 }
 
+/** 贴边判定容差：距边界 2px 内视为贴边，吸收亚像素滚动取整误差 */
+const SCROLL_EDGE_EPSILON_PX = 2;
+
+export interface ScrollEdges {
+  bottom: boolean;
+  top: boolean;
+}
+
 /**
  * 在 epub iframe 文档上挂 touch/click 手势（无跟手动画）：横向滑动超过阈值
  * 翻页；tap 在分页模式按左右区翻页、滚动模式按上/中/下区翻页或开 chrome。
@@ -174,9 +183,56 @@ export function attachTapSwipeGestures(
   };
 }
 
+/**
+ * 跟踪滚动容器贴边状态并回调，返回解绑函数。仅靠 scroll 事件会在内容
+ * 不足一屏（从不产生滚动）时漏判，故同时用 ResizeObserver 跟踪容器与
+ * 内容尺寸变化（章节渲染、字号调整）、MutationObserver 跟踪内容子元素
+ * 整体替换（epub 换章）。
+ */
+export function bindScrollEdges(
+  el: HTMLElement,
+  onChange: (edges: ScrollEdges) => void,
+): () => void {
+  let raf = 0;
+  const schedule = (): void => {
+    cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(() => {
+      onChange(scrollEdges(el));
+    });
+  };
+  el.addEventListener('scroll', schedule, { passive: true });
+
+  const observer = new ResizeObserver(schedule);
+  const observeChildren = (): void => {
+    observer.disconnect();
+    observer.observe(el);
+    for (const child of Array.from(el.children)) observer.observe(child);
+  };
+  observeChildren();
+  const mutation = new MutationObserver(observeChildren);
+  mutation.observe(el, { childList: true });
+  schedule();
+
+  return () => {
+    cancelAnimationFrame(raf);
+    el.removeEventListener('scroll', schedule);
+    observer.disconnect();
+    mutation.disconnect();
+  };
+}
+
 /** 一次按压是否为 tap：短时长且位移在阈值内 */
 export function isTap(durationMs: number, dx: number, dy: number): boolean {
   return durationMs < TAP_MAX_MS && Math.hypot(dx, dy) < TAP_MAX_MOVE_PX;
+}
+
+/** 滚动容器的贴边状态：内容不足一屏时上下同时贴边 */
+export function scrollEdges(el: HTMLElement): ScrollEdges {
+  const maxScroll = el.scrollHeight - el.clientHeight;
+  return {
+    bottom: el.scrollTop >= maxScroll - SCROLL_EDGE_EPSILON_PX,
+    top: el.scrollTop <= SCROLL_EDGE_EPSILON_PX,
+  };
 }
 
 /** 按横向位置把 tap 划入左/中/右三区（左 1/3 翻上一页，右 1/3 翻下一页） */
