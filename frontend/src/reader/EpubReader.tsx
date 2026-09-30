@@ -22,6 +22,7 @@ import {
   convertDirection,
   loadChineseConverter,
 } from '../utils/opencc';
+import { sanitizeEpubArchive } from './epubSanitize';
 import { attachTapSwipeGestures } from './gestures';
 import type { FormatReaderProps } from './types';
 
@@ -69,7 +70,11 @@ const EpubReader = (props: FormatReaderProps) => {
 
   async function setup(): Promise<void> {
     if (!container) return;
-    cachedData ??= await bookApi.fetchFile(props.book.book_id);
+    // 修复部分电子书（XHTML 允许、HTML 解析器不认）自闭合的 raw-text 标签，
+    // 否则章节正文会被 script 标签吞掉，整章渲染为空白
+    cachedData ??= await sanitizeEpubArchive(
+      await bookApi.fetchFile(props.book.book_id),
+    );
     // 每次重建都切一份副本给 epub.js，避免其实例污染共享缓存
     book = ePub(cachedData.slice(0));
     await book.ready;

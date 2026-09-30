@@ -22,6 +22,7 @@
     "@solidjs/router": "^1.0.0",
     "copy-to-clipboard": "^4.0.2",
     "epubjs": "^0.3.93",
+    "jszip": "^3.10.1",
     "opencc-js": "^1.4.1",
     "pdfjs-dist": "^6.2.108",
     "solid-icons": "^1.2.0",

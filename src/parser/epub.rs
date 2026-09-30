@@ -1,3 +1,7 @@
+use std::{borrow::Cow, collections::HashMap, sync::LazyLock};
+
+use fancy_regex::Regex;
+
 use crate::error::AppError;
 
 /// EPUB 章节信息（与格式无关的中间结构）
@@ -26,6 +30,39 @@ const MAX_EPUB_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
 
 /// EPUB 解析后拼接全文的字符数上限（20M 字符，远超正常书籍体量）
 const MAX_EPUB_TOTAL_CHARS: usize = 20_000_000;
+
+/// 自闭合的 raw-text 标签（`<script src="x"/>` 等）
+///
+/// XHTML 允许任意元素自闭合，但 HTML 解析器（epub.js 渲染、scraper 提取）对
+/// script/style/textarea/title 这类 raw-text 元素不认自闭合：标签会保持打开，
+/// 其后的整个文档都被当作原始文本吞掉，章节渲染为空白、正文提取为空
+static SELF_CLOSED_RAW_TEXT_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)<(script|style|textarea|title)\b([^>]*?)/>")
+        .expect("invalid self-closed raw-text tag regex")
+});
+
+/// 把自闭合的 raw-text 标签展开成空标签对，恢复其 HTML 语义
+fn expand_self_closed_raw_text(content: &str) -> Cow<'_, str> {
+    SELF_CLOSED_RAW_TEXT_RE.replace_all(content, "<$1$2></$1>")
+}
+
+/// 归一化 zip 内路径：去 `.` 段、折叠 `..` 段
+///
+/// epub crate 按 OPF 目录直接拼接 href 不做归一化；资源在 OPF 上层时
+/// （如 `OPS/../titlepage.xhtml`）按原样查 zip 条目会取不到
+fn normalize_zip_path(path: &str) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    for seg in path.split('/') {
+        match seg {
+            "" | "." => {},
+            ".." => {
+                parts.pop();
+            },
+            _ => parts.push(seg),
+        }
+    }
+    parts.join("/")
+}
 
 /// 检查 epub（zip）每个条目的真实解压大小，超限直接拒绝。
 /// 采用流式截断读取计数，不依赖 zip 头中可被伪造的声明大小。
@@ -84,6 +121,17 @@ fn parse_epub_with_limits(
     let author = doc.mdata("creator").map(|item| item.value.clone());
 
     let num_chapters = doc.get_num_chapters();
+    // TOC 标签按归一化路径索引，作为无 heading 章节的标题回退
+    let toc_titles: HashMap<String, String> = doc
+        .toc
+        .iter()
+        .map(|t| {
+            (
+                normalize_zip_path(&t.content.to_string_lossy().replace('\\', "/")),
+                t.label.clone(),
+            )
+        })
+        .collect();
     let mut full_text = String::new();
     let mut chapters: Vec<EpubChapter> = Vec::new();
     // 全文累计字符数（含拼接换行符），用于章节偏移与总量上限检查
@@ -91,19 +139,31 @@ fn parse_epub_with_limits(
 
     for i in 0..num_chapters {
         doc.set_current_chapter(i);
-        // epub crate 返回 (content, mime)，注意不要写反
-        let Some((content, _mime)) = doc.get_current_str() else {
+        let current_path = doc
+            .get_current_path()
+            .map(|p| normalize_zip_path(&p.to_string_lossy().replace('\\', "/")));
+        // 先按 spine id 取内容；取不到时（路径含 `..` 未归一化等）按归一化路径回退
+        let content = doc
+            .get_current_str()
+            .map(|(content, _)| content)
+            .or_else(|| doc.get_resource_str_by_path(current_path.as_deref()?));
+        let Some(content) = content else {
             continue;
         };
 
-        let html = Html::parse_document(&content);
+        let html = Html::parse_document(&expand_self_closed_raw_text(&content));
 
-        // 章节标题优先级：首个 heading > spine toc 标题 > "未命名章节 N"
+        // 章节标题优先级：首个 heading > TOC 标签 > "Chapter N"
         let chapter_title = html
             .select(&heading_selector)
             .next()
             .map(|el| el.text().collect::<String>().trim().to_string())
             .filter(|t| !t.is_empty())
+            .or_else(|| {
+                current_path
+                    .as_deref()
+                    .and_then(|p| toc_titles.get(p).cloned())
+            })
             .unwrap_or_else(|| format!("Chapter {}", i + 1));
 
         #[allow(clippy::cast_possible_wrap)]
@@ -145,8 +205,9 @@ fn parse_epub_with_limits(
 mod tests {
     use super::*;
 
-    /// 构造一个最小可用的 EPUB（zip）用于测试；chapter_html 为单章正文 HTML
-    fn build_test_epub(chapter_html: &str) -> Vec<u8> {
+    /// 构造一个最小可用的 EPUB（zip）用于测试
+    /// `manifest_href` 与 `zip_entry` 控制章节文件相对 OPF 的引用与 zip 内路径
+    fn build_test_epub_opts(manifest_href: &str, zip_entry: &str, chapter_html: &str) -> Vec<u8> {
         use std::io::Write as _;
 
         let mut cursor = std::io::Cursor::new(Vec::new());
@@ -173,21 +234,29 @@ mod tests {
             writer.start_file("OEBPS/content.opf", deflated).unwrap();
             writer
                 .write_all(
-                    br#"<?xml version="1.0"?>
+                    format!(
+                        r#"<?xml version="1.0"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
     <dc:title>Test Book</dc:title><dc:creator>Tester</dc:creator>
   </metadata>
-  <manifest><item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest>
+  <manifest><item id="ch1" href="{manifest_href}" media-type="application/xhtml+xml"/></manifest>
   <spine><itemref idref="ch1"/></spine>
-</package>"#,
+</package>"#
+                    )
+                    .as_bytes(),
                 )
                 .unwrap();
-            writer.start_file("OEBPS/ch1.xhtml", deflated).unwrap();
+            writer.start_file(zip_entry, deflated).unwrap();
             writer.write_all(chapter_html.as_bytes()).unwrap();
             writer.finish().unwrap();
         }
         cursor.into_inner()
+    }
+
+    /// 构造章节文件位于 OEBPS/ 内的最小 EPUB
+    fn build_test_epub(chapter_html: &str) -> Vec<u8> {
+        build_test_epub_opts("ch1.xhtml", "OEBPS/ch1.xhtml", chapter_html)
     }
 
     #[test]
@@ -203,6 +272,36 @@ mod tests {
         assert_eq!(result.chapters.len(), 1);
         assert_eq!(result.chapters[0].title, "第一章 开始");
         assert!(result.text_content.contains("第一段内容"));
+    }
+
+    #[test]
+    fn parse_epub_expands_self_closed_raw_text() {
+        // XHTML 自闭合的 script：HTML 解析器会把其后整份文档当脚本文本吞掉，
+        // 不展开则章节标题与正文均解析为空
+        let epub_data = build_test_epub(
+            r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><script src="insertSpan.js" type="text/javascript"/></head><body>
+<h1>第一章 开始</h1><p>第一段内容</p>
+</body></html>"#,
+        );
+        let result = parse_epub(&epub_data).unwrap();
+        assert_eq!(result.chapters.len(), 1);
+        assert_eq!(result.chapters[0].title, "第一章 开始");
+        assert!(result.text_content.contains("第一段内容"));
+    }
+
+    #[test]
+    fn parse_epub_resolves_parent_relative_spine_paths() {
+        // 章节文件在 OPF 上层目录（href="../ch1.xhtml"）：epub crate 按
+        // `OEBPS/../ch1.xhtml` 查 zip 取不到，需按归一化路径回退
+        let epub_data = build_test_epub_opts(
+            "../ch1.xhtml",
+            "ch1.xhtml",
+            r#"<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>第一章</h1><p>正文内容</p></body></html>"#,
+        );
+        let result = parse_epub(&epub_data).unwrap();
+        assert_eq!(result.chapters.len(), 1);
+        assert_eq!(result.chapters[0].title, "第一章");
+        assert!(result.text_content.contains("正文内容"));
     }
 
     #[test]
