@@ -40,6 +40,7 @@ const zhCN = {
   conversionTraditional: '转为繁体',
   copied: '已复制',
   copy: '复制',
+  copyFailed: '复制失败',
   createdAt: '创建时间',
   createInviteCode: '生成邀请码',
 

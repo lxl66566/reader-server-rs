@@ -10,6 +10,8 @@ import {
 } from 'solid-js';
 import toast from 'solid-toast';
 
+import copyToClipboard from 'copy-to-clipboard';
+
 import { adminApi } from '../../api';
 import type { InviteCodeItem } from '../../api/types';
 import { useI18n } from '../../i18n';
@@ -37,10 +39,9 @@ export const InviteCodesTab: Component<{
   const list = () => codes() ?? [];
 
   const copy = (code: string) => {
-    void navigator.clipboard
-      .writeText(code)
-      .then(() => toast.success(t('copied')))
-      .catch(() => toast.error(t('copy')));
+    void copyToClipboard(code)
+      .then(ok => (ok ? toast.success(t('copied')) : toast.error(t('copyFailed'))))
+      .catch(() => toast.error(t('copyFailed')));
   };
 
   const generate = async () => {

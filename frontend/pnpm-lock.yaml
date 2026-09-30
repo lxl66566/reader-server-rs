@@ -11,6 +11,9 @@ importers:
       '@solidjs/router':
         specifier: ^1.0.0
         version: 1.0.0(solid-js@1.9.14)
+      copy-to-clipboard:
+        specifier: ^4.0.2
+        version: 4.0.2
       epubjs:
         specifier: ^0.3.93
         version: 0.3.93
@@ -1436,6 +1439,9 @@ packages:
 
   convert-source-map@2.0.0:
     resolution: {integrity: sha512-Kvp459HrV2FEJ1CAsi1Ku+MY3kasH19TFykTz2xWmMeq6bk2NU3XXvfJ+Q61m0xktWwt+1HSYf3JZsTms3aRJg==}
+
+  copy-to-clipboard@4.0.2:
+    resolution: {integrity: sha512-gklSft7IuhriZKHKpuoA1fpJSLPNgvUMWMo5BlnzAJm0zNKnznoSv23IjtNqclx8eKi6ZcdvFFzYEER/+U1LoQ==}
 
   core-js@3.50.0:
     resolution: {integrity: sha512-BRWgOLKkFeCgRudR6zrs8p9XJZcE14grzKMMssoYrk6krtuEZ7MTKPIY5RzOnqsEKIR9kst7wNzphttraT+Yqw==}
@@ -3380,6 +3386,8 @@ snapshots:
   consola@3.4.2: {}
 
   convert-source-map@2.0.0: {}
+
+  copy-to-clipboard@4.0.2: {}
 
   core-js@3.50.0: {}
 

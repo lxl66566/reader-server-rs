@@ -40,6 +40,7 @@ const en: Dict = {
   conversionTraditional: 'To Traditional',
   copied: 'Copied',
   copy: 'Copy',
+  copyFailed: 'Copy failed',
   createdAt: 'Created at',
   createInviteCode: 'Generate invite code',
 
