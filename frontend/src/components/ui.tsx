@@ -15,7 +15,7 @@ const BUTTON_STYLES: Record<ButtonVariant, string> = {
   danger:
     'bg-transparent text-red-700 dark:text-red-400 border border-red-300 hover:bg-red-50 dark:hover:bg-red-950',
   ghost: 'bg-transparent text-ink border border-edge hover:bg-surface',
-  primary: 'bg-ink text-base hover:opacity-85 border border-ink',
+  primary: 'bg-ink text-page hover:opacity-85 border border-ink',
 };
 
 export const Button: ParentComponent<{
@@ -113,7 +113,9 @@ export const Modal: ParentComponent<{
           if (event.target === event.currentTarget) props.onClose();
         }}
       >
-        <div class="safe-bottom bg-surface w-full max-w-md rounded-t-lg p-4 sm:rounded-lg">
+        {/* pb uses max(): .safe-bottom's longhand (index.css loads after uno.css)
+            would override p-4's padding-bottom with env()=0 on desktop */}
+        <div class="bg-surface w-full max-w-md rounded-t-lg px-4 pt-4 pb-[max(calc(var(--spacing)*4),env(safe-area-inset-bottom))] sm:rounded-lg">
           <div class="mb-3 flex items-center justify-between">
             <h2 class="text-base font-medium">{props.title}</h2>
             <button

@@ -27,7 +27,7 @@ export const BookCard: ParentComponent<{
   const { t } = useI18n();
   return (
     <button
-      class="border-edge bg-surface hover:bg-base block w-full cursor-pointer rounded-lg border p-3 text-left transition-colors"
+      class="border-edge bg-surface hover:bg-page block w-full cursor-pointer rounded-lg border p-3 text-left transition-colors"
       onClick={() => {
         props.onClick();
       }}

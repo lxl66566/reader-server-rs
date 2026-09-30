@@ -45,7 +45,7 @@ export const Layout: ParentComponent = props => {
                 label={t('navSettings')}
               />
               <button
-                class="text-muted hover:bg-base hover:text-ink flex cursor-pointer items-center gap-1 rounded px-2 py-1"
+                class="text-muted hover:bg-page hover:text-ink flex cursor-pointer items-center gap-1 rounded px-2 py-1"
                 onClick={logout}
                 type="button"
               >
@@ -55,7 +55,7 @@ export const Layout: ParentComponent = props => {
             </Show>
             <Show when={!auth.isLoggedIn()}>
               <A
-                class="border-edge hover:bg-base rounded border px-3 py-1"
+                class="border-edge hover:bg-page rounded border px-3 py-1"
                 href="/login"
               >
                 {t('login')}
@@ -78,7 +78,7 @@ const NavLink: ParentComponent<{
 }> = props => (
   <A
     activeClass="text-ink"
-    class="text-muted hover:bg-base hover:text-ink flex items-center gap-1 rounded px-2 py-1"
+    class="text-muted hover:bg-page hover:text-ink flex items-center gap-1 rounded px-2 py-1"
     href={props.href}
   >
     {props.icon}

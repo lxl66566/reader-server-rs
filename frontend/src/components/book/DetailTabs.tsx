@@ -154,7 +154,7 @@ function AnnotationsPanel(props: {
                   type="button"
                 >
                   <span class="flex flex-wrap items-center gap-2">
-                    <span class="border-edge bg-base rounded-full border px-2 py-0.5 text-xs">
+                    <span class="border-edge bg-page rounded-full border px-2 py-0.5 text-xs">
                       {annotation.kind === 'note'
                         ? t('kindNote')
                         : t('kindHighlight')}
@@ -262,7 +262,7 @@ function ChaptersPanel(props: {
           {chapter => (
             <li>
               <button
-                class="hover:bg-base flex min-h-11 w-full cursor-pointer items-center gap-2 py-1 text-left text-sm"
+                class="hover:bg-page flex min-h-11 w-full cursor-pointer items-center gap-2 py-1 text-left text-sm"
                 onClick={() => {
                   props.onOpen(chapter);
                 }}

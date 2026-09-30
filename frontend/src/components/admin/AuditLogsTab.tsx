@@ -53,7 +53,7 @@ export const AuditLogsTab: Component<{
         <ul class="space-y-2">
           <For each={logs()?.logs ?? []}>
             {(item: AuditLogItem) => (
-              <li class="border-edge bg-base rounded-lg border p-3 text-sm">
+              <li class="border-edge bg-page rounded-lg border p-3 text-sm">
                 <div class="flex flex-wrap items-center gap-x-2 gap-y-0.5">
                   <span class="font-medium">{item.admin_username ?? '—'}</span>
                   <span class="text-muted">

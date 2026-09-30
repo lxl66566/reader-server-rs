@@ -223,7 +223,7 @@ const ActionButton: Component<{
   onClick: () => void;
 }> = props => (
   <button
-    class="border-edge text-muted hover:bg-base hover:text-ink cursor-pointer rounded border px-2 py-1 text-xs"
+    class="border-edge text-muted hover:bg-page hover:text-ink cursor-pointer rounded border px-2 py-1 text-xs"
     onClick={() => {
       props.onClick();
     }}

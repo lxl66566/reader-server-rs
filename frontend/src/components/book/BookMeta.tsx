@@ -36,11 +36,11 @@ export const BookMeta: Component<{
           </p>
         </div>
         <div class="flex shrink-0 items-center gap-2">
-          <span class="border-edge bg-base rounded-full border px-2 py-0.5 text-xs">
+          <span class="border-edge bg-page rounded-full border px-2 py-0.5 text-xs">
             {t(FORMAT_LABELS[props.book.format])}
           </span>
           <Show when={props.book.is_public}>
-            <span class="border-edge bg-base rounded-full border px-2 py-0.5 text-xs">
+            <span class="border-edge bg-page rounded-full border px-2 py-0.5 text-xs">
               {t('publicTag')}
             </span>
           </Show>

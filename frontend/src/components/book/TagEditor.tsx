@@ -42,7 +42,7 @@ export const TagEditor: Component<{
         {tag => (
           <button
             aria-label={`${t('delete')}: ${tag}`}
-            class="border-edge bg-base hover:border-accent flex min-h-10 cursor-pointer items-center gap-1 rounded-full border px-3 text-sm transition-colors"
+            class="border-edge bg-page hover:border-accent flex min-h-10 cursor-pointer items-center gap-1 rounded-full border px-3 text-sm transition-colors"
             onClick={() => {
               removeTag(tag);
             }}

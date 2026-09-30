@@ -30,7 +30,7 @@ export const StepperControl: ParentComponent<{
   return (
     <div class="flex items-center gap-1">
       <button
-        class="border-edge text-muted hover:bg-base hover:text-ink flex size-7 cursor-pointer items-center justify-center rounded border"
+        class="border-edge text-muted hover:bg-page hover:text-ink flex size-7 cursor-pointer items-center justify-center rounded border"
         onClick={decrease}
         type="button"
       >
@@ -38,7 +38,7 @@ export const StepperControl: ParentComponent<{
       </button>
       <span class="w-8 text-center text-sm tabular-nums">{props.value}</span>
       <button
-        class="border-edge text-muted hover:bg-base hover:text-ink flex size-7 cursor-pointer items-center justify-center rounded border"
+        class="border-edge text-muted hover:bg-page hover:text-ink flex size-7 cursor-pointer items-center justify-center rounded border"
         onClick={increase}
         type="button"
       >

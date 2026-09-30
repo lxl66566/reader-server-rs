@@ -64,7 +64,7 @@ const Chrome = (props: ChromeProps) => {
           <div class="flex h-12 items-center gap-2 px-3">
             <button
               aria-label={t('readerExit')}
-              class="text-muted hover:bg-base hover:text-ink flex size-9 cursor-pointer items-center justify-center rounded"
+              class="text-muted hover:bg-page hover:text-ink flex size-9 cursor-pointer items-center justify-center rounded"
               onClick={() => {
                 navigate(`/book/${props.book.book_id}`);
               }}
@@ -171,7 +171,7 @@ const BarButton = (buttonProps: {
   onClick: () => void;
 }) => (
   <button
-    class="text-muted hover:bg-base hover:text-ink flex min-w-16 cursor-pointer flex-col items-center justify-center gap-0.5 rounded px-2"
+    class="text-muted hover:bg-page hover:text-ink flex min-w-16 cursor-pointer flex-col items-center justify-center gap-0.5 rounded px-2"
     onClick={() => {
       buttonProps.onClick();
     }}
@@ -208,7 +208,7 @@ const TocPanel = (panelProps: {
             {chapter => (
               <li>
                 <button
-                  class="hover:bg-base w-full cursor-pointer rounded px-2 py-2.5 text-left text-sm"
+                  class="hover:bg-page w-full cursor-pointer rounded px-2 py-2.5 text-left text-sm"
                   onClick={() => {
                     panelProps.onJump(chapter.position);
                   }}
@@ -307,7 +307,7 @@ const BookmarksPanel = (panelProps: {
                 {bookmark => (
                   <li class="flex items-center gap-2">
                     <button
-                      class="hover:bg-base min-w-0 flex-1 cursor-pointer truncate rounded px-2 py-2.5 text-left text-sm"
+                      class="hover:bg-page min-w-0 flex-1 cursor-pointer truncate rounded px-2 py-2.5 text-left text-sm"
                       onClick={() => {
                         panelProps.onJump(bookmark.locator);
                       }}

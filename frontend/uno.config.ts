@@ -9,7 +9,9 @@ const config: UserConfig<Theme> = defineConfig({
   theme: {
     colors: {
       accent: 'var(--color-accent)',
-      base: 'var(--color-bg)',
+      // named "page" not "base": a color named "base" makes the Tailwind
+      // `text-base` utility resolve to this color instead of font-size
+      page: 'var(--color-bg)',
       edge: 'var(--color-border)',
       ink: 'var(--color-fg)',
       muted: 'var(--color-muted)',
