@@ -48,8 +48,8 @@ pub async fn setup_test_app() -> Result<(Router, Pool<Sqlite>)> {
             rotation: "never".to_string(),
         },
         rate_limit: crate::config::RateLimitConfig {
-            per_second: 1000,
-            burst_size: 1000,
+            per_second: std::num::NonZeroU32::new(1000).unwrap(),
+            burst_size: std::num::NonZeroU32::new(1000).unwrap(),
         },
     };
 

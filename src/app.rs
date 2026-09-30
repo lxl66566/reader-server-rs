@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use axum::{
     Router,
     extract::{DefaultBodyLimit, FromRef},
@@ -73,13 +75,17 @@ pub fn create_app(db: Pool<Sqlite>, config: &Config) -> Router {
 
     // 创建限流配置：用 SmartIpKeyExtractor 支持 X-Forwarded-For / x-real-ip /
     // forwarded 部署时务必保证反代正确设置这些 header（否则会被伪造绕过）
+    // 注意 tower_governor 的 per_second(n) 语义是"每 n 秒补充 1 个 token"，
+    // 与直觉相反，这里按"每秒 per_second 个请求"自行换算补充间隔
+    let replenish =
+        Duration::from_nanos(1_000_000_000 / u64::from(state.config.rate_limit.per_second.get()));
     let governor_config = GovernorConfigBuilder::default()
         .key_extractor(SmartIpKeyExtractor)
-        .per_second(state.config.rate_limit.per_second)
-        .burst_size(state.config.rate_limit.burst_size)
+        .period(replenish)
+        .burst_size(state.config.rate_limit.burst_size.get())
         .use_headers()
         .finish()
-        .expect("governor config with positive per_second/burst_size always builds");
+        .expect("validated rate limit config always builds a quota");
 
     // 构建路由
     Router::new()

@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{num::NonZeroU32, path::PathBuf};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -53,8 +53,26 @@ pub struct LogConfig {
 /// `per_second` + `burst_size` 共同决定 token bucket；按客户端 IP 维度计数
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RateLimitConfig {
-    pub per_second: u64,
-    pub burst_size: u32,
+    /// 每 IP 每秒放行的请求数
+    pub per_second: NonZeroU32,
+    /// 令牌桶最大突发容量
+    pub burst_size: NonZeroU32,
+}
+
+impl RateLimitConfig {
+    /// 启动期校验：补充间隔 = 1s / per_second，governor 内部以 u64 纳秒
+    /// 承载 GCRA 参数且要求间隔为正；上限 10^6 保证间隔 >= 1µs，
+    /// 对任意 u32 burst 均远离溢出边界（tower_governor 自身不校验，
+    /// 溢出时 debug panic、release 静默回绕导致限流失效）
+    fn validate(&self) -> Result<()> {
+        const MAX_PER_SECOND: u32 = 1_000_000;
+        anyhow::ensure!(
+            self.per_second.get() <= MAX_PER_SECOND,
+            "rate_limit.per_second must be <= {MAX_PER_SECOND}, got {}",
+            self.per_second.get()
+        );
+        Ok(())
+    }
 }
 
 impl Default for Config {
@@ -84,8 +102,8 @@ impl Default for Config {
                 rotation: "daily".to_string(),
             },
             rate_limit: RateLimitConfig {
-                per_second: 20,
-                burst_size: 70,
+                per_second: NonZeroU32::new(20).unwrap(),
+                burst_size: NonZeroU32::new(70).unwrap(),
             },
         }
     }
@@ -108,6 +126,8 @@ pub async fn load_config() -> Result<Config> {
                  generate a random secret and update config.json."
             );
         }
+
+        config.rate_limit.validate()?;
 
         Ok(config)
     } else {
