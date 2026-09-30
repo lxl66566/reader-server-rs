@@ -23,10 +23,9 @@ use crate::{
 const DEFAULT_TZ: chrono_tz::Tz = chrono_tz::UTC;
 
 // —— 阅读设置取值范围 ——
-// 范围需兼容两处既有取值：前端设置面板控件（em 单位滑块，如阅读宽度 20-60）
-// 与 schema 默认值（reading_width DEFAULT 800、text_indent DEFAULT 2 等，
-// 用户原样回写默认设置也必须通过校验）。故此处取覆盖两者的宽范围，
-// 仅用于拒绝负数、零与明显异常的数值。
+// 范围需兼容两处既有取值：前端设置面板控件（em 单位滑块，如阅读宽度 20-100）
+// 与历史 schema 默认值（用户原样回写默认设置也必须通过校验）。故此处取
+// 覆盖两者的宽范围，仅用于拒绝负数、零与明显异常的数值。
 /// 字号（px）
 const FONT_SIZE_RANGE: std::ops::RangeInclusive<i64> = 8..=72;
 /// 行距倍数
@@ -35,7 +34,7 @@ const LINE_HEIGHT_RANGE: std::ops::RangeInclusive<f64> = 1.0..=3.0;
 const LETTER_SPACING_RANGE: std::ops::RangeInclusive<f64> = 0.0..=20.0;
 /// 段间距（em）
 const PARAGRAPH_SPACING_RANGE: std::ops::RangeInclusive<f64> = 0.0..=10.0;
-/// 阅读区域宽度（前端按 em 使用，历史默认值为 800）
+/// 阅读区域宽度（前端按 em 使用）
 const READING_WIDTH_RANGE: std::ops::RangeInclusive<i64> = 10..=2000;
 /// 段落首行缩进（字符数）
 const TEXT_INDENT_RANGE: std::ops::RangeInclusive<f64> = 0.0..=8.0;
@@ -139,7 +138,7 @@ async fn get_reading_settings(
             line_height: 1.5,
             letter_spacing: 0.05,
             paragraph_spacing: 1.2,
-            reading_width: 800,
+            reading_width: 40,
             text_indent: 2.0,
             chinese_conversion: ChineseConversion::None,
             timezone: "UTC".to_string(),

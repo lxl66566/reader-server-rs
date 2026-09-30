@@ -231,7 +231,7 @@ CREATE TABLE
     line_height REAL NOT NULL DEFAULT 1.5,
     letter_spacing REAL NOT NULL DEFAULT 0.05,
     paragraph_spacing REAL NOT NULL DEFAULT 1.2,
-    reading_width INTEGER NOT NULL DEFAULT 800,
+    reading_width INTEGER NOT NULL DEFAULT 40,
     text_indent REAL NOT NULL DEFAULT 2,
     -- 简繁转换：none=不转换；simplified=转简体；traditional=转繁体
     chinese_conversion TEXT NOT NULL DEFAULT 'none' CHECK (chinese_conversion IN ('none', 'simplified', 'traditional')),

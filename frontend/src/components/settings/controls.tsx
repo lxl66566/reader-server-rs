@@ -10,7 +10,7 @@ export const SettingRow: ParentComponent<{
   right: JSX.Element;
 }> = props => (
   <div class="flex items-center justify-between gap-3 py-2">
-    <span class="text-ink text-sm">{props.label}</span>
+    <span class="text-ink shrink-0 text-sm">{props.label}</span>
     {props.right}
   </div>
 );
@@ -59,10 +59,18 @@ export const RangeControl: ParentComponent<{
   // Number of decimal places the step implies, used to drop float noise.
   const decimals = () => String(props.step).split('.')[1]?.length ?? 0;
   const display = () => props.value.toFixed(decimals());
+  // 手动输入仅在合法范围内落地；越界/未完成输入暂不更新，失焦回显当前值
+  const commitTyped = (raw: string) => {
+    const typed = Number(raw);
+    if (!Number.isFinite(typed)) return;
+    if (typed < props.min || typed > props.max) return;
+    props.onChange(Number(typed.toFixed(decimals())));
+  };
   return (
-    <div class="flex items-center gap-2">
+    // flex-1 + 上限：PC 下拉条更长，移动端占满剩余行宽自适应
+    <div class="flex min-w-0 flex-1 items-center gap-2 sm:max-w-72">
       <input
-        class="accent-accent w-32"
+        class="accent-accent min-w-0 flex-1"
         max={props.max}
         min={props.min}
         onInput={event => {
@@ -73,10 +81,24 @@ export const RangeControl: ParentComponent<{
         type="range"
         value={props.value}
       />
-      <span class="text-muted w-12 text-right text-sm tabular-nums">
-        {display()}
-        {props.unit}
-      </span>
+      {/* 数值框支持手动输入：移动端拉条难以精确操作 */}
+      <input
+        class="border-edge bg-surface text-ink focus:border-accent w-16 shrink-0 rounded border px-1.5 py-0.5 text-right text-sm tabular-nums outline-none"
+        max={props.max}
+        min={props.min}
+        onBlur={event => {
+          event.currentTarget.value = display();
+        }}
+        onInput={event => {
+          commitTyped(event.currentTarget.value);
+        }}
+        step={props.step}
+        type="number"
+        value={display()}
+      />
+      {props.unit && (
+        <span class="text-muted shrink-0 text-sm">{props.unit}</span>
+      )}
     </div>
   );
 };

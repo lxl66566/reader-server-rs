@@ -153,3 +153,11 @@ export const SectionCard: ParentComponent<{
     {props.children}
   </section>
 );
+
+// 让子元素横向铺满视口（突破父容器 max-width），供设置页预览等使用。
+// 视口含纵向滚动条宽度，html 上的 overflow-x: clip 负责裁掉溢出
+export const FullBleed: ParentComponent = props => (
+  <div class="relative left-1/2 w-screen -translate-x-1/2">
+    {props.children}
+  </div>
+);

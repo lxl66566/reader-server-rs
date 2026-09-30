@@ -153,12 +153,22 @@ const EpubReader = (props: FormatReaderProps) => {
   // --- theming: mirror ReadingSettings into the iframe ---
   function registerTheme(): void {
     if (!rendition) return;
+    // scrolled 模式下宿主容器全宽（滚动条贴屏幕右缘），正文列宽
+    // 改由 iframe body 的 max-width 限制并居中
+    const scrolled = settings.pagination_mode === 'scroll';
     rendition.themes.register('custom', {
       body: {
         background: 'transparent',
         color: `${settings.text_color} !important`,
         'font-family': fontFamilyCss(settings.font_family) || 'inherit',
         padding: '0 16px',
+        ...(scrolled
+          ? {
+              // !important：书籍自带样式常重置 body margin，需强制覆盖
+              margin: '0 auto !important',
+              'max-width': `${settings.reading_width}em !important`,
+            }
+          : {}),
       },
       p: {
         'line-height': `${settings.line_height} !important`,
@@ -175,7 +185,7 @@ const EpubReader = (props: FormatReaderProps) => {
     );
   }
 
-  // re-apply when settings change (color/font/size)
+  // re-apply when settings change (color/font/size/width)
   createEffect(
     on(
       () => [
@@ -186,6 +196,8 @@ const EpubReader = (props: FormatReaderProps) => {
         settings.letter_spacing,
         settings.paragraph_spacing,
         settings.text_indent,
+        settings.reading_width,
+        settings.pagination_mode,
       ],
       () => {
         if (rendition) registerTheme();
@@ -328,7 +340,14 @@ const EpubReader = (props: FormatReaderProps) => {
       <div
         class="mx-auto h-full w-full"
         ref={container}
-        style={{ 'max-width': `${settings.reading_width}em` }}
+        style={{
+          // scrolled 模式滚动发生在容器内，全宽让滚动条贴屏幕右缘；
+          // 列宽由 iframe body 限制（见 registerTheme）
+          'max-width':
+            settings.pagination_mode === 'scroll'
+              ? undefined
+              : `${settings.reading_width}em`,
+        }}
       />
       <Show when={!ready() && !error()}>
         <div class="absolute inset-0 flex items-center justify-center">

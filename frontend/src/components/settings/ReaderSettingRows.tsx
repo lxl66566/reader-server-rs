@@ -125,7 +125,7 @@ export const ReaderSettingRows = (props: { withTheme?: boolean }) => {
         label={t('settingsReadingWidth')}
         right={
           <RangeControl
-            max={60}
+            max={100}
             min={20}
             onChange={value => {
               update({ reading_width: value });

@@ -10,7 +10,14 @@ import { ApiError, authApi } from '../api';
 import { SelectControl, SettingRow } from '../components/settings/controls';
 import { ReaderSettingRows } from '../components/settings/ReaderSettingRows';
 import { SettingsPreview } from '../components/settings/SettingsPreview';
-import { Button, Input, Modal, SectionCard, Spinner } from '../components/ui';
+import {
+  Button,
+  FullBleed,
+  Input,
+  Modal,
+  SectionCard,
+  Spinner,
+} from '../components/ui';
 import { LOCALES, useI18n } from '../i18n';
 import type { DictKey } from '../i18n/zh-CN';
 import { useAuth, useRequireAuth } from '../stores/auth';
@@ -116,9 +123,26 @@ const Settings = () => {
         <ReaderSettingRows withTheme />
       </SectionCard>
 
-      <SectionCard title={t('settingsPreview')}>
-        <SettingsPreview settings={settings} text={t('settingsPreviewText')} />
-      </SectionCard>
+      {/* 预览卡宽度跟随阅读宽度（em 按阅读字号换算为 px，卡片层 em 基准不同；
+          +2rem 补偿卡片自身 px-4 内边距，使内部文本区恰为阅读宽度）。
+          最小值与其他设置卡对齐：Layout main 为 max-w-4xl + px-4，内容宽
+          54rem，改动 Layout 时需同步此处；100vw 含滚动条，封顶留 2rem 防
+          边框被裁。卡片铺开的是自身，不反撑设置区容器，布局不抖动 */}
+      <FullBleed>
+        <div
+          class="mx-auto w-full"
+          style={{
+            'max-width': `min(max(54rem, calc(${settings.reading_width * settings.font_size}px + 2rem)), calc(100vw - 2rem))`,
+          }}
+        >
+          <SectionCard title={t('settingsPreview')}>
+            <SettingsPreview
+              settings={settings}
+              text={t('settingsPreviewText')}
+            />
+          </SectionCard>
+        </div>
+      </FullBleed>
 
       <SectionCard title={t('languageLabel')}>
         <SettingRow

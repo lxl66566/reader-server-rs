@@ -38,6 +38,11 @@ body,
   height: 100%;
 }
 
+/* 全宽铺开元素（FullBleed）宽为 100vw，含纵向滚动条宽度；裁掉溢出避免整页横向滚动 */
+html {
+  overflow-x: clip;
+}
+
 body {
   margin: 0;
   background: var(--color-bg);

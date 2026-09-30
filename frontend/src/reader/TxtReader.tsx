@@ -755,31 +755,38 @@ const ScrollView = (
       }
       when={!error()}
     >
+      {/* 滚动容器全宽让滚动条贴屏幕右缘，列宽由内层限制并居中 */}
       <div
-        class="mx-auto h-full w-full overflow-y-auto px-4 py-6"
+        class="h-full w-full overflow-y-auto"
         onPointerDown={onPointerDown}
         onPointerUp={onPointerUp}
         onScroll={onScroll}
         ref={container}
-        style={{
-          'max-width': `${props.readingWidth()}em`,
-          ...contentStyle(typo()),
-        }}
       >
-        <For each={chunkIndices()}>
-          {index => (
-            <ChunkParagraphs
-              chunkEls={chunkEls}
-              displayText={props.displayText}
-              getParagraphs={chunkParagraphs}
-              index={index}
-              typo={typo}
-            />
-          )}
-        </For>
-        <Show when={loadingMore()}>
-          <div class="py-4 text-center text-sm opacity-50">{t('loading')}</div>
-        </Show>
+        <div
+          class="mx-auto w-full px-4 py-6"
+          style={{
+            'max-width': `${props.readingWidth()}em`,
+            ...contentStyle(typo()),
+          }}
+        >
+          <For each={chunkIndices()}>
+            {index => (
+              <ChunkParagraphs
+                chunkEls={chunkEls}
+                displayText={props.displayText}
+                getParagraphs={chunkParagraphs}
+                index={index}
+                typo={typo}
+              />
+            )}
+          </For>
+          <Show when={loadingMore()}>
+            <div class="py-4 text-center text-sm opacity-50">
+              {t('loading')}
+            </div>
+          </Show>
+        </div>
       </div>
     </Show>
   );

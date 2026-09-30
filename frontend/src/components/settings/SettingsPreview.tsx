@@ -39,14 +39,16 @@ export const SettingsPreview: ParentComponent<{
   };
 
   return (
+    // 列宽跟随阅读宽度（em 按阅读字号换算为 px）并居中，封顶卡片内容宽
     <div
-      class="border-edge rounded border p-4"
+      class="border-edge mx-auto rounded border p-4"
       style={{
         'background-color': props.settings.background_color,
         color: props.settings.text_color,
         'font-size': `${props.settings.font_size}px`,
         'letter-spacing': `${props.settings.letter_spacing}px`,
         'line-height': props.settings.line_height,
+        'max-width': `min(${props.settings.reading_width * props.settings.font_size}px, 100%)`,
       }}
     >
       <For each={paragraphs()}>
