@@ -171,6 +171,8 @@ const Library: Component = () => {
                   goToBook(book.book_id);
                 }}
                 owner={book.owner_username}
+                percent={book.percent ?? undefined}
+                readingTime={book.reading_time ?? undefined}
                 title={book.title}
               />
             )}
@@ -196,6 +198,8 @@ const Library: Component = () => {
                 onClick={() => {
                   goToBook(book.book_id);
                 }}
+                percent={book.percent ?? undefined}
+                readingTime={book.reading_time ?? undefined}
                 title={book.title}
               />
             )}

@@ -61,7 +61,8 @@ type BookDetail = Book & { is_owner: boolean; chapters: { chapter_id: number; ti
 type PublicBook = {
   book_id: number; title: string; author: string | null; owner_username: string;
   format: BookFormat;
-  created_at: string; total_chars: number; total_pages: number; description: string | null
+  created_at: string; total_chars: number; total_pages: number; description: string | null;
+  percent: number | null; reading_time: number | null  // 当前请求用户的进度/阅读时长（秒），未读为 null
 }
 type InviteCodeItem = { id: number; invite_code: string; limit_times: number; used_times: number; description: string | null; created_at: string }
 type UserItem = { user_id: number; username: string; created_at: string; book_count: number; total_reading_time: number; status: 'active' | 'banned'; banned_at: string | null }

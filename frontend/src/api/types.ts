@@ -117,6 +117,10 @@ export interface PublicBook {
   description: null | string;
   format: BookFormat;
   owner_username: string;
+  /** viewer's progress, null when unread */
+  percent: null | number;
+  /** viewer's reading time in seconds, null when unread */
+  reading_time: null | number;
   title: string;
   total_chars: number;
   total_pages: number;

@@ -361,6 +361,10 @@ pub struct PublicBookListItem {
     pub total_chars: i64,
     pub total_pages: i64,
     pub description: Option<String>,
+    /// 当前请求用户的阅读进度（未读为 None）
+    pub percent: Option<f64>,
+    /// 当前请求用户的阅读时长（未读为 None）
+    pub reading_time: Option<i64>,
 }
 
 // txt 书籍内容响应（仅 txt 格式有意义）

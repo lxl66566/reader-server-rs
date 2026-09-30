@@ -847,9 +847,9 @@ async fn jump_to_chapter(
     })))
 }
 
-// 获取公开书籍列表
+// 获取公开书籍列表（附带当前请求用户的进度与阅读时长）
 async fn list_public_books(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(pool): State<Pool<Sqlite>>,
     Query(params): Query<PaginationParams>,
 ) -> Result<Json<ApiResponse<PublicBookListResponse>>, AppError> {
@@ -866,13 +866,16 @@ async fn list_public_books(
         r#"
         SELECT b.id, b.title, b.author, b.created_at, b.total_chars, b.total_pages,
                b.description, b.format AS "format!: BookFormat",
-               u.username as owner_username
+               u.username as owner_username,
+               rp.percent AS percent, rp.reading_time AS reading_time
         FROM books b
         JOIN users u ON b.user_id = u.id
+        LEFT JOIN reading_progress rp ON rp.book_id = b.id AND rp.user_id = ?
         WHERE b.is_public = 1
         ORDER BY b.created_at DESC
         LIMIT ? OFFSET ?
         "#,
+        auth.user_id,
         limit,
         offset
     )
@@ -892,6 +895,8 @@ async fn list_public_books(
             total_chars: book.total_chars,
             total_pages: book.total_pages,
             description: book.description,
+            percent: book.percent,
+            reading_time: book.reading_time,
         })
         .collect();
 
@@ -901,9 +906,9 @@ async fn list_public_books(
     })))
 }
 
-// 随机获取公开书籍
+// 随机获取公开书籍（附带当前请求用户的进度与阅读时长）
 async fn get_random_public_books(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(pool): State<Pool<Sqlite>>,
     Query(params): Query<RandomPublicParams>,
 ) -> Result<Json<ApiResponse<RandomPublicBooksResponse>>, AppError> {
@@ -913,13 +918,16 @@ async fn get_random_public_books(
         r#"
         SELECT b.id, b.title, b.author, b.created_at, b.total_chars, b.total_pages,
                b.description, b.format AS "format!: BookFormat",
-               u.username as owner_username
+               u.username as owner_username,
+               rp.percent AS percent, rp.reading_time AS reading_time
         FROM books b
         JOIN users u ON b.user_id = u.id
+        LEFT JOIN reading_progress rp ON rp.book_id = b.id AND rp.user_id = ?
         WHERE b.is_public = 1
         ORDER BY RANDOM()
         LIMIT ?
         "#,
+        auth.user_id,
         count
     )
     .fetch_all(&pool)
@@ -937,6 +945,8 @@ async fn get_random_public_books(
             total_chars: book.total_chars,
             total_pages: book.total_pages,
             description: book.description,
+            percent: book.percent,
+            reading_time: book.reading_time,
         })
         .collect();
 

@@ -5,3 +5,4 @@ sqlite
 /logs
 /test*
 reader.db*
+/books

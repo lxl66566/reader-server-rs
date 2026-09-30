@@ -6,6 +6,13 @@ import { defineConfig, type UserConfig } from 'unocss';
 const config: UserConfig<Theme> = defineConfig({
   // 应用主题挂在 <html data-theme> 上，dark: 变体跟随它而非系统 prefers-color-scheme
   presets: [presetWind4({ dark: { dark: ':root[data-theme="dark"]' } })],
+  // 原生 select 无 pointer 光标，全局补齐
+  preflights: [
+    {
+      layer: 'base',
+      getCSS: () => 'select, option { cursor: pointer; }',
+    },
+  ],
   theme: {
     colors: {
       accent: 'var(--color-accent)',
