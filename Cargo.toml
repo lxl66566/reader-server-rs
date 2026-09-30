@@ -58,7 +58,7 @@ uuid               = { version = "1.23", features = ["v4"] }
 zip                = { version = "8", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
-tokio-tungstenite = "0.30"
+tokio-tungstenite = "0.29"
 
 [build-dependencies]
 fuck-backslash  = "0.1"
