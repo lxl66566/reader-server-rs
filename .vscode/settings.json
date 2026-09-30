@@ -1,5 +1,8 @@
 {
   "[typescript][typescriptreact][javascript][javascriptreact]": {
     "editor.defaultFormatter": "oxc.oxc-vscode"
+  },
+  "[sql]": {
+    "editor.formatOnSave": false
   }
 }

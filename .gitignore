@@ -1,7 +1,7 @@
 /target
 *.db
 config.json
-.opencode/
 sqlite
 /logs
 /test*
+reader.db*
