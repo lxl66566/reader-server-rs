@@ -11,10 +11,24 @@ import { createStore } from 'solid-js/store';
 
 import { readingApi } from '../api';
 import type { PaginationMode, ReadingSettings, ThemeMode } from '../api/types';
-import { setThemeMode } from '../theme';
+import { resolvedTheme, setThemeMode } from '../theme';
+
+// 服务端 schema 默认色，作为"用户未自定义"的默认值
+const SERVER_DEFAULT_COLORS = {
+  background: '#F5F5DC',
+  text: '#000000',
+} as const;
+// 初始化默认色：亮/暗主题各取色板中最白与最黑的两个
+const THEME_DEFAULT_COLORS = {
+  dark: { background_color: '#201f1b', text_color: '#e8e6e0' },
+  light: { background_color: '#eef1f5', text_color: '#2b2a26' },
+} as const;
+
+const themeDefaultColors = () =>
+  THEME_DEFAULT_COLORS[resolvedTheme() === 'dark' ? 'dark' : 'light'];
 
 const FALLBACK: ReadingSettings = {
-  background_color: '#faf9f6',
+  ...themeDefaultColors(),
   // 与服务端 schema 默认值（DEFAULT 'none'）保持一致
   chinese_conversion: 'none',
   font_family: 'default',
@@ -24,7 +38,6 @@ const FALLBACK: ReadingSettings = {
   pagination_mode: 'paginate',
   paragraph_spacing: 0.8,
   reading_width: 40,
-  text_color: '#2b2a26',
   text_indent: 2,
   theme: 'system',
   timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
@@ -59,7 +72,16 @@ export const SettingsProvider: ParentComponent = props => {
   // apply once loaded (createEffect: remote() resolves asynchronously)
   createEffect(() => {
     const value = remote();
-    if (value) applyRemote(value);
+    if (!value) return;
+    // 初始化：颜色仍是服务端默认（用户未自定义过）时，按当前主题写入默认色
+    if (
+      value.background_color === SERVER_DEFAULT_COLORS.background &&
+      value.text_color === SERVER_DEFAULT_COLORS.text
+    ) {
+      update(themeDefaultColors());
+      return;
+    }
+    applyRemote(value);
   });
 
   let syncTimer: ReturnType<typeof setTimeout> | undefined;

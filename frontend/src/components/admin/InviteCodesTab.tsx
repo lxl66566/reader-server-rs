@@ -1,5 +1,6 @@
 // Invite codes: list with copy-to-clipboard and a generate form.
 
+import copyToClipboard from 'copy-to-clipboard';
 import { VsAdd, VsCopy } from 'solid-icons/vs';
 import {
   createResource,
@@ -9,8 +10,6 @@ import {
   type Component,
 } from 'solid-js';
 import toast from 'solid-toast';
-
-import copyToClipboard from 'copy-to-clipboard';
 
 import { adminApi } from '../../api';
 import type { InviteCodeItem } from '../../api/types';
@@ -40,7 +39,9 @@ export const InviteCodesTab: Component<{
 
   const copy = (code: string) => {
     void copyToClipboard(code)
-      .then(ok => (ok ? toast.success(t('copied')) : toast.error(t('copyFailed'))))
+      .then(ok =>
+        ok ? toast.success(t('copied')) : toast.error(t('copyFailed')),
+      )
       .catch(() => toast.error(t('copyFailed')));
   };
 

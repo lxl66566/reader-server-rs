@@ -16,16 +16,16 @@ export function initTheme(): void {
   createEffect(apply);
 }
 
+export function resolvedTheme(): Exclude<ThemeMode, 'system'> {
+  const mode = themeMode();
+  if (mode !== 'system') return mode;
+  return media.matches ? 'dark' : 'light';
+}
+
 export function setThemeMode(mode: ThemeMode): void {
   setThemeModeSignal(mode);
 }
 
 function apply(): void {
-  document.documentElement.dataset.theme = resolved();
-}
-
-function resolved(): Exclude<ThemeMode, 'system'> {
-  const mode = themeMode();
-  if (mode !== 'system') return mode;
-  return media.matches ? 'dark' : 'light';
+  document.documentElement.dataset.theme = resolvedTheme();
 }

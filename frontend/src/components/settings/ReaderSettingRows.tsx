@@ -55,7 +55,7 @@ const CONVERSION_OPTIONS: ChineseConversion[] = [
   'traditional',
 ];
 // Neutral preset swatches; stored in the DB, not theme-aware.
-const BACKGROUND_PRESETS = ['#201f1b', '#eef1f5', '#f8f1e1', '#faf9f6'];
+const BACKGROUND_PRESETS = ['#201f1b', '#eef1f5', '#f8f1e1', '#c7edcc'];
 const TEXT_PRESETS = ['#2b2a26', '#4a3f2d', '#5b6b8c', '#e8e6e0'];
 
 export const ReaderSettingRows = (props: { withTheme?: boolean }) => {
