@@ -88,11 +88,11 @@ export const UploadModal: ParentComponent<{
         </label>
         <label class="block text-sm">
           <span class="text-muted mb-1 block">{t('titleLabel')}</span>
-          <Input class="w-full" onInput={setTitle} value={title()} />
+          <Input onInput={setTitle} value={title()} />
         </label>
         <label class="block text-sm">
           <span class="text-muted mb-1 block">{t('authorLabel')}</span>
-          <Input class="w-full" onInput={setAuthor} value={author()} />
+          <Input onInput={setAuthor} value={author()} />
         </label>
         <div class="flex items-center justify-between">
           <span class="text-sm">{t('isPublicLabel')}</span>

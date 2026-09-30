@@ -51,21 +51,15 @@ const Register = () => {
         <h1 class="mb-4 text-lg font-medium">{t('register')}</h1>
         <label class="mb-3 block text-sm">
           <span class="text-muted mb-1 block">{t('username')}</span>
-          <Input class="w-full" onInput={setUsername} value={username()} />
+          <Input onInput={setUsername} value={username()} />
         </label>
         <label class="mb-3 block text-sm">
           <span class="text-muted mb-1 block">{t('password')}</span>
-          <Input
-            class="w-full"
-            onInput={setPassword}
-            type="password"
-            value={password()}
-          />
+          <Input onInput={setPassword} type="password" value={password()} />
         </label>
         <label class="mb-3 block text-sm">
           <span class="text-muted mb-1 block">{t('confirmPassword')}</span>
           <Input
-            class="w-full"
             onInput={setConfirmPassword}
             type="password"
             value={confirmPassword()}
@@ -73,7 +67,7 @@ const Register = () => {
         </label>
         <label class="mb-4 block text-sm">
           <span class="text-muted mb-1 block">{t('inviteCodeOptional')}</span>
-          <Input class="w-full" onInput={setInviteCode} value={inviteCode()} />
+          <Input onInput={setInviteCode} value={inviteCode()} />
         </label>
         <Button class="w-full" disabled={submitting()} type="submit">
           <Show fallback={t('register')} when={submitting()}>

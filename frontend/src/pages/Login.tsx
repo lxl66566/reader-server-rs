@@ -43,16 +43,11 @@ const Login = () => {
         <h1 class="mb-4 text-lg font-medium">{t('login')}</h1>
         <label class="mb-3 block text-sm">
           <span class="text-muted mb-1 block">{t('username')}</span>
-          <Input class="w-full" onInput={setUsername} value={username()} />
+          <Input onInput={setUsername} value={username()} />
         </label>
         <label class="mb-4 block text-sm">
           <span class="text-muted mb-1 block">{t('password')}</span>
-          <Input
-            class="w-full"
-            onInput={setPassword}
-            type="password"
-            value={password()}
-          />
+          <Input onInput={setPassword} type="password" value={password()} />
         </label>
         <Button class="w-full" disabled={submitting()} type="submit">
           <Show fallback={t('login')} when={submitting()}>

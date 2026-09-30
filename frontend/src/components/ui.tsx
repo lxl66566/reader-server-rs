@@ -44,7 +44,7 @@ export const Input: ParentComponent<{
   value: string;
 }> = props => (
   <input
-    class={`border-edge bg-surface text-ink focus:border-accent rounded border px-3 py-1.5 text-sm outline-none ${props.class ?? ''}`}
+    class={`border-edge bg-surface text-ink focus:border-accent w-full rounded border px-3 py-1.5 text-sm outline-none ${props.class ?? ''}`}
     onInput={event => {
       props.onInput(event.currentTarget.value);
     }}
