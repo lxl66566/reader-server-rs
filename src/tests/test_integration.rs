@@ -399,6 +399,20 @@ async fn test_full_integration() {
     let json = response_json(resp).await;
     assert_eq!(json["code"], 0);
 
+    // E3: random public books excludes requester's own public books
+    // (此刻唯一的公开书属于 user1，故 user1 自己请求应返回空)
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/v1/books/random_public?count=10",
+        Body::empty(),
+        Some(&token1),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = response_json(resp).await;
+    assert_eq!(json["data"]["books"].as_array().unwrap().len(), 0);
+
     // ================================================================
     //  F. Reading Settings
     // ================================================================

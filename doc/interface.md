@@ -177,7 +177,7 @@ type Annotation = {
 
 | 方法 | URL | 权限 | 请求参数 | 响应 data |
 |---|---|---|---|---|
-| GET | /api/v1/books/random_public?count=number（默认1） | Auth | - | { books: PublicBook[] } |
+| GET | /api/v1/books/random_public?count=number（默认1） | Auth | - | { books: PublicBook[] }；仅返回其他用户的公开书，排除本人公开书 |
 
 ### 阅读会话 WebSocket
 

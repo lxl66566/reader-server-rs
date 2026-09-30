@@ -923,10 +923,11 @@ async fn get_random_public_books(
         FROM books b
         JOIN users u ON b.user_id = u.id
         LEFT JOIN reading_progress rp ON rp.book_id = b.id AND rp.user_id = ?
-        WHERE b.is_public = 1
+        WHERE b.is_public = 1 AND b.user_id != ?
         ORDER BY RANDOM()
         LIMIT ?
         "#,
+        auth.user_id,
         auth.user_id,
         count
     )
