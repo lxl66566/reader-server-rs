@@ -1,20 +1,42 @@
 // Live preview mirroring the current reading settings via inline styles.
 
-import { For, type ParentComponent } from 'solid-js';
+import {
+  createEffect,
+  createSignal,
+  For,
+  type ParentComponent,
+} from 'solid-js';
 
 import type { ReadingSettings } from '../../api/types';
 import { fontFamilyCss } from '../../stores/settings';
+import {
+  convertChinese,
+  convertDirection,
+  loadChineseConverter,
+} from '../../utils/opencc';
 
 export const SettingsPreview: ParentComponent<{
   settings: ReadingSettings;
   /** 预览文案，空行（\n\n）分段 */
   text: string;
 }> = props => {
-  const paragraphs = () =>
-    props.text
+  // bump version after converter loaded so paragraphs recompute
+  const [converterVersion, setConverterVersion] = createSignal(0);
+  createEffect(() => {
+    const direction = convertDirection(props.settings.chinese_conversion);
+    void loadChineseConverter(direction).then(() =>
+      setConverterVersion(v => v + 1),
+    );
+  });
+
+  const paragraphs = () => {
+    converterVersion();
+    const direction = convertDirection(props.settings.chinese_conversion);
+    return props.text
       .split(/\n{2,}/)
-      .map(p => p.trim())
+      .map(p => convertChinese(p.trim(), direction))
       .filter(p => p.length > 0);
+  };
 
   return (
     <div
