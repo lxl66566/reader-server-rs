@@ -23,7 +23,11 @@ import {
   loadChineseConverter,
 } from '../utils/opencc';
 import { sanitizeEpubArchive } from './epubSanitize';
-import { attachTapSwipeGestures } from './gestures';
+import {
+  animateScrollBy,
+  attachTapSwipeGestures,
+  PAGE_SCROLL_RATIO,
+} from './gestures';
 import { stripEpubParagraphIndent } from './paragraph';
 import type { FormatReaderProps } from './types';
 
@@ -84,7 +88,9 @@ const EpubReader = (props: FormatReaderProps) => {
     rendition = book.renderTo(container, {
       flow: scrolled ? 'scrolled-doc' : 'paginated',
       height: '100%',
-      manager: scrolled ? 'continuous' : 'default',
+      // manager default：滚动模式下也只渲染一章，滚动发生在 manager 容器上，
+      // 章节边界由翻页手势硬切换（continuous 会把后续章节拼接在下方）
+      manager: 'default',
       width: '100%',
     });
 
@@ -286,12 +292,66 @@ const EpubReader = (props: FormatReaderProps) => {
       onFlip: dir => {
         void flip(dir);
       },
+      onPageScroll: dir => {
+        pageScroll(dir);
+      },
       onTapCenter: () => {
         props.onTapCenter();
       },
       paginate: () => settings.pagination_mode === 'paginate',
+      // iframe 撑满整章内容高度，事件 clientY 相对整章而非可视区，
+      // 需换算到 manager 容器的滚动区才能正确划分上/中/下区
+      visibleRange: () => {
+        const el = scrolledContainer();
+        const top = el?.scrollTop ?? 0;
+        const bottom = el
+          ? top + el.clientHeight
+          : doc.documentElement.clientHeight;
+        return { bottom, top };
+      },
       width: () => container?.clientWidth ?? 1,
     });
+  }
+
+  // epub.js 运行时在 rendition 上挂载 manager 实例（类型未声明），
+  // 收窄到滚动翻页所需的容器字段
+  const scrolledContainer = (): HTMLDivElement | undefined =>
+    (
+      rendition as
+        | null
+        | undefined
+        | { manager?: { container?: HTMLDivElement } }
+    )?.manager?.container;
+
+  // --- 滚动模式翻页：章内滚动 PAGE_SCROLL_RATIO 视口，章节边界处切换章节 ---
+
+  function pageScroll(dir: -1 | 1): void {
+    const el = scrolledContainer();
+    if (!el) return;
+    const atEdge =
+      dir > 0
+        ? el.scrollTop + el.clientHeight >= el.scrollHeight - 1
+        : el.scrollTop <= 0;
+    if (atEdge) {
+      void turnChapter(dir);
+      return;
+    }
+    animateScrollBy(el, dir * el.clientHeight * PAGE_SCROLL_RATIO);
+  }
+
+  async function turnChapter(dir: -1 | 1): Promise<void> {
+    if (!rendition) return;
+    if (dir > 0) await rendition.next();
+    else await rendition.prev();
+    // 上一章从头显示，落到其末尾以衔接阅读顺序（首末章越界时 next/prev 为空操作）
+    if (dir < 0) {
+      const el = scrolledContainer();
+      if (el) {
+        requestAnimationFrame(() => {
+          el.scrollTop = el.scrollHeight;
+        });
+      }
+    }
   }
 
   async function flip(dir: -1 | 1): Promise<void> {

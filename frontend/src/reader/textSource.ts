@@ -97,16 +97,42 @@ export class TextSource {
   }
 }
 
+/** 章节的字符范围 [start, end)；无章节信息的书籍退化为整本 */
+export function chapterBounds(
+  chapters: readonly { position: number }[],
+  index: number,
+  totalChars: number,
+): { end: number; start: number } {
+  return {
+    end: chapters.at(index + 1)?.position ?? totalChars,
+    start: chapters.at(index)?.position ?? 0,
+  };
+}
+
+/** 最后一个 position <= at 的章节下标（列表按 position 升序；空列表返回 0） */
+export function chapterIndexAt(
+  chapters: readonly { position: number }[],
+  at: number,
+): number {
+  let best = 0;
+  for (const [index, chapter] of chapters.entries()) {
+    if (chapter.position > at) break;
+    best = index;
+  }
+  return best;
+}
+
 /**
  * 向下扩展一个 chunk。超过上限且 `canDropTop` 时回收顶部 chunk；
  * `canDropTop` 为 false（视口仍停留在顶部 chunk）时允许暂时超限。
+ * `maxEnd` 为窗口 end 的上限（exclusive），章节模式下传章节末尾 chunk。
  */
 export function extendWindowDown(
   win: ScrollWindow,
-  totalChunks: number,
+  maxEnd: number,
   canDropTop: boolean,
 ): ScrollWindow {
-  const end = Math.min(win.end + 1, totalChunks);
+  const end = Math.min(win.end + 1, maxEnd);
   const start =
     canDropTop && end - win.start > MAX_SCROLL_WINDOW_CHUNKS
       ? win.start + 1
@@ -114,15 +140,19 @@ export function extendWindowDown(
   return { end, start };
 }
 
+// --- 章节范围换算（TXT 章节由后端按行解析，position 为字符偏移） ---
+
 /**
  * 向上扩展一个 chunk。超过上限且 `canDropBottom` 时回收底部 chunk；
  * `canDropBottom` 为 false（视口仍停留在底部 chunk）时允许暂时超限。
+ * `minStart` 为窗口 start 的下限，章节模式下传章节起始 chunk。
  */
 export function extendWindowUp(
   win: ScrollWindow,
+  minStart: number,
   canDropBottom: boolean,
 ): ScrollWindow {
-  const start = Math.max(0, win.start - 1);
+  const start = Math.max(minStart, win.start - 1);
   const end =
     canDropBottom && win.end - start > MAX_SCROLL_WINDOW_CHUNKS
       ? win.end - 1
@@ -137,8 +167,8 @@ export function extendWindowUp(
 export function jumpWindow(
   win: ScrollWindow,
   target: number,
-  totalChunks: number,
+  maxEnd: number,
 ): ScrollWindow {
   if (target >= win.start && target < win.end) return win;
-  return { end: Math.min(target + 1, totalChunks), start: target };
+  return { end: Math.min(target + 1, maxEnd), start: target };
 }

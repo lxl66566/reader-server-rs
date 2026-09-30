@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  chapterBounds,
+  chapterIndexAt,
   extendWindowDown,
   extendWindowUp,
   jumpWindow,
@@ -112,12 +114,12 @@ describe('scroll window', () => {
 
   it('extends up freely while under the cap', () => {
     const win = { end: 8, start: 5 };
-    expect(extendWindowUp(win, true)).toEqual({ end: 8, start: 4 });
+    expect(extendWindowUp(win, 0, true)).toEqual({ end: 8, start: 4 });
   });
 
   it('drops the bottom chunk when growing past the cap', () => {
     const win = { end: 20, start: 20 - MAX_SCROLL_WINDOW_CHUNKS };
-    expect(extendWindowUp(win, true)).toEqual({
+    expect(extendWindowUp(win, 0, true)).toEqual({
       end: 19,
       start: 20 - MAX_SCROLL_WINDOW_CHUNKS - 1,
     });
@@ -125,7 +127,7 @@ describe('scroll window', () => {
 
   it('keeps growing past the cap when the bottom cannot be dropped', () => {
     const win = { end: 20, start: 20 - MAX_SCROLL_WINDOW_CHUNKS };
-    expect(extendWindowUp(win, false)).toEqual({
+    expect(extendWindowUp(win, 0, false)).toEqual({
       end: 20,
       start: 20 - MAX_SCROLL_WINDOW_CHUNKS - 1,
     });
@@ -133,7 +135,13 @@ describe('scroll window', () => {
 
   it('clamps at the first chunk of the book', () => {
     const win = { end: 3, start: 0 };
-    expect(extendWindowUp(win, true)).toEqual({ end: 3, start: 0 });
+    expect(extendWindowUp(win, 0, true)).toEqual({ end: 3, start: 0 });
+  });
+
+  it('clamps at the chapter start chunk', () => {
+    // minStart 不为 0（章节从中部 chunk 开始）时，start 不得越过章节边界
+    const win = { end: 8, start: 3 };
+    expect(extendWindowUp(win, 3, true)).toEqual({ end: 8, start: 3 });
   });
 
   it('keeps the window (same reference) when the jump target is inside', () => {
@@ -149,5 +157,39 @@ describe('scroll window', () => {
       end: TOTAL_CHUNKS,
       start: TOTAL_CHUNKS - 1,
     });
+  });
+});
+
+describe('chapter bounds', () => {
+  // 章节边界不与 6000 字符的 chunk 对齐
+  const chapters = [{ position: 0 }, { position: 7000 }, { position: 15000 }];
+  const BOOK_TOTAL = 20000;
+
+  it('returns per-chapter ranges and the whole book for an empty list', () => {
+    expect(chapterBounds(chapters, 0, BOOK_TOTAL)).toEqual({
+      end: 7000,
+      start: 0,
+    });
+    expect(chapterBounds(chapters, 1, BOOK_TOTAL)).toEqual({
+      end: 15000,
+      start: 7000,
+    });
+    // 最后一章延伸到全书末尾
+    expect(chapterBounds(chapters, 2, BOOK_TOTAL)).toEqual({
+      end: BOOK_TOTAL,
+      start: 15000,
+    });
+    expect(chapterBounds([], 0, BOOK_TOTAL)).toEqual({
+      end: BOOK_TOTAL,
+      start: 0,
+    });
+  });
+
+  it('finds the chapter containing an offset', () => {
+    expect(chapterIndexAt(chapters, 0)).toBe(0);
+    expect(chapterIndexAt(chapters, 6999)).toBe(0);
+    // 边界偏移本身归属后一章
+    expect(chapterIndexAt(chapters, 7000)).toBe(1);
+    expect(chapterIndexAt(chapters, 19999)).toBe(2);
   });
 });

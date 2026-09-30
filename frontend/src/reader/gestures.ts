@@ -7,6 +7,11 @@ import { createSignal, onCleanup, onMount } from 'solid-js';
 export const TAP_MAX_MS = 250;
 export const TAP_MAX_MOVE_PX = 10;
 export const FLIP_THRESHOLD_PX = 60;
+/** 滚动模式点击分区翻页的视口滚动比例 */
+export const PAGE_SCROLL_RATIO = 0.8;
+
+const SCROLL_CANCEL_EVENTS = ['wheel', 'touchstart'] as const;
+const runningScrolls = new WeakMap<HTMLElement, () => void>();
 
 export interface StripFlipOptions {
   canNext: () => boolean;
@@ -20,14 +25,22 @@ export interface StripFlipOptions {
 
 export interface TapSwipeOptions {
   onFlip: (dir: -1 | 1) => void;
+  /** 滚动模式：tap 上/下区触发的翻页（章内滚动，章节边界处切章） */
+  onPageScroll: (dir: -1 | 1) => void;
   onTapCenter: () => void;
-  /** 是否翻页模式：滚动模式下 swipe 不翻页，tap 也不分左右区 */
+  /** 是否翻页模式：滚动模式下 swipe 不翻页，tap 按纵向分区 */
   paginate: () => boolean;
+  /**
+   * 事件 clientY 所在坐标系中可视区域的纵向范围。epub iframe 撑满整章内容
+   * 高度，clientY 相对整章而非可视区，需由宿主传入滚动偏移换算
+   */
+  visibleRange: () => { bottom: number; top: number };
   width: () => number;
 }
 
 export type TapZone = 'center' | 'left' | 'right';
 
+export type VerticalTapZone = 'bottom' | 'center' | 'top';
 interface TouchState {
   id: number;
   moved: boolean;
@@ -37,8 +50,51 @@ interface TouchState {
 }
 
 /**
+ * 章内翻页的平滑滚动：rAF + ease-out。原生 smooth scrollBy 距离大时
+ * 匀速且拖沓，观感卡顿；用户滚轮 / 触摸时立即取消让位给原生滚动，
+ * 动画期间再次点击分区也会取消旧动画、从当前位置重新起步。
+ */
+export function animateScrollBy(
+  el: HTMLElement,
+  delta: number,
+  durationMs = 280,
+): void {
+  runningScrolls.get(el)?.();
+  const start = el.scrollTop;
+  const distance =
+    Math.min(Math.max(start + delta, 0), el.scrollHeight - el.clientHeight) -
+    start;
+  if (distance === 0) return;
+  const startTime = performance.now();
+  let raf = 0;
+  let cancelled = false;
+  const stop = () => {
+    if (cancelled) return;
+    cancelled = true;
+    cancelAnimationFrame(raf);
+    for (const event of SCROLL_CANCEL_EVENTS) {
+      el.removeEventListener(event, stop);
+    }
+    runningScrolls.delete(el);
+  };
+  runningScrolls.set(el, stop);
+  for (const event of SCROLL_CANCEL_EVENTS) {
+    el.addEventListener(event, stop, { passive: true });
+  }
+  const step = (now: number) => {
+    if (cancelled) return;
+    const t = Math.min(1, (now - startTime) / durationMs);
+    el.scrollTop = start + distance * (1 - (1 - t) ** 3);
+    if (t < 1) raf = requestAnimationFrame(step);
+    else stop();
+  };
+  raf = requestAnimationFrame(step);
+}
+
+/**
  * 在 epub iframe 文档上挂 touch/click 手势（无跟手动画）：横向滑动超过阈值
- * 翻页，tap 按区域翻页/打开 chrome。返回解绑函数。
+ * 翻页；tap 在分页模式按左右区翻页、滚动模式按上/中/下区翻页或开 chrome。
+ * 返回解绑函数。
  */
 export function attachTapSwipeGestures(
   doc: Document,
@@ -71,13 +127,13 @@ export function attachTapSwipeGestures(
     }
     if (isTap(Date.now() - t, deltaX, deltaY)) {
       event.preventDefault();
-      handleTap(t0.clientX);
+      handleTap(t0.clientX, t0.clientY);
     }
   };
 
-  const handleTap = (clientX: number) => {
-    const zone = tapZone(clientX, options.width());
+  const handleTap = (clientX: number, clientY: number) => {
     if (options.paginate()) {
+      const zone = tapZone(clientX, options.width());
       if (zone === 'left') {
         options.onFlip(-1);
         return;
@@ -86,12 +142,22 @@ export function attachTapSwipeGestures(
         options.onFlip(1);
         return;
       }
+    } else {
+      const zone = tapZoneVertical(clientY, options.visibleRange());
+      if (zone === 'top') {
+        options.onPageScroll(-1);
+        return;
+      }
+      if (zone === 'bottom') {
+        options.onPageScroll(1);
+        return;
+      }
     }
     options.onTapCenter();
   };
 
   const onClick = (event: MouseEvent) => {
-    handleTap(event.clientX);
+    handleTap(event.clientX, event.clientY);
   };
 
   doc.addEventListener('touchstart', onTouchStart, { passive: true });
@@ -118,6 +184,18 @@ export function tapZone(clientX: number, width: number): TapZone {
   const ratio = clientX / Math.max(1, width);
   if (ratio < 0.33) return 'left';
   if (ratio > 0.67) return 'right';
+  return 'center';
+}
+
+/** 按纵向位置把 tap 划入上/中/下三区（上 1/3 上翻，下 1/3 下翻，中区开 chrome） */
+export function tapZoneVertical(
+  clientY: number,
+  range: { bottom: number; top: number },
+): VerticalTapZone {
+  const height = Math.max(1, range.bottom - range.top);
+  const ratio = (clientY - range.top) / height;
+  if (ratio < 0.33) return 'top';
+  if (ratio > 0.67) return 'bottom';
   return 'center';
 }
 

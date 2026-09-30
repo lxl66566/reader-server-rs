@@ -21,10 +21,18 @@ import {
   convertDirection,
   loadChineseConverter,
 } from '../utils/opencc';
-import { isTap, useStripFlip } from './gestures';
+import {
+  animateScrollBy,
+  isTap,
+  PAGE_SCROLL_RATIO,
+  tapZoneVertical,
+  useStripFlip,
+} from './gestures';
 import { measureCharsPerPage, type PageTypography } from './measure';
 import { stripParagraphIndent } from './paragraph';
 import {
+  chapterBounds,
+  chapterIndexAt,
   extendWindowDown,
   extendWindowUp,
   jumpWindow,
@@ -240,6 +248,28 @@ const ChunkParagraphs = (props: {
     </Index>
   );
 };
+
+// 二分查找最后一个满足条件的段落（段落的 pos / offsetTop 均随 DOM 顺序单调）
+function lastMatching(
+  els: HTMLElement[],
+  pred: (el: HTMLElement) => boolean,
+): HTMLElement | undefined {
+  let lo = 0;
+  let hi = els.length - 1;
+  let best: HTMLElement | undefined;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const el = els[mid];
+    if (!el) break;
+    if (pred(el)) {
+      best = el;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return best;
+}
 
 // ---------------------------------------------------------------------------
 // paginate mode
@@ -476,7 +506,23 @@ const ScrollView = (
   const navigate = useNavigate();
   let container: HTMLDivElement | undefined;
 
-  // 已加载的 chunk 窗口 [start, end)：双向滑动且有上限，避免 DOM 无界增长
+  // --- 章节作用域：滚动模式一次只渲染一章（硬切换） ---
+  const [chapterIdx, setChapterIdx] = createSignal(
+    chapterIndexAt(props.book.chapters, props.initialOffset),
+  );
+  const chapterRange = () =>
+    chapterBounds(props.book.chapters, chapterIdx(), props.book.total_chars);
+  // 窗口允许的 chunk 边界（end 为 exclusive 上限）
+  const chapterChunkBounds = () => {
+    const range = chapterRange();
+    return {
+      maxEnd: Math.ceil(range.end / TXT_CHUNK_SIZE),
+      minStart: Math.floor(range.start / TXT_CHUNK_SIZE),
+    };
+  };
+
+  // 已加载的 chunk 窗口 [start, end)：双向滑动且有上限（不越出当前章），
+  // 避免 DOM 无界增长
   const firstChunk = Math.floor(props.initialOffset / TXT_CHUNK_SIZE);
   const [win, setWin] = createSignal<ScrollWindow>({
     end: firstChunk + 1,
@@ -487,9 +533,6 @@ const ScrollView = (
   const [error, setError] = createSignal(false);
   // 每个 chunk 的段落元素，按 chunk 索引分组；查找时按窗口顺序拼接
   const chunkEls = new Map<number, HTMLElement[]>();
-
-  const totalChunks = () =>
-    Math.max(1, Math.ceil(props.book.total_chars / TXT_CHUNK_SIZE));
 
   // 窗口内的 chunk 索引：只依赖窗口本身，chunk 内容变化由各 chunk 组件自行跟踪
   const chunkIndices = createMemo(() => {
@@ -512,11 +555,15 @@ const ScrollView = (
     );
     const cached = paraCache.get(index);
     if (cached && cached.text === text) return cached.paras;
+    const { end: chapterEnd, start: chapterStart } = chapterRange();
     const paras: Paragraph[] = [];
     let at = start;
     for (const piece of text.split('\n')) {
-      // offset 按原文推进，text 剥离段首字符缩进（CSS 已接管缩进）
-      paras.push({ offset: at, text: stripParagraphIndent(piece) });
+      // offset 按原文推进，text 剥离段首字符缩进（CSS 已接管缩进）；
+      // 章节首尾的 chunk 会跨章，范围外的段落直接丢弃
+      if (at >= chapterStart && at < chapterEnd) {
+        paras.push({ offset: at, text: stripParagraphIndent(piece) });
+      }
       at += piece.length + 1; // +1 for the newline
     }
     paraCache.set(index, { paras, text });
@@ -570,15 +617,31 @@ const ScrollView = (
     }
   });
 
-  async function jumpTo(at: number): Promise<void> {
+  async function jumpTo(
+    at: number,
+    land: 'bottom' | 'top' = 'top',
+  ): Promise<void> {
+    // 跳转目标可能属于另一章：切换章节作用域并重算段落过滤
+    const idx = chapterIndexAt(props.book.chapters, at);
+    if (idx !== chapterIdx()) {
+      setChapterIdx(idx);
+      paraCache.clear();
+    }
     const chunk = Math.floor(at / TXT_CHUNK_SIZE);
-    // 远距离跳转时重置窗口到目标附近，避免窗口被拉得过大
-    const next = jumpWindow(win(), chunk, totalChunks());
+    // 远距离跳转时重置窗口到目标附近，避免窗口被拉得过大；
+    // 窗口不越出当前章（end 为 exclusive 上限）
+    const next = jumpWindow(win(), chunk, chapterChunkBounds().maxEnd);
     if (next !== win()) setWin(next);
     await ensureWindow();
     requestAnimationFrame(() => {
+      if (!container) return;
+      // 切到上一章时落到章末衔接阅读顺序，其余情况定位到目标段落
+      if (land === 'bottom') {
+        container.scrollTop = container.scrollHeight;
+        return;
+      }
       const target = findParagraphEl(at);
-      if (target && container) {
+      if (target) {
         container.scrollTop = Math.max(0, target.offsetTop - 12);
       }
     });
@@ -593,28 +656,6 @@ const ScrollView = (
       if (els) out.push(...els);
     }
     return out;
-  }
-
-  // 二分查找最后一个满足条件的段落（段落的 pos / offsetTop 均随 DOM 顺序单调）
-  function lastMatching(
-    els: HTMLElement[],
-    pred: (el: HTMLElement) => boolean,
-  ): HTMLElement | undefined {
-    let lo = 0;
-    let hi = els.length - 1;
-    let best: HTMLElement | undefined;
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1;
-      const el = els[mid];
-      if (!el) break;
-      if (pred(el)) {
-        best = el;
-        lo = mid + 1;
-      } else {
-        hi = mid - 1;
-      }
-    }
-    return best;
   }
 
   // 最后一个 offset <= at 的段落
@@ -674,7 +715,9 @@ const ScrollView = (
   async function loadNext(): Promise<void> {
     if (loadingMore() || !container) return;
     const prev = win();
-    if (prev.end >= totalChunks()) return;
+    // 窗口不越出当前章：到章尾 chunk 即停止扩展（硬切章由点击分区触发）
+    const { maxEnd } = chapterChunkBounds();
+    if (prev.end >= maxEnd) return;
     // 视口已完全越过顶部 chunk 时才回收它，否则允许窗口暂时超限
     const topEl = findParagraphElAtTop(container.scrollTop);
     const canDropTop =
@@ -682,7 +725,7 @@ const ScrollView = (
       Math.floor(Number(topEl.dataset.pos) / TXT_CHUNK_SIZE) > prev.start;
     const anchor = captureAnchor();
     setLoadingMore(true);
-    setWin(extendWindowDown(prev, totalChunks(), canDropTop));
+    setWin(extendWindowDown(prev, maxEnd, canDropTop));
     try {
       await ensureWindow();
     } catch (err) {
@@ -702,7 +745,9 @@ const ScrollView = (
   async function loadPrev(): Promise<void> {
     if (loadingMore() || !container) return;
     const prev = win();
-    if (prev.start <= 0) return;
+    // 窗口不越出当前章：到章首 chunk 即停止扩展
+    const { minStart } = chapterChunkBounds();
+    if (prev.start <= minStart) return;
     // 视口底部未进入末尾 chunk 时才回收它，否则允许窗口暂时超限
     const bottomEl = findParagraphElAtTop(
       container.scrollTop + container.clientHeight,
@@ -712,7 +757,7 @@ const ScrollView = (
       Math.floor(Number(bottomEl.dataset.pos) / TXT_CHUNK_SIZE) < prev.end - 1;
     const anchor = captureAnchor();
     setLoadingMore(true);
-    setWin(extendWindowUp(prev, canDropBottom));
+    setWin(extendWindowUp(prev, minStart, canDropBottom));
     try {
       await ensureWindow();
     } catch (err) {
@@ -729,16 +774,54 @@ const ScrollView = (
     });
   }
 
-  // tap toggles chrome (scrolling itself is native)
+  // --- 点击分区翻页：上/下 1/3 章内滚动 PAGE_SCROLL_RATIO 视口，
+  // 章节边界处硬切章；中区打开 chrome（滚动本身交给原生） ---
+  function pageScroll(dir: -1 | 1): void {
+    if (!container) return;
+    const { clientHeight, scrollHeight, scrollTop } = container;
+    const atEdge =
+      dir > 0 ? scrollTop + clientHeight >= scrollHeight - 1 : scrollTop <= 0;
+    if (atEdge) {
+      switchChapter(dir);
+      return;
+    }
+    animateScrollBy(container, dir * clientHeight * PAGE_SCROLL_RATIO);
+  }
+
+  // 下一章从头显示，上一章落到章末衔接阅读顺序；首末章越界时保持原章
+  function switchChapter(dir: -1 | 1): void {
+    const next = chapterIdx() + dir;
+    if (next < 0 || next >= props.book.chapters.length) return;
+    const range = chapterBounds(
+      props.book.chapters,
+      next,
+      props.book.total_chars,
+    );
+    void jumpTo(
+      dir > 0 ? range.start : range.end - 1,
+      dir > 0 ? 'top' : 'bottom',
+    );
+  }
+
   let downAt: null | { t: number; x: number; y: number } = null;
   const onPointerDown = (event: PointerEvent) => {
     downAt = { t: Date.now(), x: event.clientX, y: event.clientY };
   };
   const onPointerUp = (event: PointerEvent) => {
-    if (!downAt) return;
+    if (!downAt || !container) return;
     const { t, x, y } = downAt;
     downAt = null;
-    if (isTap(Date.now() - t, event.clientX - x, event.clientY - y)) {
+    if (!isTap(Date.now() - t, event.clientX - x, event.clientY - y)) return;
+    const rect = container.getBoundingClientRect();
+    const zone = tapZoneVertical(event.clientY, {
+      bottom: rect.bottom,
+      top: rect.top,
+    });
+    if (zone === 'top') {
+      pageScroll(-1);
+    } else if (zone === 'bottom') {
+      pageScroll(1);
+    } else {
       props.onTapCenter();
     }
   };
