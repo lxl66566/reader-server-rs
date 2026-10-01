@@ -12,6 +12,7 @@ import { createStore } from 'solid-js/store';
 import { readingApi } from '../api';
 import type { PaginationMode, ReadingSettings, ThemeMode } from '../api/types';
 import { resolvedTheme, setThemeMode } from '../theme';
+import { useAuth } from './auth';
 
 // 服务端 schema 默认色，作为"用户未自定义"的默认值
 const SERVER_DEFAULT_COLORS = {
@@ -54,15 +55,22 @@ interface SettingsContextValue {
 const SettingsContext = createContext<SettingsContextValue>();
 
 export const SettingsProvider: ParentComponent = props => {
+  const auth = useAuth();
   const [settings, setSettings] = createStore<ReadingSettings>({ ...FALLBACK });
-  const [remote, { refetch }] = createResource(async () => {
-    try {
-      return await readingApi.settings();
-    } catch {
-      // logged-out visitors get local defaults
-      return undefined;
-    }
-  });
+  // 以登录态为 source：登录前请求必然 401，登录成功后靠 source 变化重新拉取
+  const [remote, { refetch }] = createResource(
+    () => auth.isLoggedIn(),
+    async (loggedIn: boolean) => {
+      // refetch 会绕过 source 门控强制执行 fetcher：登出后必须短路，
+      // 否则会多发一次不带 token、注定 401 的请求
+      if (!loggedIn) return undefined;
+      try {
+        return await readingApi.settings();
+      } catch {
+        return undefined;
+      }
+    },
+  );
 
   const applyRemote = (value: ReadingSettings) => {
     setSettings(value);
@@ -71,8 +79,14 @@ export const SettingsProvider: ParentComponent = props => {
 
   // apply once loaded (createEffect: remote() resolves asynchronously)
   createEffect(() => {
+    // 加载中保持现状，避免已登录用户被访客默认值闪一下
+    if (remote.loading) return;
     const value = remote();
-    if (!value) return;
+    // 未登录或拉取失败：回到访客默认，避免残留上个用户的设置
+    if (!value || !auth.isLoggedIn()) {
+      applyRemote({ ...FALLBACK, ...themeDefaultColors() });
+      return;
+    }
     // 初始化：颜色仍是服务端默认（用户未自定义过）时，按当前主题写入默认色
     if (
       value.background_color === SERVER_DEFAULT_COLORS.background &&
