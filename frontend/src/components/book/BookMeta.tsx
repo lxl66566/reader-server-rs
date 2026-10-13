@@ -1,6 +1,8 @@
 // Book header: identity, format / visibility marks, stats row and read entry.
+// actions renders owner icon controls next to the badges; children render
+// between the stats row and the read button (e.g. inline tags).
 import { VsBook } from 'solid-icons/vs';
-import { Show, type Component } from 'solid-js';
+import { Show, type Component, type JSX } from 'solid-js';
 
 import type { BookDetail, BookFormat } from '../../api/types';
 import { useI18n } from '../../i18n';
@@ -19,7 +21,9 @@ const FORMAT_LABELS: Record<BookFormat, DictKey> = {
 };
 
 export const BookMeta: Component<{
+  actions?: JSX.Element;
   book: BookDetail;
+  children?: JSX.Element;
   onRead: () => void;
 }> = props => {
   const { locale, t } = useI18n();
@@ -44,6 +48,7 @@ export const BookMeta: Component<{
               {t('publicTag')}
             </span>
           </Show>
+          {props.actions}
         </div>
       </div>
 
@@ -62,6 +67,8 @@ export const BookMeta: Component<{
           {t('progressPercent', { percent: formatPercent(props.book.percent) })}
         </div>
       </dl>
+
+      {props.children}
 
       <Button class="min-h-10 px-5" onClick={props.onRead}>
         <VsBook class="size-4" />

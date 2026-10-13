@@ -42,19 +42,19 @@ export const TagEditor: Component<{
         {tag => (
           <button
             aria-label={`${t('delete')}: ${tag}`}
-            class="border-edge bg-page hover:border-accent flex min-h-10 cursor-pointer items-center gap-1 rounded-full border px-3 text-sm transition-colors"
+            class="border-edge bg-page hover:border-accent flex h-8 cursor-pointer items-center gap-1 rounded-full border px-2.5 text-xs transition-colors"
             onClick={() => {
               removeTag(tag);
             }}
             type="button"
           >
             {tag}
-            <VsClose class="text-muted size-3.5" />
+            <VsClose class="text-muted size-3" />
           </button>
         )}
       </For>
       <Input
-        class="min-h-10 flex-1"
+        class="min-w-40 flex-1"
         onInput={setDraft}
         onKeyDown={event => {
           if (event.key === 'Enter') {
@@ -63,6 +63,7 @@ export const TagEditor: Component<{
           }
         }}
         placeholder={t('addTagPlaceholder')}
+        size="sm"
         value={draft()}
       />
     </div>

@@ -8,7 +8,6 @@ const en: Dict = {
   addBookmarkLabel: 'Bookmark label (optional)',
   addNote: 'Add note',
   addTagPlaceholder: 'Type a tag and press Enter',
-  addToShelfHint: 'Open details to add it to your reading list',
   adminDashboard: 'Administration',
   adminLoginTitle: 'Admin sign in',
   adminSetupDesc: 'First run: create the administrator account',
@@ -54,8 +53,6 @@ const en: Dict = {
   detailAnnotations: 'Annotations',
   detailBookmarks: 'Bookmarks',
   detailChapters: 'Contents',
-  detailInfo: 'Info',
-  detailTags: 'Tags',
 
   downloadBackup: 'Download full backup',
   downloadBackupDesc: 'Archive of the database and all book files',
@@ -149,6 +146,7 @@ const en: Dict = {
   progressPercent: '{percent}%',
   publicLibrary: 'Public library',
   publicTag: 'Public',
+  readBook: 'Read "{title}"',
   readerAddNoteHint: 'Select text to add a note or highlight',
   readerAnnotations: 'Annotations',
   readerBookmarkAdded: 'Bookmark added',
@@ -237,6 +235,7 @@ const en: Dict = {
   uploadTitle: 'Upload book',
   usedTimes: 'Used',
   username: 'Username',
+  viewDetail: 'View details',
 };
 
 export default en;

@@ -8,7 +8,6 @@ const zhCN = {
   addBookmarkLabel: '书签备注（选填）',
   addNote: '写笔记',
   addTagPlaceholder: '输入标签后回车添加',
-  addToShelfHint: '打开详情即可加入你的阅读列表',
   adminDashboard: '管理后台',
   adminLoginTitle: '管理员登录',
   adminSetupDesc: '首次使用，请设置管理员账号',
@@ -53,8 +52,6 @@ const zhCN = {
   detailAnnotations: '批注',
   detailBookmarks: '书签',
   detailChapters: '目录',
-  detailInfo: '信息',
-  detailTags: '标签',
 
   downloadBackup: '下载全局备份',
   downloadBackupDesc: '打包数据库与全部书籍文件',
@@ -145,6 +142,7 @@ const zhCN = {
   progressPercent: '{percent}%',
   publicLibrary: '公开书库',
   publicTag: '公开',
+  readBook: '阅读《{title}》',
   readerAddNoteHint: '选中文字后可添加笔记或高亮',
   readerAnnotations: '批注',
   readerBookmarkAdded: '已添加书签',
@@ -232,6 +230,7 @@ const zhCN = {
   uploadTitle: '上传书籍',
   usedTimes: '已用次数',
   username: '用户名',
+  viewDetail: '查看详情',
 };
 
 export type Dict = typeof zhCN;

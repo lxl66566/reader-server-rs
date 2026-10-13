@@ -74,7 +74,11 @@ const Library: Component = () => {
     void refetchPublic();
   };
 
-  const goToBook = (bookId: number) => {
+  const goRead = (bookId: number) => {
+    navigate(`/read/${bookId}`);
+  };
+
+  const goDetail = (bookId: number) => {
     navigate(`/book/${bookId}`);
   };
 
@@ -124,8 +128,11 @@ const Library: Component = () => {
                 author={book.author}
                 format={book.format}
                 isPublic={book.is_public}
-                onClick={() => {
-                  goToBook(book.book_id);
+                onDetail={() => {
+                  goDetail(book.book_id);
+                }}
+                onRead={() => {
+                  goRead(book.book_id);
                 }}
                 percent={book.percent}
                 readingTime={book.reading_time}
@@ -167,8 +174,11 @@ const Library: Component = () => {
               <BookCard
                 author={book.author}
                 format={book.format}
-                onClick={() => {
-                  goToBook(book.book_id);
+                onDetail={() => {
+                  goDetail(book.book_id);
+                }}
+                onRead={() => {
+                  goRead(book.book_id);
                 }}
                 owner={book.owner_username}
                 percent={book.percent ?? undefined}
@@ -195,8 +205,11 @@ const Library: Component = () => {
               <BookCard
                 author={book.author}
                 format={book.format}
-                onClick={() => {
-                  goToBook(book.book_id);
+                onDetail={() => {
+                  goDetail(book.book_id);
+                }}
+                onRead={() => {
+                  goRead(book.book_id);
                 }}
                 percent={book.percent ?? undefined}
                 readingTime={book.reading_time ?? undefined}

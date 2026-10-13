@@ -40,11 +40,12 @@ export const Input: ParentComponent<{
   onInput: (value: string) => void;
   onKeyDown?: (event: KeyboardEvent) => void;
   placeholder?: string;
+  size?: InputSize;
   type?: string;
   value: string;
 }> = props => (
   <input
-    class={`border-edge bg-surface text-ink focus:border-accent w-full rounded border px-3 py-1.5 text-sm outline-none ${props.class ?? ''}`}
+    class={`border-edge bg-surface text-ink focus:border-accent w-full rounded border outline-none ${INPUT_SIZE_STYLES[props.size ?? 'md']} ${props.class ?? ''}`}
     onInput={event => {
       props.onInput(event.currentTarget.value);
     }}
@@ -54,6 +55,40 @@ export const Input: ParentComponent<{
     value={props.value}
   />
 );
+
+type InputSize = 'md' | 'sm';
+
+const INPUT_SIZE_STYLES: Record<InputSize, string> = {
+  md: 'px-3 py-1.5 text-sm',
+  sm: 'px-2.5 py-1 text-xs',
+};
+
+// 无文字的图标按钮，需自带 aria-label 作为可访问名称
+export const IconButton: ParentComponent<{
+  'aria-label': string;
+  class?: string;
+  disabled?: boolean;
+  onClick?: () => void;
+  variant?: IconButtonVariant;
+}> = props => (
+  <button
+    aria-label={props['aria-label']}
+    class={`hover:bg-edge inline-flex cursor-pointer items-center justify-center rounded p-2 transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${ICON_BUTTON_STYLES[props.variant ?? 'ghost']} ${props.class ?? ''}`}
+    disabled={props.disabled}
+    onClick={() => props.onClick?.()}
+    title={props['aria-label']}
+    type="button"
+  >
+    {props.children}
+  </button>
+);
+
+type IconButtonVariant = 'danger' | 'ghost';
+
+const ICON_BUTTON_STYLES: Record<IconButtonVariant, string> = {
+  danger: 'text-muted hover:text-red-600 dark:hover:text-red-400',
+  ghost: 'text-muted hover:text-ink',
+};
 
 export const Spinner: ParentComponent<{ class?: string }> = props => (
   <VsLoading class={`animate-spin ${props.class ?? 'size-5'}`} />

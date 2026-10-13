@@ -14,7 +14,7 @@ import {
 } from '../components/book/EditBookModal';
 import { TagEditor } from '../components/book/TagEditor';
 import { LoadErrorPanel } from '../components/LoadErrorPanel';
-import { Button, SectionCard, Spinner } from '../components/ui';
+import { IconButton, Spinner } from '../components/ui';
 import { useI18n } from '../i18n';
 
 const BookDetailPage: Component = () => {
@@ -107,7 +107,7 @@ const BookDetailPage: Component = () => {
   );
 };
 
-// Loaded book content: meta, owner controls and tabs.
+// Loaded book content: meta header with owner icon controls, plus tabs.
 function BookView(props: {
   annotations: Annotation[];
   book: BookDetail;
@@ -127,29 +127,36 @@ function BookView(props: {
   return (
     <div class="space-y-6">
       <BookMeta
+        actions={
+          <Show when={props.book.is_owner}>
+            <IconButton
+              aria-label={t('editBook')}
+              onClick={() => {
+                setEditOpen(true);
+              }}
+            >
+              <VsEdit class="size-4" />
+            </IconButton>
+            <IconButton
+              aria-label={t('delete')}
+              onClick={() => {
+                setDeleteOpen(true);
+              }}
+              variant="danger"
+            >
+              <VsTrash class="size-4" />
+            </IconButton>
+          </Show>
+        }
         book={props.book}
         onRead={() => {
           navigate(`/read/${props.book.book_id}`);
         }}
-      />
-
-      <Show when={props.book.is_owner}>
-        <SectionCard title={t('detailInfo')}>
-          <div class="flex flex-wrap gap-2">
-            <Button onClick={() => setEditOpen(true)}>
-              <VsEdit class="size-4" />
-              {t('editBook')}
-            </Button>
-            <Button onClick={() => setDeleteOpen(true)} variant="danger">
-              <VsTrash class="size-4" />
-              {t('delete')}
-            </Button>
-          </div>
-        </SectionCard>
-        <SectionCard title={t('detailTags')}>
+      >
+        <Show when={props.book.is_owner}>
           <TagEditor onChange={props.onTagsChange} tags={props.tags} />
-        </SectionCard>
-      </Show>
+        </Show>
+      </BookMeta>
 
       <DetailTabs
         annotations={props.annotations}
