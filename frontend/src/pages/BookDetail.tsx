@@ -3,7 +3,7 @@ import { useNavigate, useParams } from '@solidjs/router';
 import { VsEdit, VsTrash } from 'solid-icons/vs';
 import { createResource, createSignal, Show, type Component } from 'solid-js';
 
-import { bookApi, markerApi } from '../api';
+import { bookApi, markerApi, readingApi } from '../api';
 import type { Annotation, BookDetail, Bookmark } from '../api/types';
 import { BookMeta } from '../components/book/BookMeta';
 import { ConfirmModal } from '../components/book/ConfirmModal';
@@ -12,6 +12,7 @@ import {
   EditBookModal,
   type BookPatch,
 } from '../components/book/EditBookModal';
+import { EditReadingTimeModal } from '../components/book/EditReadingTimeModal';
 import { TagEditor } from '../components/book/TagEditor';
 import { LoadErrorPanel } from '../components/LoadErrorPanel';
 import { IconButton, Spinner } from '../components/ui';
@@ -70,6 +71,11 @@ const BookDetailPage: Component = () => {
     void refetchTags();
   };
 
+  const setReadingTime = async (seconds: number) => {
+    await readingApi.setReadingTime(bookId(), seconds);
+    void refetchDetail();
+  };
+
   // detail.error is `any` in SolidJS types; coerce before it reaches JSX.
   const hasError = () => Boolean(detail.error);
   const invalidId = () => Number.isNaN(bookId());
@@ -99,6 +105,7 @@ const BookDetailPage: Component = () => {
           onBookUpdate={updateBook}
           onDeleteAnnotation={removeAnnotation}
           onDeleteBookmark={removeBookmark}
+          onSetReadingTime={setReadingTime}
           onTagsChange={setTags}
           tags={tags()?.tags ?? []}
         />
@@ -116,6 +123,7 @@ function BookView(props: {
   onBookUpdate: (patch: BookPatch) => Promise<void>;
   onDeleteAnnotation: (id: number) => Promise<void>;
   onDeleteBookmark: (id: number) => Promise<void>;
+  onSetReadingTime: (seconds: number) => Promise<void>;
   onTagsChange: (tags: string[]) => Promise<void>;
   tags: string[];
 }) {
@@ -123,6 +131,7 @@ function BookView(props: {
   const navigate = useNavigate();
   const [editOpen, setEditOpen] = createSignal(false);
   const [deleteOpen, setDeleteOpen] = createSignal(false);
+  const [readingTimeOpen, setReadingTimeOpen] = createSignal(false);
 
   return (
     <div class="space-y-6">
@@ -149,6 +158,9 @@ function BookView(props: {
           </Show>
         }
         book={props.book}
+        onEditReadingTime={() => {
+          setReadingTimeOpen(true);
+        }}
         onRead={() => {
           navigate(`/read/${props.book.book_id}`);
         }}
@@ -172,6 +184,12 @@ function BookView(props: {
         onClose={() => setEditOpen(false)}
         onSave={props.onBookUpdate}
         open={editOpen()}
+      />
+      <EditReadingTimeModal
+        onClose={() => setReadingTimeOpen(false)}
+        onSave={props.onSetReadingTime}
+        open={readingTimeOpen()}
+        seconds={props.book.reading_time}
       />
       <ConfirmModal
         message={t('deleteBookConfirm')}

@@ -2924,3 +2924,193 @@ async fn test_admin_user_export_access_control() {
 
     println!("\n===== Admin export access control test passed! =====");
 }
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn test_edit_reading_time() {
+    // 手动编辑阅读时长：差值同步 total_reading_time、校验、权限、每日统计不动
+
+    // 设置指定书阅读时长的请求封装，避免用例里重复拼 uri/body
+    async fn set_time(app: &Router, book_id: i64, secs: i64, token: &str) -> Response {
+        make_json_request(
+            app,
+            Method::PUT,
+            &format!("/api/v1/reading/progress/{book_id}"),
+            &serde_json::json!({ "reading_time": secs }),
+            Some(token),
+        )
+        .await
+    }
+
+    let (app, pool) = setup_test_app().await.unwrap();
+    let token1 = register_and_login(&app, "rt_user1", "password1").await;
+    let token2 = register_and_login(&app, "rt_user2", "password2").await;
+
+    let owner_book = upload_test_book(&app, &token1, "私有书", TEST_BOOK_CONTENT, false).await;
+    let book_id = owner_book["book_id"].as_i64().unwrap();
+
+    let user1_id: i64 = sqlx::query_scalar!("SELECT id FROM users WHERE username = ?", "rt_user1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    let total = || async {
+        sqlx::query_scalar!(
+            "SELECT total_reading_time FROM users WHERE id = ?",
+            user1_id
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+    };
+
+    // 设置新值 → 返回新值，total 累加差值（上传时建过进度行，旧值为 0）
+    let resp = set_time(&app, book_id, 3600, &token1).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(response_json(resp).await["data"]["reading_time"], 3600);
+    assert_eq!(total().await, 3600);
+
+    // 再改 → 累加差值；下调 → 同步回退
+    let resp = set_time(&app, book_id, 5400, &token1).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(total().await, 5400);
+    let resp = set_time(&app, book_id, 60, &token1).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(total().await, 60);
+
+    // 每日统计不受编辑影响
+    sqlx::query!(
+        "INSERT INTO daily_reading_stats (user_id, book_id, date, reading_seconds) VALUES (?, ?, \
+         '2024-01-01', 100)",
+        user1_id,
+        book_id
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let resp = set_time(&app, book_id, 600, &token1).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let daily: i64 = sqlx::query_scalar!(
+        "SELECT reading_seconds FROM daily_reading_stats WHERE user_id = ? AND book_id = ?",
+        user1_id,
+        book_id
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(daily, 100);
+    assert_eq!(total().await, 600);
+
+    // 校验：负数 / 超上限 → 400
+    for bad in [-1, 3650 * 24 * 60 * 60 + 1] {
+        let resp = set_time(&app, book_id, bad, &token1).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // 权限：他人私有书 → 403；不存在的书 → 404
+    let resp = set_time(&app, book_id, 10, &token2).await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    let resp = make_json_request(
+        &app,
+        Method::PUT,
+        "/api/v1/reading/progress/999999",
+        &serde_json::json!({ "reading_time": 10 }),
+        Some(&token1),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    // 无进度行（他人公开书）：非 0 建行并累加 total；0 不建行
+    let pub_book1 = upload_test_book(&app, &token1, "公开书1", TEST_BOOK_CONTENT, true).await;
+    let pub1_id = pub_book1["book_id"].as_i64().unwrap();
+    let resp = make_json_request(
+        &app,
+        Method::PUT,
+        &format!("/api/v1/reading/progress/{pub1_id}"),
+        &serde_json::json!({ "reading_time": 120 }),
+        Some(&token2),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let pub_book2 = upload_test_book(&app, &token1, "公开书2", TEST_BOOK_CONTENT, true).await;
+    let pub2_id = pub_book2["book_id"].as_i64().unwrap();
+    let resp = make_json_request(
+        &app,
+        Method::PUT,
+        &format!("/api/v1/reading/progress/{pub2_id}"),
+        &serde_json::json!({ "reading_time": 0 }),
+        Some(&token2),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let user2_id: i64 = sqlx::query_scalar!("SELECT id FROM users WHERE username = ?", "rt_user2")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let (t2_total, t2_rows): (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT total_reading_time FROM users WHERE id = ?1), (SELECT COUNT(*) FROM \
+         reading_progress WHERE user_id = ?1)",
+    )
+    .bind(user2_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(t2_total, 120);
+    assert_eq!(t2_rows, 1); // 只为 120 秒那本建了行，0 不建
+
+    // 管理员改任意用户；用户 token 调管理端 → 403；目标不存在 → 404
+    let (admin_token, _) = setup_admin(&app).await;
+    let resp = make_json_request(
+        &app,
+        Method::PUT,
+        &format!("/api/v1/admin/users/{user1_id}/reading_time"),
+        &serde_json::json!({ "book_id": book_id, "reading_time": 7200 }),
+        Some(&admin_token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(total().await, 7200);
+
+    let resp = make_json_request(
+        &app,
+        Method::PUT,
+        &format!("/api/v1/admin/users/{user1_id}/reading_time"),
+        &serde_json::json!({ "book_id": book_id, "reading_time": 1 }),
+        Some(&token1),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    let resp = make_json_request(
+        &app,
+        Method::PUT,
+        "/api/v1/admin/users/999999/reading_time",
+        &serde_json::json!({ "book_id": book_id, "reading_time": 1 }),
+        Some(&admin_token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    let resp = make_json_request(
+        &app,
+        Method::PUT,
+        &format!("/api/v1/admin/users/{user1_id}/reading_time"),
+        &serde_json::json!({ "book_id": 999_999, "reading_time": 1 }),
+        Some(&admin_token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    // 审计日志已记录
+    let logged = sqlx::query_scalar!(
+        "SELECT EXISTS(SELECT 1 FROM audit_logs WHERE action = 'set_reading_time')"
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(logged, 1);
+
+    println!("\n===== Edit reading time tests passed! =====");
+}

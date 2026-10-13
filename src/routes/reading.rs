@@ -1,9 +1,9 @@
 use axum::{
     Json, Router,
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, header},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, put},
 };
 use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
 use serde::Deserialize;
@@ -15,7 +15,8 @@ use crate::{
     error::{ApiResponse, AppError},
     models::{
         ChineseConversion, DailyBookReadingStat, DailyReadingStatsResponse, PaginationMode,
-        ReadingSettings, ReadingStatsResponse, ReadingTheme, UpdateReadingSettingsRequest,
+        ReadingSettings, ReadingStatsResponse, ReadingTheme, SetReadingTimeRequest,
+        SetReadingTimeResponse, UpdateReadingSettingsRequest,
     },
     utils::make_etag,
 };
@@ -103,6 +104,7 @@ pub fn routes() -> Router<crate::app::AppState> {
         )
         // WebSocket 入口：替代旧的每秒轮询心跳接口
         .route("/ws", get(crate::ws::handler::ws_handler))
+        .route("/progress/{book_id}", put(set_book_reading_time))
         .route("/stats", get(get_reading_stats))
         .route("/stats/daily", get(get_daily_reading_stats))
 }
@@ -560,6 +562,99 @@ pub async fn process_heartbeat_logic(
         reading_time: new_reading_time,
         updated: true,
     })
+}
+
+/// 手动编辑阅读时长的上限（秒）：3650 天，防止误输入导致统计失真。
+/// 与 AppError::ReadingTimeOutOfRange 的文案保持同步
+pub const MAX_READING_TIME_SECS: i64 = 3650 * 24 * 60 * 60;
+
+/// 手动设置 (user, book) 的累计阅读时长（秒），供用户自助与管理员修正共用。
+///
+/// 设计要点：
+/// - 差值原子累加到 `users.total_reading_time`，读旧值与两次写入包单事务，
+///   避免无事务读改写丢失并发心跳的增量
+/// - 每日统计 `daily_reading_stats` 按天聚合、无法归属历史天数，保持不动
+/// - 无进度行且新值为 0 时无写入，不制造空进度行
+pub async fn set_reading_time(
+    pool: &Pool<Sqlite>,
+    user_id: i64,
+    book_id: i64,
+    new_secs: i64,
+) -> Result<(), AppError> {
+    if !(0..=MAX_READING_TIME_SECS).contains(&new_secs) {
+        return Err(AppError::ReadingTimeOutOfRange);
+    }
+
+    let mut tx = pool.begin().await?;
+
+    let old: Option<i64> = sqlx::query_scalar!(
+        "SELECT reading_time FROM reading_progress WHERE user_id = ? AND book_id = ?",
+        user_id,
+        book_id
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    match old {
+        Some(old) => {
+            sqlx::query!(
+                "UPDATE reading_progress SET reading_time = ? WHERE user_id = ? AND book_id = ?",
+                new_secs,
+                user_id,
+                book_id
+            )
+            .execute(&mut *tx)
+            .await?;
+            // 差值累加：new_secs - old 可为负，同步回退总时长
+            sqlx::query!(
+                "UPDATE users SET total_reading_time = total_reading_time + ? WHERE id = ?",
+                new_secs - old,
+                user_id
+            )
+            .execute(&mut *tx)
+            .await?;
+        },
+        // 无进度行且新值为 0：等价于现状，无需写入
+        None if new_secs == 0 => {},
+        None => {
+            // 无进度行：按 0 起算建行，locator/percent/last_read_at 保持默认
+            sqlx::query!(
+                "INSERT INTO reading_progress (user_id, book_id, reading_time) VALUES (?, ?, ?)",
+                user_id,
+                book_id,
+                new_secs
+            )
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query!(
+                "UPDATE users SET total_reading_time = total_reading_time + ? WHERE id = ?",
+                new_secs,
+                user_id
+            )
+            .execute(&mut *tx)
+            .await?;
+        },
+    }
+
+    tx.commit().await?;
+    Ok(())
+}
+
+/// 手动设置当前用户对某本书的累计阅读时长
+async fn set_book_reading_time(
+    auth: AuthUser,
+    State(pool): State<Pool<Sqlite>>,
+    Path(book_id): Path<i64>,
+    Json(req): Json<SetReadingTimeRequest>,
+) -> Result<Json<ApiResponse<SetReadingTimeResponse>>, AppError> {
+    // 书籍存在性与读权限（所有者或公开书），与其他阅读接口一致
+    check_book_access(&pool, auth.user_id, book_id).await?;
+
+    set_reading_time(&pool, auth.user_id, book_id, req.reading_time).await?;
+
+    Ok(Json(ApiResponse::success(SetReadingTimeResponse {
+        reading_time: req.reading_time,
+    })))
 }
 
 /// 计算两个日期字符串（YYYY-MM-DD）之间相隔的天数（later - earlier）

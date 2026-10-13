@@ -4,7 +4,7 @@
 
 | HTTP status | 触发场景（典型） |
 |---|---|
-| 400 | 参数校验失败（用户名格式、密码为空、邀请码、上传文件格式/大小/损坏（epub/pdf 解析失败）、空文件、章节数超上限、批注范围、locator 为空、percent 越界、无效时区、无效搜索 scope、对非 txt 书调用 `/content`、用户数据导入包无效（zip 损坏 / 缺 metadata.json / 缺书籍条目 / 版本不支持 / 字段非法）等） |
+| 400 | 参数校验失败（用户名格式、密码为空、邀请码、上传文件格式/大小/损坏（epub/pdf 解析失败）、空文件、章节数超上限、批注范围、locator 为空、percent 越界、无效时区、无效搜索 scope、对非 txt 书调用 `/content`、手动设置阅读时长越界（负数或超过 3650 天）、用户数据导入包无效（zip 损坏 / 缺 metadata.json / 缺书籍条目 / 版本不支持 / 字段非法）等） |
 | 401 | 未登录 / token 过期 / 账户被锁定 / 账户被ban / 账户已注销 / token 角色不匹配 |
 | 403 | 无权限访问 / 修改 / 删除目标资源（如非 owner 操作他人书） |
 | 404 | 资源不存在（书 / 章节 / 用户 / 书签 / 批注 / 管理员 / 书籍原文件在磁盘上丢失） |
@@ -120,6 +120,7 @@ type Annotation = {
 | PUT | /api/v1/admin/settings | Admin | Body: { invite_code_required: boolean } | {} |
 | GET | /api/v1/admin/users | Admin | - | { users: UserItem[] } |
 | POST | /api/v1/admin/users/:user_id/reset_password | Admin | Body: { new_password: string } | {} |
+| PUT | /api/v1/admin/users/:user_id/reading_time | Admin | Body: { book_id: number; reading_time: number } | {}；管理员修正任意用户在某本书上的累计阅读时长，语义同用户侧 `PUT /reading/progress/:book_id`（含每日统计不动的约定），并记录审计日志（action=set_reading_time，detail 含 book_id 与新值）；用户不存在 404、书不存在 404、时长越界 400 |
 | POST | /api/v1/admin/users/:user_id/revoke_tokens | Admin | - | {} |
 | POST | /api/v1/admin/users/:user_id/ban | Admin | - | {} |
 | POST | /api/v1/admin/users/:user_id/unban | Admin | - | {} |
@@ -175,8 +176,15 @@ type Annotation = {
 |---|---|---|---|---|
 | GET | /api/v1/reading/settings | Auth | Header: If-None-Match? | 200 + ETag：ReadingSettings；ETag 命中返回 304 |
 | PUT | /api/v1/reading/settings | Auth | Body: 部分字段（font_size? / background_color? / text_color? / line_height? / letter_spacing? / paragraph_spacing? / reading_width? / text_indent? / chinese_conversion? / timezone? / font_family? / theme? / pagination_mode?） | {} |
+| PUT | /api/v1/reading/progress/:book_id | Auth | Body: { reading_time: number } | { reading_time: number } |
 
 > 数值字段范围：font_size 8-72（px）、line_height 1.0-3.0、letter_spacing 0-20（px）、paragraph_spacing 0-10（em）、reading_width 10-2000、text_indent 0-8（字符数）；越界返回 400。background_color/text_color 必须是 hex 颜色（`#RGB` 或 `#RRGGBB`），否则 400。theme/pagination_mode 为强类型枚举，非法值在 JSON 反序列化阶段被拒绝（422）。
+
+> 手动设置当前用户对某本书的累计阅读时长（秒）：`reading_time` 必须是非负整数，上限 315360000 秒（3650 天），越界返回 400；书不存在 404，非 owner 且非公开书 403（与阅读权限一致，公开书可设置自己的阅读时长）。
+> 编辑以差值方式原子同步到用户总阅读时长（`users.total_reading_time`，即 `/reading/stats` 的 `total_reading_seconds`）：设新值时会把「新值-旧值」累加进去，因此降低时长也会同步回退总时长。
+> **每日统计保持不动**：`daily_reading_stats` 按天聚合，编辑无法归属到具体历史天数，因此 `/reading/stats/daily` 与连续阅读天数不会因手动编辑而变化（总时长与每日堆叠图可能出现不一致，属预期行为）。
+> 用户此前无该书进度记录时按 0 起算创建进度行；新值为 0 且无进度行时不创建。
+
 | GET | /api/v1/reading/stats | Auth | - | { total_reading_seconds: number; current_streak_days: number; longest_streak_days: number } |
 | GET | /api/v1/reading/stats/daily | Auth | Query: start=YYYY-MM-DD&end=YYYY-MM-DD（含端点，跨度 ≤ 372 天，非法返回 400） | { days: { date: string; book_id: number; title: string; reading_seconds: number }[] }；仅含有记录的日期，日期升序、单日内按时长降序 |
 

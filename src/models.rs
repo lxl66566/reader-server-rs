@@ -402,6 +402,25 @@ pub struct BookTagsResponse {
 
 // 心跳协议已迁移至 ws::protocol，旧的 HTTP 心跳包数据结构已删除
 
+// 手动设置书籍累计阅读时长请求（秒）
+#[derive(Debug, Deserialize)]
+pub struct SetReadingTimeRequest {
+    pub reading_time: i64,
+}
+
+// 手动设置阅读时长响应
+#[derive(Debug, Serialize)]
+pub struct SetReadingTimeResponse {
+    pub reading_time: i64,
+}
+
+// 管理员设置任意用户书籍阅读时长请求（秒）
+#[derive(Debug, Deserialize)]
+pub struct AdminSetReadingTimeRequest {
+    pub book_id: i64,
+    pub reading_time: i64,
+}
+
 // 更新阅读设置请求
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UpdateReadingSettingsRequest {

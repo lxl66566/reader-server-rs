@@ -174,6 +174,11 @@ export const readingApi = {
     api.get<DailyReadingStats>('/api/v1/reading/stats/daily', {
       query: { end, start },
     }),
+  // 手动修正本书累计阅读时长（秒）
+  setReadingTime: (bookId: number, seconds: number) =>
+    api.put<{ reading_time: number }>(`/api/v1/reading/progress/${bookId}`, {
+      body: { reading_time: seconds },
+    }),
   settings: () =>
     api.get<ReadingSettings>('/api/v1/reading/settings', { cache: true }),
   stats: () => api.get<ReadingStats>('/api/v1/reading/stats'),

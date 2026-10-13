@@ -1,7 +1,7 @@
 // Book header: identity, format / visibility marks, stats row and read entry.
 // actions renders owner icon controls next to the badges; children render
 // between the stats row and the read button (e.g. inline tags).
-import { VsBook } from 'solid-icons/vs';
+import { VsBook, VsEdit } from 'solid-icons/vs';
 import { Show, type Component, type JSX } from 'solid-js';
 
 import type { BookDetail, BookFormat } from '../../api/types';
@@ -24,6 +24,7 @@ export const BookMeta: Component<{
   actions?: JSX.Element;
   book: BookDetail;
   children?: JSX.Element;
+  onEditReadingTime?: () => void;
   onRead: () => void;
 }> = props => {
   const { locale, t } = useI18n();
@@ -62,7 +63,20 @@ export const BookMeta: Component<{
             ? t('totalPages', { count: props.book.total_pages })
             : t('totalChars', { count: props.book.total_chars })}
         </div>
-        <div>{formatDuration(props.book.reading_time, t)}</div>
+        <div class="flex items-center gap-1">
+          {formatDuration(props.book.reading_time, t)}
+          <Show when={props.onEditReadingTime}>
+            <button
+              aria-label={t('editReadingTime')}
+              class="text-muted hover:text-ink cursor-pointer align-middle"
+              onClick={() => props.onEditReadingTime?.()}
+              title={t('editReadingTime')}
+              type="button"
+            >
+              <VsEdit class="size-3" />
+            </button>
+          </Show>
+        </div>
         <div>
           {t('progressPercent', { percent: formatPercent(props.book.percent) })}
         </div>

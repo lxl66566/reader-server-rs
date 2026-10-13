@@ -56,8 +56,15 @@ const en: Dict = {
 
   downloadBackup: 'Download full backup',
   downloadBackupDesc: 'Archive of the database and all book files',
+  durationHours: 'Hours',
+  durationMinutes: 'Min',
+  durationSeconds: 'Sec',
   edit: 'Edit',
   editBook: 'Edit info',
+  editReadingTime: 'Edit reading time',
+  editReadingTimeInvalid:
+    'Enter non-negative hours/minutes/seconds, at most 3650 days',
+  editReadingTimeSuccess: 'Reading time updated',
   emptyBooks: 'No books yet. Upload one to get started.',
   emptyPublic: 'No public books yet',
   emptySearch: 'No matching books',

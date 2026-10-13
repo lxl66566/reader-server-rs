@@ -174,6 +174,10 @@ pub enum AppError {
     #[error("Invalid color value (expected hex format, e.g. #RRGGBB)")]
     InvalidColor,
 
+    // 手动设置阅读时长越界；上限见 routes::reading::MAX_READING_TIME_SECS（3650 天）
+    #[error("Reading time must be between 0 and 315360000 seconds (3650 days)")]
+    ReadingTimeOutOfRange,
+
     #[error("Setting '{0}' is out of the allowed range")]
     SettingOutOfRange(&'static str),
 
@@ -266,6 +270,7 @@ impl IntoResponse for AppError {
             | AppError::InvalidTimezone
             | AppError::InvalidFontFamily
             | AppError::InvalidColor
+            | AppError::ReadingTimeOutOfRange
             | AppError::SettingOutOfRange(_)
             | AppError::AnnotationRangeInvalid
             | AppError::SearchQueryEmpty

@@ -2,7 +2,7 @@ use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Path, Query, State, multipart::Multipart},
     response::Response,
-    routing::{get, post},
+    routing::{get, post, put},
 };
 use chrono::{SecondsFormat, Utc};
 use sqlx::{Pool, Sqlite};
@@ -13,15 +13,16 @@ use crate::{
     config::Config,
     error::{ApiResponse, AppError},
     models::{
-        AdminListItem, AdminUserListItem, AuditLog, ChangePasswordRequest, CheckSetupResponse,
-        CreateAdminRequest, CreateInviteCodeRequest, CreateInviteCodeResponse,
-        DEFAULT_INVITE_CODE_REQUIRED, ImportUserResponse, InviteCode, ListAdminsResponse,
-        ListAuditLogsResponse, ListInviteCodesResponse, ListUsersResponse,
+        AdminListItem, AdminSetReadingTimeRequest, AdminUserListItem, AuditLog,
+        ChangePasswordRequest, CheckSetupResponse, CreateAdminRequest, CreateInviteCodeRequest,
+        CreateInviteCodeResponse, DEFAULT_INVITE_CODE_REQUIRED, ImportUserResponse, InviteCode,
+        ListAdminsResponse, ListAuditLogsResponse, ListInviteCodesResponse, ListUsersResponse,
         ResetUserPasswordRequest, Settings, UpdateSettingsRequest, UserStatus,
     },
     routes::{
         auth::{validate_password, validate_username},
         books::{PaginationParams, map_multipart_err},
+        reading::set_reading_time,
     },
     user_data::{self, ExportScope},
     utils::{generate_invite_code, generate_uuid, hash_password, verify_password},
@@ -41,6 +42,7 @@ pub fn routes() -> Router<crate::app::AppState> {
             post(import_user).layer(DefaultBodyLimit::max(IMPORT_BODY_LIMIT)),
         )
         .route("/users/{user_id}/reset_password", post(reset_password))
+        .route("/users/{user_id}/reading_time", put(admin_set_reading_time))
         .route("/users/{user_id}/revoke_tokens", post(revoke_user_tokens))
         .route("/users/{user_id}/ban", post(ban_user))
         .route("/users/{user_id}/unban", post(unban_user))
@@ -412,6 +414,49 @@ async fn import_user(
     .await;
 
     Ok(Json(ApiResponse::success(outcome)))
+}
+
+// 管理员修正任意用户在某本书上的累计阅读时长
+async fn admin_set_reading_time(
+    admin: AuthAdmin,
+    State(pool): State<Pool<Sqlite>>,
+    Path(user_id): Path<i64>,
+    Json(req): Json<AdminSetReadingTimeRequest>,
+) -> Result<Json<ApiResponse<()>>, AppError> {
+    let user_exists =
+        sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM users WHERE id = ?)")
+            .bind(user_id)
+            .fetch_one(&pool)
+            .await?;
+    if !user_exists {
+        return Err(AppError::UserNotFound);
+    }
+
+    let book_exists =
+        sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM books WHERE id = ?)")
+            .bind(req.book_id)
+            .fetch_one(&pool)
+            .await?;
+    if !book_exists {
+        return Err(AppError::BookNotFound);
+    }
+
+    set_reading_time(&pool, user_id, req.book_id, req.reading_time).await?;
+
+    log_audit(
+        &pool,
+        &admin,
+        "set_reading_time",
+        Some("user"),
+        Some(user_id),
+        Some(&format!(
+            "book_id={} reading_time={}",
+            req.book_id, req.reading_time
+        )),
+    )
+    .await;
+
+    Ok(Json(ApiResponse::<()>::message("Reading time updated")))
 }
 
 // 重置用户密码
