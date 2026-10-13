@@ -19,6 +19,7 @@ import {
   SettingsTab,
   UsersTab,
 } from '../components/admin';
+import { ThemeSwitcher } from '../components/ThemeSwitcher';
 import { Button, Input, Spinner } from '../components/ui';
 import { useI18n } from '../i18n';
 import { toastError } from '../utils/toast';
@@ -147,10 +148,13 @@ const Admin: Component = () => {
         <header class="safe-top border-edge bg-surface sticky top-0 z-40 border-b">
           <div class="mx-auto flex h-12 max-w-4xl items-center justify-between px-4">
             <h1 class="text-base font-semibold">{t('adminDashboard')}</h1>
-            <Button onClick={backToLogin} variant="ghost">
-              <VsSignOut class="size-4" />
-              {t('logout')}
-            </Button>
+            <div class="flex items-center gap-2">
+              <ThemeSwitcher />
+              <Button onClick={backToLogin} variant="ghost">
+                <VsSignOut class="size-4" />
+                {t('logout')}
+              </Button>
+            </div>
           </div>
         </header>
         <nav class="mx-auto flex w-full max-w-4xl gap-1 overflow-x-auto px-4 pt-4 text-sm">

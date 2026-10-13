@@ -123,7 +123,7 @@ const Settings = () => {
       <h1 class="text-lg font-medium">{t('navSettings')}</h1>
 
       <SectionCard title={t('readerSettings')}>
-        <ReaderSettingRows withTheme />
+        <ReaderSettingRows />
       </SectionCard>
 
       {/* 预览卡宽度跟随阅读宽度（em 按阅读字号换算为 px，卡片层 em 基准不同；

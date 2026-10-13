@@ -25,8 +25,8 @@ test('登出后可重新登录', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByText('我的书籍')).toBeVisible();
 
-  // 登出：header 导航里唯一的 button（移动端文案隐藏，用位置定位）
-  await page.locator('header nav button').click();
+  // 登出：nav 最后一个 button（主题切换按钮在前；移动端文案隐藏，用位置定位）
+  await page.locator('header nav button').last().click();
   const loginLink = page.getByRole('link', { exact: true, name: '登录' });
   await expect(loginLink).toBeVisible();
 

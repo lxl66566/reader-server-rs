@@ -1,13 +1,27 @@
-// Applies data-theme on <html> based on ReadingSettings.theme ('system' follows
-// prefers-color-scheme). Reader pages may override colors via inline styles.
+// Theme store: persisted in localStorage (rs_theme), applies data-theme on
+// <html>; 'system' follows prefers-color-scheme. Reader pages may override
+// colors via inline styles.
 
 import { createEffect, createSignal } from 'solid-js';
 
 import type { ThemeMode } from './api/types';
 
 const media = window.matchMedia('(prefers-color-scheme: dark)');
+const STORAGE_KEY = 'rs_theme';
 
-const [themeMode, setThemeModeSignal] = createSignal<ThemeMode>('system');
+export const THEME_OPTIONS: ThemeMode[] = ['light', 'sepia', 'dark', 'system'];
+
+const THEME_MODES = new Set<string>(THEME_OPTIONS);
+
+function loadStoredTheme(): ThemeMode {
+  const stored = localStorage.getItem(STORAGE_KEY);
+  return stored !== null && THEME_MODES.has(stored)
+    ? (stored as ThemeMode)
+    : 'system';
+}
+
+const [themeMode, setThemeModeSignal] =
+  createSignal<ThemeMode>(loadStoredTheme());
 
 export { themeMode };
 
@@ -24,6 +38,7 @@ export function resolvedTheme(): Exclude<ThemeMode, 'system'> {
 
 export function setThemeMode(mode: ThemeMode): void {
   setThemeModeSignal(mode);
+  localStorage.setItem(STORAGE_KEY, mode);
 }
 
 function apply(): void {

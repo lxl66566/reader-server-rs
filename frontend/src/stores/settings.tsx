@@ -4,6 +4,7 @@ import {
   createContext,
   createEffect,
   createResource,
+  untrack,
   useContext,
   type ParentComponent,
 } from 'solid-js';
@@ -29,7 +30,8 @@ const themeDefaultColors = () =>
   THEME_DEFAULT_COLORS[resolvedTheme() === 'dark' ? 'dark' : 'light'];
 
 // 访客/加载失败时的兜底默认值，与服务端 schema（reading_settings 表
-// DEFAULT 值）保持一致，避免登录前后排版跳变
+// DEFAULT 值）保持一致，避免登录前后排版跳变。theme 字段仅为类型完整，
+// 实际主题由 theme.ts 的 localstorage 状态决定
 const FALLBACK: ReadingSettings = {
   ...themeDefaultColors(),
   chinese_conversion: 'none',
@@ -41,13 +43,15 @@ const FALLBACK: ReadingSettings = {
   paragraph_spacing: 1.2,
   reading_width: 40,
   text_indent: 2,
-  theme: 'light',
+  theme: 'system',
   timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
 };
 
 interface SettingsContextValue {
   ready: () => boolean;
   reload: () => void;
+  /** 切换主题：本地立即生效并持久化，登录态下同步服务端 */
+  setTheme: (mode: ThemeMode) => void;
   settings: ReadingSettings;
   /** optimistic local update + debounced server sync */
   update: (patch: Partial<ReadingSettings>) => void;
@@ -75,6 +79,7 @@ export const SettingsProvider: ParentComponent = props => {
 
   const applyRemote = (value: ReadingSettings) => {
     setSettings(value);
+    // 登录态以服务端主题为准；setThemeMode 会落 localstorage，退出后保留
     setThemeMode(value.theme);
   };
 
@@ -83,9 +88,12 @@ export const SettingsProvider: ParentComponent = props => {
     // 加载中保持现状，避免已登录用户被访客默认值闪一下
     if (remote.loading) return;
     const value = remote();
-    // 未登录或拉取失败：回到访客默认，避免残留上个用户的设置
+    // 未登录或拉取失败：回到访客默认，避免残留上个用户的设置。
+    // 主题不重置，由 localstorage 决定（退出登录后保留）。
+    // untrack：themeDefaultColors 读 themeMode，不隔断会让本 effect 依赖
+    // 主题信号，切换主题时重放分支、把陈旧的服务端缓存写回 UI
     if (!value || !auth.isLoggedIn()) {
-      applyRemote({ ...FALLBACK, ...themeDefaultColors() });
+      setSettings({ ...FALLBACK, ...untrack(themeDefaultColors) });
       return;
     }
     // 时区与本地不一致：随初始化一次性上报，让服务端按本地时区归算日报
@@ -100,7 +108,7 @@ export const SettingsProvider: ParentComponent = props => {
       value.text_color === SERVER_DEFAULT_COLORS.text
     ) {
       applyRemote(value);
-      update({ ...themeDefaultColors(), ...tzPatch });
+      update({ ...untrack(themeDefaultColors), ...tzPatch });
       return;
     }
     applyRemote(value);
@@ -126,12 +134,18 @@ export const SettingsProvider: ParentComponent = props => {
     }, 500);
   };
 
+  // 主题切换：本地立即生效并持久化；登录态下走 update 同步服务端
+  const setTheme: SettingsContextValue['setTheme'] = mode => {
+    setThemeMode(mode);
+    if (auth.isLoggedIn()) update({ theme: mode });
+  };
   const value: SettingsContextValue = {
     ready: () => remote.state === 'ready' || remote.state === 'errored',
     reload: () => {
       // the createEffect above applies the fresh value once resolved
       void refetch();
     },
+    setTheme,
     settings,
     update,
   };
@@ -153,7 +167,6 @@ export function useSettings(): SettingsContextValue {
 export const FONT_FAMILY_OPTIONS = ['default', 'serif', 'sans'] as const;
 export type FontFamilyOption = (typeof FONT_FAMILY_OPTIONS)[number];
 
-export const THEME_OPTIONS: ThemeMode[] = ['light', 'sepia', 'dark', 'system'];
 export const PAGINATION_OPTIONS: PaginationMode[] = ['scroll', 'paginate'];
 
 export function fontFamilyCss(option: string): string {

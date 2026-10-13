@@ -7,6 +7,7 @@ import toast from 'solid-toast';
 
 import { useI18n } from '../i18n';
 import { useAuth } from '../stores/auth';
+import { ThemeSwitcher } from './ThemeSwitcher';
 
 export const Layout: ParentComponent = props => {
   const { t } = useI18n();
@@ -22,12 +23,13 @@ export const Layout: ParentComponent = props => {
   return (
     <div class="flex min-h-full flex-col">
       <header class="safe-top border-edge bg-surface sticky top-0 z-40 border-b">
-        <div class="mx-auto flex h-12 max-w-4xl items-center gap-4 px-4">
+        <div class="mx-auto flex h-12 max-w-4xl items-center gap-2 px-4 sm:gap-4">
           <A class="flex items-center gap-1.5 text-base font-semibold" href="/">
             <VsBook class="text-accent size-5" />
             {t('appName')}
           </A>
           <nav class="ml-auto flex items-center gap-1 text-sm">
+            <ThemeSwitcher />
             <Show when={auth.isLoggedIn()}>
               <NavLink
                 href="/"
@@ -45,7 +47,7 @@ export const Layout: ParentComponent = props => {
                 label={t('navSettings')}
               />
               <button
-                class="text-muted hover:bg-page hover:text-ink flex cursor-pointer items-center gap-1 rounded px-2 py-1"
+                class="text-muted hover:bg-page hover:text-ink flex cursor-pointer items-center gap-1 rounded px-1.5 py-1 sm:px-2"
                 onClick={logout}
                 type="button"
               >
@@ -78,7 +80,7 @@ const NavLink: ParentComponent<{
 }> = props => (
   <A
     activeClass="text-ink"
-    class="text-muted hover:bg-page hover:text-ink flex items-center gap-1 rounded px-2 py-1"
+    class="text-muted hover:bg-page hover:text-ink flex items-center gap-1 rounded px-1.5 py-1 sm:px-2"
     href={props.href}
   >
     {props.icon}

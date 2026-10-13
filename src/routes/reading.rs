@@ -151,7 +151,7 @@ async fn get_reading_settings(
             chinese_conversion: ChineseConversion::None,
             timezone: "UTC".to_string(),
             font_family: "serif".to_string(),
-            theme: ReadingTheme::Light,
+            theme: ReadingTheme::System,
             pagination_mode: PaginationMode::Scroll,
         }
     };

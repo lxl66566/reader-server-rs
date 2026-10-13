@@ -1,20 +1,13 @@
-// 阅读设置控件组：阅读页设置弹窗与设置页共用同一组控件行，
-// 主题切换只在设置页展示（阅读页弹窗通过 withTheme=false 省略）。
+// 阅读设置控件组：阅读页设置弹窗与设置页共用同一组控件行。
+// 主题切换在导航栏（ThemeSwitcher），不在此处。
 
-import { Show } from 'solid-js';
-
-import type {
-  ChineseConversion,
-  PaginationMode,
-  ThemeMode,
-} from '../../api/types';
+import type { ChineseConversion, PaginationMode } from '../../api/types';
 import { useI18n } from '../../i18n';
 import type { DictKey } from '../../i18n/zh-CN';
 import {
   FONT_FAMILY_OPTIONS,
   type FontFamilyOption,
   PAGINATION_OPTIONS,
-  THEME_OPTIONS,
   useSettings,
 } from '../../stores/settings';
 import {
@@ -29,13 +22,6 @@ const FONT_LABELS: Record<FontFamilyOption, DictKey> = {
   default: 'fontDefault',
   sans: 'fontSans',
   serif: 'fontSerif',
-};
-
-const THEME_LABELS: Record<ThemeMode, DictKey> = {
-  dark: 'themeDark',
-  light: 'themeLight',
-  sepia: 'themeSepia',
-  system: 'themeSystem',
 };
 
 const PAGINATION_LABELS: Record<PaginationMode, DictKey> = {
@@ -58,7 +44,7 @@ const CONVERSION_OPTIONS: ChineseConversion[] = [
 const BACKGROUND_PRESETS = ['#201f1b', '#eef1f5', '#f8f1e1', '#c7edcc'];
 const TEXT_PRESETS = ['#2b2a26', '#4a3f2d', '#5b6b8c', '#e8e6e0'];
 
-export const ReaderSettingRows = (props: { withTheme?: boolean }) => {
+export const ReaderSettingRows = () => {
   const { t } = useI18n();
   const { settings, update } = useSettings();
 
@@ -206,23 +192,6 @@ export const ReaderSettingRows = (props: { withTheme?: boolean }) => {
           />
         }
       />
-      <Show when={props.withTheme}>
-        <SettingRow
-          label={t('settingsTheme')}
-          right={
-            <SelectControl
-              onChange={value => {
-                update({ theme: value as ThemeMode });
-              }}
-              options={THEME_OPTIONS.map(option => ({
-                label: t(THEME_LABELS[option]),
-                value: option,
-              }))}
-              value={settings.theme}
-            />
-          }
-        />
-      </Show>
       <SettingRow
         label={t('settingsPaginationMode')}
         right={

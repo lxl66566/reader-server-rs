@@ -241,7 +241,7 @@ CREATE TABLE
     -- 字体族标识（前端解释），允许预设或自定义字体名/URL
     font_family TEXT NOT NULL DEFAULT 'serif',
     -- 主题预设；与 background_color/text_color 解耦，方便前端做"跟随系统"等
-    theme TEXT NOT NULL DEFAULT 'light' CHECK (theme IN ('light', 'sepia', 'dark', 'system')),
+    theme TEXT NOT NULL DEFAULT 'system' CHECK (theme IN ('light', 'sepia', 'dark', 'system')),
     -- 翻页模式：scroll=滚动；paginate=翻页
     pagination_mode TEXT NOT NULL DEFAULT 'scroll' CHECK (pagination_mode IN ('scroll', 'paginate')),
     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
