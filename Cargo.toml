@@ -1,0 +1,87 @@
+[package]
+name        = "reader-server-rs"
+version     = "0.1.0"
+edition     = "2024"
+description = "A self-hosted reading server for txt/epub books with multi-user progress sync"
+repository  = "https://github.com/lxl66566/reader-server-rs"
+license     = "BSD-3-Clause"
+keywords    = ["ebook", "epub", "reading", "server"]
+categories  = ["web-programming::http-server"]
+include     = ["/CHANGELOG.md", "/LICENSE-*", "/README.md", "/benches/**", "/src/**", "/tests/**"]
+
+[[bin]]
+name = "reader-server"
+path = "src/main.rs"
+
+[dependencies]
+anyhow             = "1.0"
+argon2             = { version = "0.5" }
+axum               = { version = "0.8.3", features = ["multipart", "ws"] }
+axum-extra         = { version = "0.12.1", features = ["typed-header"] }
+bytes              = "1.12"
+chrono             = { version = "0.4", features = ["serde"] }
+chrono-tz          = { version = "0.10", features = ["serde"] }
+color-eyre         = "0.6"
+epub               = "2.0"
+fancy-regex        = "0.19"
+futures-util       = { version = "0.3", default-features = false, features = ["sink", "std"] }
+http-body-util     = "0.1.5"
+infer              = "0.22"
+jsonwebtoken       = { version = "11", features = ["rust_crypto"] }
+lopdf              = { version = "0.45", default-features = false, features = ["rayon"] }
+rand               = "0.10"
+rust-embed         = { version = "8.12.0", features = ["compression", "mime-guess"] }
+scraper            = "0.27"
+serde              = { version = "1.0", features = ["derive"] }
+serde_json         = "1.0"
+sha2               = "0.11"
+sqlx               = { version = "0.9", features = [
+  "chrono",
+  "derive",
+  "macros",
+  "migrate",
+  "runtime-tokio",
+  "sqlite",
+  "tls-rustls",
+  "uuid"
+] }
+thiserror          = "2.0"
+tokio              = { version = "1", features = ["full"] }
+tokio-util         = { version = "0.7", features = ["codec"] }
+tower              = "0.5.2"
+tower_governor     = "0.8"
+tower-http         = { version = "0.7.0", features = ["compression-gzip", "cors", "trace"] }
+tracing            = "0.1"
+tracing-appender   = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid               = { version = "1.23", features = ["v4"] }
+zip                = { version = "8", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+tokio-tungstenite = "0.29"
+
+[build-dependencies]
+fuck-backslash  = "0.1"
+path-absolutize = "4"
+sqlx            = { version = "0.9", features = ["runtime-tokio", "sqlite"] }
+tokio           = { version = "1", features = ["full"] }
+
+[lints.clippy]
+all                     = { level = "warn", priority = -1 }
+cargo                   = { level = "warn", priority = -1 }
+doc_markdown            = "allow"
+missing_errors_doc      = "allow"
+missing_panics_doc      = "allow"
+multiple_crate_versions = "allow"
+pedantic                = { level = "warn", priority = -1 }
+wildcard_imports        = "allow"
+
+[lints.rust]
+unsafe_code           = "allow"
+unused_qualifications = "warn"
+
+[profile.release]
+opt-level = "s"
+strip     = true
+lto       = true
+panic     = "abort"

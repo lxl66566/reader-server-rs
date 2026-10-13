@@ -1,0 +1,8 @@
+/target
+*.db
+config.json
+sqlite
+/logs
+/test*
+reader.db*
+/books
