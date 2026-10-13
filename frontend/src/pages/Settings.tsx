@@ -57,8 +57,11 @@ const Settings = () => {
     setPwdSubmitting(true);
     try {
       await authApi.changePassword(oldPassword(), newPassword());
+      // 后端已递增 token_version：当前 token 立即作废，主动登出避免
+      // 后续请求逐个 401 的突兀体验
       toast.success(t('changePasswordSuccess'));
-      closePwd();
+      auth.logout();
+      navigate('/login', { replace: true });
     } catch (error) {
       showError(error, 'errorGeneric');
     } finally {

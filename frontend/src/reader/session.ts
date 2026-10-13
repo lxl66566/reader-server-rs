@@ -7,10 +7,13 @@ import toast from 'solid-toast';
 import { ApiError, authApi, getDeviceId, getToken } from '../api';
 import type { WsClientMessage, WsServerMessage } from '../api/types';
 import { useI18n } from '../i18n';
+import { ReconnectScheduler } from './reconnectScheduler';
 
 export interface ReadingSession {
   close: () => void;
   connected: () => boolean;
+  /** 重连放弃后手动恢复；连接健康时调用无副作用 */
+  retry: () => void;
   send: (locator: string, percent: number) => void;
 }
 
@@ -19,6 +22,8 @@ export interface ReadingSessionHandlers {
   onAnnotationChanged: () => void;
   /** bookmark list changed elsewhere; refetch */
   onBookmarkChanged: () => void;
+  /** 重连放弃（达到上限）：UI 应提供手动重连入口 */
+  onGaveUp?: () => void;
   onReconnecting?: (reconnecting: boolean) => void;
   /** another device moved; jump to stay in sync */
   onRemoteProgress: (locator: string, percent: number) => void;
@@ -36,9 +41,12 @@ export function createReadingSession(
 ): ReadingSession {
   let ws: null | WebSocket = null;
   let closed = false;
-  let backoff = 500;
-  let attempts = 0;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  const scheduler = new ReconnectScheduler(
+    500,
+    MAX_RECONNECT_ATTEMPTS,
+    MAX_BACKOFF_MS,
+  );
   const { t } = useI18n();
 
   const isOpen = () => ws !== null && ws.readyState === WebSocket.OPEN;
@@ -47,17 +55,31 @@ export function createReadingSession(
     if (isOpen()) ws?.send(JSON.stringify(message));
   };
 
+  const clearReconnectTimer = () => {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = undefined;
+    scheduler.settle();
+  };
+
   const scheduleReconnect = () => {
-    attempts += 1;
-    if (attempts > MAX_RECONNECT_ATTEMPTS) {
-      // 放弃重连：摘掉横幅并提示用户，而不是无限重试
+    const delay = scheduler.next();
+    if (delay === null) {
+      // 放弃自动重连：交由 UI 提供手动重连 / 网络恢复时自动重试
       handlers.onReconnecting?.(false);
+      handlers.onGaveUp?.();
       toast(t('readerReconnectFailed'), { icon: null });
       return;
     }
     handlers.onReconnecting?.(true);
-    reconnectTimer = setTimeout(connect, backoff);
-    backoff = Math.min(backoff * 2, MAX_BACKOFF_MS);
+    reconnectTimer = setTimeout(connect, delay);
+  };
+
+  // 手动/网络恢复触发的重连：从干净退避状态重新开始
+  const retry = () => {
+    if (closed || isOpen() || !scheduler.isIdle()) return;
+    scheduler.reset();
+    handlers.onReconnecting?.(true);
+    connect();
   };
 
   // 握手被拒时浏览器拿不到 HTTP 状态码：用一次 REST 请求甄别 token 是否已失效。
@@ -68,7 +90,7 @@ export function createReadingSession(
       await authApi.userInfo();
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
-        closed = true;
+        teardown();
         handlers.onReconnecting?.(false);
         return;
       }
@@ -77,6 +99,8 @@ export function createReadingSession(
   };
 
   const connect = () => {
+    // 已触发的定时重连不再算在途：哨兵不复位会永久拦截 retry / online 恢复
+    clearReconnectTimer();
     const token = getToken('user');
     if (!token || closed) return;
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -88,8 +112,7 @@ export function createReadingSession(
 
     ws.onopen = () => {
       opened = true;
-      attempts = 0;
-      backoff = 500;
+      scheduler.reset();
       handlers.onReconnecting?.(false);
       sendMessage({
         book_id: bookId,
@@ -145,22 +168,31 @@ export function createReadingSession(
 
   onMount(connect);
 
-  onCleanup(() => {
+  // 网络恢复时自动重试（放弃状态最常见的恢复路径）
+  const onOnline = () => {
+    if (scheduler.isExhausted()) retry();
+  };
+  window.addEventListener('online', onOnline);
+
+  // 停止会话：停止重连、摘掉 online 监听并断开连接（组件卸载与
+  // 握手被拒/手动 close 共用，可重复调用）
+  const teardown = () => {
     closed = true;
-    clearTimeout(reconnectTimer);
+    clearReconnectTimer();
+    window.removeEventListener('online', onOnline);
     if (isOpen()) {
       sendMessage({ book_id: bookId, type: 'unsubscribe' });
     }
     ws?.close();
     ws = null;
-  });
+  };
+
+  onCleanup(teardown);
 
   return {
-    close: () => {
-      closed = true;
-      ws?.close();
-    },
+    close: teardown,
     connected: isOpen,
+    retry,
     send: (locator, percent) => {
       sendMessage({ book_id: bookId, locator, percent, type: 'heartbeat' });
     },

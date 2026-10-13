@@ -1,7 +1,7 @@
 import UnoCSS from 'unocss/vite';
 import type { UserConfig } from 'vite';
 import solidPlugin from 'vite-plugin-solid';
-import { defineConfig } from 'vitest/config';
+import { defineConfig, defaultExclude } from 'vitest/config';
 
 const config: UserConfig = defineConfig({
   build: {
@@ -24,6 +24,8 @@ const config: UserConfig = defineConfig({
   },
   test: {
     environment: 'node',
+    // e2e 目录的 *.spec.ts 由 playwright test 驱动，不进 vitest
+    exclude: [...defaultExclude, 'e2e/**'],
   },
 });
 

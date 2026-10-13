@@ -1,8 +1,6 @@
 use axum::{
     Json, Router,
-    body::Body,
     extract::{Path, Query, State},
-    http::header,
     response::Response,
     routing::{get, post},
 };
@@ -15,11 +13,15 @@ use crate::{
     error::{ApiResponse, AppError},
     models::{
         AdminListItem, AdminUserListItem, AuditLog, ChangePasswordRequest, CheckSetupResponse,
-        CreateAdminRequest, CreateInviteCodeRequest, CreateInviteCodeResponse, InviteCode,
-        ListAdminsResponse, ListAuditLogsResponse, ListInviteCodesResponse, ListUsersResponse,
-        ResetUserPasswordRequest, Settings, UpdateSettingsRequest, UserStatus,
+        CreateAdminRequest, CreateInviteCodeRequest, CreateInviteCodeResponse,
+        DEFAULT_INVITE_CODE_REQUIRED, InviteCode, ListAdminsResponse, ListAuditLogsResponse,
+        ListInviteCodesResponse, ListUsersResponse, ResetUserPasswordRequest, Settings,
+        UpdateSettingsRequest, UserStatus,
     },
-    routes::{auth::validate_username, books::PaginationParams},
+    routes::{
+        auth::{validate_password, validate_username},
+        books::PaginationParams,
+    },
     utils::{generate_invite_code, generate_uuid, hash_password, verify_password},
 };
 
@@ -41,6 +43,14 @@ pub fn routes() -> Router<crate::app::AppState> {
         .route("/backup", get(backup_global))
 }
 
+/// 审计文本字段入库前的截断上限（按字符计）
+const AUDIT_TEXT_MAX_CHARS: usize = 256;
+
+/// 按字符边界截断，避免切在 UTF-8 多字节序列中间
+fn truncate_chars(input: Option<&str>, max_chars: usize) -> Option<String> {
+    input.map(|s| s.chars().take(max_chars).collect())
+}
+
 /// 记录审计日志
 async fn log_audit(
     pool: &Pool<Sqlite>,
@@ -49,7 +59,7 @@ async fn log_audit(
     target_type: Option<&str>,
     target_id: Option<i64>,
     detail: Option<&str>,
-) -> Result<(), AppError> {
+) {
     log_audit_event(
         pool,
         Some(admin.admin_id),
@@ -59,11 +69,12 @@ async fn log_audit(
         target_id,
         detail,
     )
-    .await
+    .await;
 }
 
-/// 记录审计日志（泛化版）：登录类事件发生在认证之前/之外，
-/// 可能没有操作管理员，此时 admin_id / admin_username 传 None
+/// 记录审计日志（泛化版，best-effort）：登录类事件发生在认证之前/之外，
+/// 可能没有操作管理员，此时 admin_id / admin_username 传 None。
+/// 写入失败仅告警、不影响业务响应；文本字段按字符截断到 256
 pub(crate) async fn log_audit_event(
     pool: &Pool<Sqlite>,
     admin_id: Option<i64>,
@@ -72,20 +83,22 @@ pub(crate) async fn log_audit_event(
     target_type: Option<&str>,
     target_id: Option<i64>,
     detail: Option<&str>,
-) -> Result<(), AppError> {
-    sqlx::query!(
+) {
+    let result = sqlx::query!(
         "INSERT INTO audit_logs (admin_id, admin_username, action, target_type, target_id, \
          detail) VALUES (?, ?, ?, ?, ?, ?)",
         admin_id,
-        admin_username,
+        truncate_chars(admin_username, AUDIT_TEXT_MAX_CHARS),
         action,
         target_type,
         target_id,
-        detail
+        truncate_chars(detail, AUDIT_TEXT_MAX_CHARS),
     )
     .execute(pool)
-    .await?;
-    Ok(())
+    .await;
+    if let Err(e) = result {
+        tracing::warn!(error = %e, action, "failed to write audit log");
+    }
 }
 
 // 检查是否已设置管理员
@@ -120,6 +133,9 @@ async fn change_password(
         return Err(AppError::IncorrectOldPassword);
     }
 
+    // 校验新密码非空
+    validate_password(&req.new_password)?;
+
     let new_password_hash = hash_password(&req.new_password)?;
 
     sqlx::query!(
@@ -138,7 +154,7 @@ async fn change_password(
         Some(admin.admin_id),
         None,
     )
-    .await?;
+    .await;
 
     Ok(Json(ApiResponse::<()>::message(
         "Password changed successfully",
@@ -175,7 +191,7 @@ async fn create_invite_code(
         None,
         Some(&invite_code),
     )
-    .await?;
+    .await;
 
     Ok(Json(ApiResponse::success(CreateInviteCodeResponse {
         invite_code,
@@ -209,7 +225,8 @@ async fn get_settings(
         .await?
         .unwrap_or(Settings {
             id: 1,
-            invite_code_required: true,
+            // 与注册侧共用同一缺省，避免“注册不需邀请码 / 管理端显示需要”的矛盾
+            invite_code_required: DEFAULT_INVITE_CODE_REQUIRED,
         });
 
     Ok(Json(ApiResponse::success(settings)))
@@ -254,7 +271,7 @@ async fn update_settings(
             "invite_required=false"
         }),
     )
-    .await?;
+    .await;
 
     Ok(Json(ApiResponse::<()>::message("Settings updated")))
 }
@@ -297,6 +314,9 @@ async fn reset_password(
         return Err(AppError::UserNotFound);
     }
 
+    // 校验新密码非空
+    validate_password(&req.new_password)?;
+
     let new_password_hash = hash_password(&req.new_password)?;
 
     // 重置密码同时解除锁定并递增 token_version，使旧 JWT 立即失效
@@ -317,7 +337,7 @@ async fn reset_password(
         Some(user_id),
         None,
     )
-    .await?;
+    .await;
 
     Ok(Json(ApiResponse::<()>::message(
         "User password reset successfully",
@@ -356,7 +376,7 @@ async fn revoke_user_tokens(
         Some(user_id),
         None,
     )
-    .await?;
+    .await;
 
     Ok(Json(ApiResponse::<()>::message("User tokens revoked")))
 }
@@ -392,7 +412,7 @@ async fn ban_user(
         // 已被封禁，幂等返回成功
     }
 
-    log_audit(&pool, &admin, "ban_user", Some("user"), Some(user_id), None).await?;
+    log_audit(&pool, &admin, "ban_user", Some("user"), Some(user_id), None).await;
 
     Ok(Json(ApiResponse::<()>::message("User banned")))
 }
@@ -433,7 +453,7 @@ async fn unban_user(
         Some(user_id),
         None,
     )
-    .await?;
+    .await;
 
     Ok(Json(ApiResponse::<()>::message("User unbanned")))
 }
@@ -471,6 +491,9 @@ async fn create_admin(
     // 验证用户名格式（长度 + 字符白名单）
     validate_username(&req.username)?;
 
+    // 验证密码非空
+    validate_password(&req.password)?;
+
     // 检查用户名唯一
     let exists =
         sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM admin WHERE username = ?)")
@@ -500,7 +523,7 @@ async fn create_admin(
         Some(new_admin_id),
         Some(&req.username),
     )
-    .await?;
+    .await;
 
     Ok(Json(ApiResponse::<()>::message("Admin created")))
 }
@@ -534,103 +557,83 @@ async fn list_audit_logs(
 
 // 全局备份：数据库一致性快照 + 全部书籍文件打包成 zip 供下载。
 // 任何组成部分缺失/失败都显式报错，绝不产出“看似成功实则缺文件”的备份。
+// zip 写入临时文件后流式回传（书籍文件 io::copy 搬运），内存占用与书数量无关。
 async fn backup_global(
     admin: AuthAdmin,
     State(pool): State<Pool<Sqlite>>,
     State(config): State<Config>,
 ) -> Result<Response, AppError> {
-    log_audit(&pool, &admin, "backup_global", None, None, None).await?;
+    log_audit(&pool, &admin, "backup_global", None, None, None).await;
 
     // 用 VACUUM INTO 生成数据库一致性快照（SQLite 在线备份）：
     // 直接读 db 文件在 WAL 模式下会漏掉未 checkpoint 的数据，且与并发写入竞争；
     // 此前从 db url 剥离前缀的顺序也是错的（先剥 "sqlite:" 后 "sqlite://" 永不命中），
     // 快照方式不再依赖路径解析
     let snapshot_path = std::env::temp_dir().join(format!("reader-backup-{}.db", generate_uuid()));
-    let snapshot_result: Result<Vec<u8>, AppError> = async {
+    let snapshot_result: Result<(), AppError> = async {
         sqlx::query("VACUUM INTO ?")
             .bind(snapshot_path.to_string_lossy().as_ref())
             .execute(&pool)
             .await?;
-        tokio::fs::read(&snapshot_path).await.map_err(AppError::Io)
+        Ok(())
     }
+    .await;
+    // 数据库是备份的核心，快照失败必须显式拒绝
+    snapshot_result?;
+
+    let book_dir = config.storage.book_dir.clone();
+    let snapshot_for_zip = snapshot_path.clone();
+    let zip_result = crate::utils::zip::write_temp_zip(move |zip| {
+        let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        let zip_err = crate::utils::zip::zip_write_err;
+
+        zip.start_file("reader.db", opts).map_err(zip_err)?;
+        let mut db_file = std::fs::File::open(&snapshot_for_zip).map_err(AppError::Io)?;
+        std::io::copy(&mut db_file, zip).map_err(AppError::Io)?;
+
+        // 写入 books 目录所有文件；任何文件读取/写入失败都记录下来，
+        // 最后整体报错拒绝，不让调用方在不知情的情况下拿到残缺备份
+        let mut failed: Vec<String> = Vec::new();
+        for entry in std::fs::read_dir(&book_dir).map_err(AppError::Io)? {
+            let entry = entry.map_err(AppError::Io)?;
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+                failed.push(path.display().to_string());
+                continue;
+            };
+            let entry_name = format!("books/{name}");
+            let archive_result: Result<(), AppError> = (|| {
+                let mut file = std::fs::File::open(&path).map_err(AppError::Io)?;
+                zip.start_file(&entry_name, opts).map_err(zip_err)?;
+                std::io::copy(&mut file, zip).map_err(AppError::Io)?;
+                Ok(())
+            })();
+            if let Err(e) = archive_result {
+                tracing::error!(error = %e, file = %path.display(), "backup: failed to archive book file");
+                failed.push(path.display().to_string());
+            }
+        }
+
+        if !failed.is_empty() {
+            // 失败详情已记入日志；向客户端只返回固定文案（Internal 的统一行为）
+            return Err(AppError::Internal(format!(
+                "backup incomplete: {} file(s) failed to archive",
+                failed.len()
+            )));
+        }
+        Ok(())
+    })
     .await;
     // 无论成败都清理临时快照文件
     let _ = tokio::fs::remove_file(&snapshot_path).await;
-    // 数据库是备份的核心，快照失败必须显式拒绝
-    let db_bytes = snapshot_result?;
+    let (zip_path, _) = zip_result?;
 
-    // zip 压缩与书籍文件读取是同步阻塞操作，放入 spawn_blocking 避免占用 tokio worker
-    let book_dir = config.storage.book_dir.clone();
-    let zip_buf = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, AppError> {
-        use std::io::Write;
-
-        let mut zip_buf: Vec<u8> = Vec::new();
-        {
-            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut zip_buf));
-            let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
-                .compression_method(zip::CompressionMethod::Stored);
-
-            zip.start_file("reader.db", opts)
-                .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
-            zip.write_all(&db_bytes)
-                .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
-
-            // 写入 books 目录所有文件；任何文件读取/写入失败都记录下来，
-            // 最后整体报错拒绝，不让调用方在不知情的情况下拿到残缺备份
-            let mut failed: Vec<String> = Vec::new();
-            for entry in std::fs::read_dir(&book_dir).map_err(AppError::Io)? {
-                let entry = entry.map_err(AppError::Io)?;
-                let path = entry.path();
-                if !path.is_file() {
-                    continue;
-                }
-                let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
-                    failed.push(path.display().to_string());
-                    continue;
-                };
-                let entry_name = format!("books/{name}");
-                let archive_result: Result<(), AppError> = (|| {
-                    let bytes = std::fs::read(&path).map_err(AppError::Io)?;
-                    zip.start_file(&entry_name, opts)
-                        .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
-                    zip.write_all(&bytes)
-                        .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
-                    Ok(())
-                })();
-                if let Err(e) = archive_result {
-                    tracing::error!(error = %e, file = %path.display(), "backup: failed to archive book file");
-                    failed.push(path.display().to_string());
-                }
-            }
-
-            zip.finish()
-                .map_err(|e| AppError::Internal(format!("zip finalize: {e}")))?;
-
-            if !failed.is_empty() {
-                // 失败详情已记入日志；向客户端只返回固定文案（Internal 的统一行为）
-                return Err(AppError::Internal(format!(
-                    "backup incomplete: {} file(s) failed to archive",
-                    failed.len()
-                )));
-            }
-        }
-        Ok(zip_buf)
-    })
-    .await
-    .map_err(|e| AppError::Internal(format!("backup task failed: {e}")))??;
-
-    Ok(finalize_backup(zip_buf))
-}
-
-fn finalize_backup(zip_buf: Vec<u8>) -> Response {
     let timestamp = Utc::now().format("%Y%m%d_%H%M%S");
     let filename = format!("reader-backup-{timestamp}.zip");
-    Response::builder()
-        .header(header::CONTENT_TYPE, "application/zip")
-        .header(
-            header::CONTENT_DISPOSITION,
-            format!("attachment; filename=\"{filename}\""),
-        )
-        .body(Body::from(zip_buf))
-        .unwrap()
+    crate::utils::zip::stream_temp_zip(zip_path, format!("attachment; filename=\"{filename}\""))
+        .await
 }

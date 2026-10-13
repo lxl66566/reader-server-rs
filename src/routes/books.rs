@@ -66,14 +66,13 @@ pub struct RandomPublicParams {
     pub count: Option<i64>,
 }
 
-// 搜索查询参数
+// 搜索查询参数（分页复用 PaginationParams，由独立 Query 提取器解析；
+// 避免 serde(flatten) 与 urlencoded 的兼容性问题）
 // scope: 缺省="mine"（仅自己的书）；"public"=公开书库；"all"=两者去重
 #[derive(Debug, Deserialize, Default)]
 pub struct SearchParams {
     pub q: String,
     pub scope: Option<String>,
-    pub page: Option<u32>,
-    pub limit: Option<u32>,
 }
 
 // 搜索范围枚举：编译期约束，避免运行期字符串匹配出错
@@ -160,6 +159,8 @@ async fn upload_book(
     let mut author = None;
     let mut is_public = false;
     let mut file_content = None;
+    // 上传文件名（用于标题兜底）
+    let mut file_name: Option<String> = None;
 
     while let Some(field) = multipart
         .next_field()
@@ -188,6 +189,7 @@ async fn upload_book(
                 is_public = value == "true" || value == "1";
             },
             "file" => {
+                file_name = field.file_name().map(str::to_string);
                 file_content = Some(field.bytes().await.map_err(|e| {
                     map_multipart_err(&e, |s| AppError::FieldReadError("file".to_string(), s))
                 })?);
@@ -196,9 +198,14 @@ async fn upload_book(
         }
     }
 
-    // 验证必要字段
-    let title = title.ok_or_else(|| AppError::TitleEmpty)?;
+    // 验证必要字段：title 允许缺省（后续按 元数据/文件名 兜底），文件必须存在且非空
+    let title = title.unwrap_or_default();
     let file_content = file_content.ok_or_else(|| AppError::FileEmpty)?;
+
+    // 0 字节文件会成为“不可读之书”（/content 恒 400），直接拒绝
+    if file_content.is_empty() {
+        return Err(AppError::FileEmpty);
+    }
 
     // 验证文件大小（从配置读取上限）
     if file_content.len() > config.storage.max_file_size {
@@ -222,7 +229,7 @@ async fn upload_book(
                 .to_string();
             #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
             let tc = text.chars().count() as i64;
-            let chs = extract_chapters(&text);
+            let chs = extract_chapters(&text)?;
             // txt 元数据全部来自用户输入
             (tc, 0i64, chs, title, author)
         },
@@ -262,6 +269,21 @@ async fn upload_book(
                 final_author,
             )
         },
+    };
+
+    // 标题兜底：用户输入（trim 非空）> 格式元数据（epub/pdf 已并入）
+    // > 上传文件名（去扩展名）；全部为空则拒绝入库
+    let final_title = if final_title.trim().is_empty() {
+        file_name
+            .as_deref()
+            .and_then(|name| std::path::Path::new(name).file_stem())
+            .and_then(std::ffi::OsStr::to_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or(AppError::TitleEmpty)?
+            .to_string()
+    } else {
+        final_title
     };
 
     // 文件 hash（用原文件字节，不依赖格式）
@@ -972,6 +994,7 @@ async fn search_books(
     auth: AuthUser,
     State(pool): State<Pool<Sqlite>>,
     Query(params): Query<SearchParams>,
+    Query(pagination): Query<PaginationParams>,
 ) -> Result<Json<ApiResponse<BookListResponse>>, AppError> {
     let q = params.q.trim();
     if q.is_empty() {
@@ -979,10 +1002,8 @@ async fn search_books(
     }
 
     let scope = SearchScope::parse(params.scope.as_deref())?;
-    let page = params.page.unwrap_or(1).max(1);
-    let limit = params.limit.unwrap_or(10).clamp(1, 50);
-    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-    let offset = i64::from((page - 1) * limit);
+    // 复用 normalize：钳制 limit 并以 i64 计算 offset，避免 u32 乘法溢出
+    let (limit, offset) = pagination.normalize(10, 50);
 
     // 构造 LIKE 模式：`%query%`，先转义用户输入的特殊字符
     let pattern = format!("%{}%", escape_like(q));

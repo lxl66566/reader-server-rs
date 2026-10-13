@@ -102,17 +102,35 @@ const BarChart: ParentComponent<{
 }> = props => {
   const { locale, t } = useI18n();
   const max = () => Math.max(1, ...props.days.map(day => day.reading_seconds));
+  // 移动端无 hover：首/中/尾固定显示日期刻度，精确值仍由 title 提供
+  const ticks = (): string[] => {
+    const days = props.days;
+    if (days.length === 0) return [];
+    const picked = [
+      days[0],
+      days[Math.floor((days.length - 1) / 2)],
+      days.at(-1),
+    ];
+    return picked
+      .filter((day): day is (typeof days)[number] => day !== undefined)
+      .map(day => formatShortDate(day.date, locale()));
+  };
   return (
-    <div class="flex h-32 items-end gap-px">
-      <For each={props.days}>
-        {day => (
-          <div
-            class="bg-accent min-w-0 flex-1 rounded-t opacity-85 transition-opacity hover:opacity-100"
-            style={{ height: `${(day.reading_seconds / max()) * 100}%` }}
-            title={`${formatShortDate(day.date, locale())}: ${formatDuration(day.reading_seconds, t)}`}
-          />
-        )}
-      </For>
+    <div>
+      <div class="flex h-32 items-end gap-px">
+        <For each={props.days}>
+          {day => (
+            <div
+              class="bg-accent min-w-0 flex-1 rounded-t opacity-85 transition-opacity hover:opacity-100"
+              style={{ height: `${(day.reading_seconds / max()) * 100}%` }}
+              title={`${formatShortDate(day.date, locale())}: ${formatDuration(day.reading_seconds, t)}`}
+            />
+          )}
+        </For>
+      </div>
+      <div class="text-muted mt-1 flex justify-between text-[10px] tabular-nums">
+        <For each={ticks()}>{label => <span>{label}</span>}</For>
+      </div>
     </div>
   );
 };
@@ -135,7 +153,7 @@ const StateBlock: ParentComponent<{
 };
 
 function formatShortDate(dateStr: string, locale: string): string {
-  // Local noon keeps the date stable across timezones.
+  // 本地零点解析：仅用于展示，不涉及时区换算
   const date = new Date(`${dateStr}T00:00:00`);
   if (Number.isNaN(date.getTime())) return dateStr;
   return date.toLocaleDateString(locale, { day: 'numeric', month: 'numeric' });

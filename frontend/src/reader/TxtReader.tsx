@@ -13,6 +13,7 @@ import {
   untrack,
 } from 'solid-js';
 
+import { bookApi } from '../api';
 import { LoadErrorPanel } from '../components/LoadErrorPanel';
 import { useI18n } from '../i18n';
 import { fontFamilyCss, useSettings } from '../stores/settings';
@@ -24,11 +25,10 @@ import {
 import {
   animateScrollBy,
   bindScrollEdges,
-  isTap,
   PAGE_SCROLL_RATIO,
   scrollEdges,
-  tapZoneVertical,
   useStripFlip,
+  useVerticalTapZones,
 } from './gestures';
 import { measureCharsPerPage, type PageTypography } from './measure';
 import PageHint from './PageHint';
@@ -36,6 +36,7 @@ import { stripParagraphIndent } from './paragraph';
 import {
   chapterBounds,
   chapterIndexAt,
+  codePointLength,
   extendWindowDown,
   extendWindowUp,
   jumpWindow,
@@ -72,6 +73,8 @@ const TxtReader = (props: FormatReaderProps) => {
   const [ready, setReady] = createSignal(false);
   // bridge for navigator jumps while in scroll mode
   const [scrollJump, setScrollJump] = createSignal<null | number>(null);
+  // 滚动模式跳转的完成回调：ScrollView 执行完 jumpTo 后 resolve
+  let scrollJumpDone: ((ok: boolean) => void) | null = null;
 
   function initialOffset(): number {
     const fromLocator = Number.parseInt(props.initialLocator ?? '', 10);
@@ -113,23 +116,53 @@ const TxtReader = (props: FormatReaderProps) => {
     props.onPosition(String(at), Math.min(1, Math.max(0, percent)));
   };
 
-  const jumpToOffset = (at: number) => {
+  // 返回值表示跳转是否成功完成（供 Reader 挂起/恢复心跳回写）
+  const jumpToOffset = (at: number): Promise<boolean> => {
     const clamped = Math.min(Math.max(0, at), props.book.total_chars);
     if (settings.pagination_mode === 'paginate') {
       setOffset(clamped);
-    } else {
-      setScrollJump(clamped);
+      return Promise.resolve(true);
     }
+    // 滚动模式经信号桥接到 ScrollView，等待其串行执行完毕
+    return new Promise(resolve => {
+      scrollJumpDone?.(false); // 被新请求覆盖的旧跳转直接判失败
+      scrollJumpDone = resolve;
+      setScrollJump(clamped);
+    });
   };
 
   props.registerNavigator({
-    jumpToChapter: position => {
-      jumpToOffset(position);
-    },
+    jumpToChapter: position => jumpToOffset(position),
     jumpToLocator: locator => {
       const at = Number.parseInt(locator, 10);
-      if (Number.isFinite(at)) jumpToOffset(at);
+      return Number.isFinite(at) ? jumpToOffset(at) : Promise.resolve(false);
     },
+  });
+
+  // 深链（章节/定位）在视图就绪后经正常跳转路径应用，
+  // 保证与滚动模式的 init() 串行，避免并发竞争 scrollTop
+  let deepLinkDone = false;
+  createEffect(() => {
+    if (!ready() || deepLinkDone) return;
+    deepLinkDone = true;
+    const link = props.deepLink;
+    if (!link) return;
+    if (link.kind === 'locator') {
+      const at = Number.parseInt(link.locator, 10);
+      if (Number.isFinite(at)) void jumpToOffset(at);
+    } else {
+      void (async () => {
+        try {
+          const res = await bookApi.jumpToChapter(
+            props.book.book_id,
+            link.chapterId,
+          );
+          void jumpToOffset(res.position);
+        } catch {
+          // 章节解析失败：停留在初始位置
+        }
+      })();
+    }
   });
 
   // report once on ready and on every offset change
@@ -154,7 +187,13 @@ const TxtReader = (props: FormatReaderProps) => {
           initialOffset={offset()}
           jumpRequest={scrollJump}
           onInit={() => setReady(true)}
-          onJumpHandled={() => setScrollJump(null)}
+          onJumpHandled={jump => {
+            const done = scrollJumpDone;
+            scrollJumpDone = null;
+            setScrollJump(null); // 清空信号：相同目标的再次跳转仍可触发
+            // jump 链上已 settle（enqueueJump 保证不 reject），直接桥接结果
+            void jump.then(done ?? (() => undefined));
+          }}
           onOffsetChange={setOffset}
         />
       }
@@ -420,6 +459,7 @@ const PaginateView = (
 
   // 手势与翻页动画状态（共享 strip 模型）
   const gestures = useStripFlip({
+    bounds: () => container?.getBoundingClientRect() ?? null,
     canNext,
     canPrev,
     onCommit: dir => {
@@ -430,7 +470,6 @@ const PaginateView = (
     onTapCenter: () => {
       props.onTapCenter();
     },
-    width: () => container?.clientWidth ?? 1,
   });
 
   const typo = () => props.typography();
@@ -501,7 +540,8 @@ const ScrollView = (
     initialOffset: number;
     jumpRequest: () => null | number;
     onInit: () => void;
-    onJumpHandled: () => void;
+    /** 跳转请求已受理并开始执行；参数在其完成后以成败 resolve */
+    onJumpHandled: (jump: Promise<boolean>) => void;
     onOffsetChange: (at: number) => void;
   },
 ) => {
@@ -569,7 +609,7 @@ const ScrollView = (
       if (at >= chapterStart && at < chapterEnd) {
         paras.push({ offset: at, text: stripParagraphIndent(piece) });
       }
-      at += piece.length + 1; // +1 for the newline
+      at += codePointLength(piece) + 1; // +1 for the newline；码点口径与服务端偏移一致
     }
     paraCache.set(index, { paras, text });
     return paras;
@@ -597,6 +637,24 @@ const ScrollView = (
     setError(true);
   };
 
+  // 跳转与初始化串行执行：并发 jumpTo 会竞争 scrollTop 与窗口状态
+  // （如深链与 init() 同时触发时定位互相覆盖）
+  let jumpChain: Promise<boolean> = Promise.resolve(false);
+
+  // 跳转/初始化失败统一进错误态；job 永不 reject
+  const settle = (err: unknown): boolean => {
+    onLoadError(err);
+    return false;
+  };
+
+  const enqueueJump = (at: number): Promise<boolean> => {
+    const run = (): Promise<boolean> => jumpTo(at).then(() => true, settle);
+    // 链上前序失败不影响本次执行
+    const job = jumpChain.then(run, run);
+    jumpChain = job;
+    return job;
+  };
+
   // 主加载链路：失败进入错误态（可重试），而不是永远空白
   const init = async () => {
     await ensureWindow();
@@ -604,13 +662,17 @@ const ScrollView = (
     props.onInit();
   };
 
+  const runInit = () => {
+    jumpChain = init().then(() => true, settle);
+  };
+
   const retry = () => {
     setError(false);
-    void init().catch(onLoadError);
+    runInit();
   };
 
   onMount(() => {
-    void init().catch(onLoadError);
+    runInit();
     // 贴边跟踪独立于 scroll 事件：短章不足一屏时从不滚动，也要能出边界提示
     if (container) {
       const detach = bindScrollEdges(container, setAtEdge);
@@ -625,8 +687,7 @@ const ScrollView = (
   createEffect(() => {
     const at = props.jumpRequest();
     if (at !== null) {
-      props.onJumpHandled();
-      void jumpTo(at);
+      props.onJumpHandled(enqueueJump(at));
     }
   });
 
@@ -646,17 +707,22 @@ const ScrollView = (
     const next = jumpWindow(win(), chunk, chapterChunkBounds().maxEnd);
     if (next !== win()) setWin(next);
     await ensureWindow();
-    requestAnimationFrame(() => {
-      if (!container) return;
-      // 切到上一章时落到章末衔接阅读顺序，其余情况定位到目标段落
-      if (land === 'bottom') {
-        container.scrollTop = container.scrollHeight;
-        return;
-      }
-      const target = findParagraphEl(at);
-      if (target) {
-        container.scrollTop = Math.max(0, target.offsetTop - 12);
-      }
+    // 等 scrollTop 落定后再返回，让调用方（心跳挂起/恢复）拿到确定状态
+    await new Promise<void>(resolve => {
+      requestAnimationFrame(() => {
+        if (container) {
+          // 切到上一章时落到章末衔接阅读顺序，其余情况定位到目标段落
+          if (land === 'bottom') {
+            container.scrollTop = container.scrollHeight;
+          } else {
+            const target = findParagraphEl(at);
+            if (target) {
+              container.scrollTop = Math.max(0, target.offsetTop - 12);
+            }
+          }
+        }
+        resolve();
+      });
     });
   }
 
@@ -820,28 +886,12 @@ const ScrollView = (
   const hasPrevChapter = () =>
     props.book.chapters.length > 0 && chapterIdx() > 0;
 
-  let downAt: null | { t: number; x: number; y: number } = null;
-  const onPointerDown = (event: PointerEvent) => {
-    downAt = { t: Date.now(), x: event.clientX, y: event.clientY };
-  };
-  const onPointerUp = (event: PointerEvent) => {
-    if (!downAt || !container) return;
-    const { t, x, y } = downAt;
-    downAt = null;
-    if (!isTap(Date.now() - t, event.clientX - x, event.clientY - y)) return;
-    const rect = container.getBoundingClientRect();
-    const zone = tapZoneVertical(event.clientY, {
-      bottom: rect.bottom,
-      top: rect.top,
-    });
-    if (zone === 'top') {
-      pageScroll(-1);
-    } else if (zone === 'bottom') {
-      pageScroll(1);
-    } else {
-      props.onTapCenter();
-    }
-  };
+  // 点击分区（触摸走 touchend，桌面走 click 门控）：上/下 1/3 章内滚动
+  const tapZones = useVerticalTapZones({
+    bounds: () => container?.getBoundingClientRect() ?? null,
+    onPageScroll: pageScroll,
+    onTapCenter: props.onTapCenter,
+  });
 
   const typo = () => props.typography();
 
@@ -863,9 +913,11 @@ const ScrollView = (
         {/* 滚动容器全宽让滚动条贴屏幕右缘，列宽由内层限制并居中 */}
         <div
           class="h-full w-full overflow-y-auto"
-          onPointerDown={onPointerDown}
-          onPointerUp={onPointerUp}
+          onClick={tapZones.onClick}
+          onMouseDown={tapZones.onMouseDown}
           onScroll={onScroll}
+          onTouchEnd={tapZones.onTouchEnd}
+          onTouchStart={tapZones.onTouchStart}
           ref={container}
         >
           <div

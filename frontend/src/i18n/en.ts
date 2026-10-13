@@ -64,6 +64,7 @@ const en: Dict = {
   emptyBooks: 'No books yet. Upload one to get started.',
   emptyPublic: 'No public books yet',
   emptySearch: 'No matching books',
+  errorAborted: 'Canceled',
   errorGeneric: 'Operation failed',
   errorLoadFailed: 'Failed to load',
   errorNetwork: 'Network error, please retry later',
@@ -154,6 +155,7 @@ const en: Dict = {
   readerReconnectFailed:
     'Failed to reach the server, check your network or sign in again',
   readerReconnecting: 'Connection lost, reconnecting…',
+  readerReconnectManual: 'Disconnected — tap to reconnect',
   readerSaveNote: 'Save note',
   readerSettings: 'Settings',
   readerSyncJump: 'Jumped to the latest position from another device',
@@ -216,8 +218,9 @@ const en: Dict = {
   unbanUser: 'Unban',
   unknownAuthor: 'Unknown',
   uploadBook: 'Upload book',
-  uploadFile: 'Choose file',
+  uploadCancel: 'Cancel upload',
 
+  uploadFile: 'Choose file',
   uploadFileHint: 'TXT / EPUB / PDF supported, up to 50MB',
   uploading: 'Uploading…',
   uploadSubmit: 'Upload',

@@ -1,9 +1,18 @@
 use serde::{Deserialize, Serialize};
 
+/// 输入长度/字符集限制（协议层统一校验，防止超长输入撑大注册表与 DB）
+pub mod limits {
+    /// `device_id` 最大长度（字符数，字符集限定 ASCII 故等于字节数）
+    pub const DEVICE_ID_MAX_CHARS: usize = 64;
+    /// `locator` 最大长度（字节数，4KB 足够覆盖 EpubCFI 等最长格式）
+    pub const LOCATOR_MAX_BYTES: usize = 4 * 1024;
+}
+
 /// 客户端 → 服务端消息
 ///
 /// 约定：建立连接后必须先 `subscribe` 携带 `device_id` 进入某本书的阅读会话，
-/// 之后才能发 `heartbeat`。切换书籍时再次 `subscribe` 即可（自动退订旧书）。
+/// 之后才能发 `heartbeat`。订阅新书不会自动退订旧书；旧订阅通过显式
+/// `unsubscribe` 或断开连接清理。
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
@@ -26,6 +35,74 @@ pub enum ClientMessage {
     Unsubscribe { book_id: i64 },
 }
 
+impl ClientMessage {
+    /// 协议层输入校验；失败返回用于 error 帧的描述
+    pub fn validate(&self) -> Result<(), String> {
+        use limits::*;
+        match self {
+            Self::Subscribe { device_id, .. } => {
+                if device_id.is_empty() || device_id.len() > DEVICE_ID_MAX_CHARS {
+                    return Err(format!("device_id must be 1-{DEVICE_ID_MAX_CHARS} chars"));
+                }
+                if !device_id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+                {
+                    return Err("device_id may only contain [A-Za-z0-9_-]".to_string());
+                }
+            },
+            Self::Heartbeat { locator, .. } => {
+                if locator.is_empty() {
+                    return Err("locator must not be empty".to_string());
+                }
+                if locator.len() > LOCATOR_MAX_BYTES {
+                    return Err(format!("locator exceeds {LOCATOR_MAX_BYTES} bytes"));
+                }
+            },
+            Self::Unsubscribe { .. } => {},
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn subscribe(device_id: &str) -> ClientMessage {
+        ClientMessage::Subscribe {
+            book_id: 1,
+            device_id: device_id.to_string(),
+        }
+    }
+
+    fn heartbeat(locator: &str) -> ClientMessage {
+        ClientMessage::Heartbeat {
+            book_id: 1,
+            locator: locator.to_string(),
+            percent: 0.1,
+        }
+    }
+
+    #[test]
+    fn validate_device_id() {
+        assert!(subscribe("device-1_aZ9").validate().is_ok());
+        assert!(subscribe("").validate().is_err());
+        assert!(subscribe(" ").validate().is_err()); // 空白不在字符集白名单内
+        assert!(subscribe("含中文").validate().is_err());
+        assert!(subscribe(&"x".repeat(65)).validate().is_err());
+        assert!(subscribe(&"x".repeat(64)).validate().is_ok());
+    }
+
+    #[test]
+    fn validate_locator() {
+        assert!(heartbeat("100").validate().is_ok());
+        assert!(heartbeat("").validate().is_err());
+        assert!(heartbeat(&"x".repeat(4 * 1024)).validate().is_ok());
+        assert!(heartbeat(&"x".repeat(4 * 1024 + 1)).validate().is_err());
+    }
+}
+
 /// 服务端 → 客户端消息
 #[derive(Debug, Serialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -36,6 +113,10 @@ pub enum ServerMessage {
     HeartbeatAck {
         book_id: i64,
         synced: bool,
+        /// 本次心跳是否真正写入了服务端进度。
+        /// false 时（并发竞争失败/首跳让位）`locator`/`percent` 是服务端现值，
+        /// 客户端可据此区分「已保存」与「被丢弃」
+        updated: bool,
         locator: String,
         percent: f64,
         reading_time: i64,

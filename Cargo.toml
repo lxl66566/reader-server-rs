@@ -61,7 +61,6 @@ zip                = { version = "8", default-features = false, features = ["def
 tokio-tungstenite = "0.29"
 
 [build-dependencies]
-fuck-backslash  = "0.1"
 path-absolutize = "4"
 sqlx            = { version = "0.9", features = ["runtime-tokio", "sqlite"] }
 tokio           = { version = "1", features = ["full"] }
@@ -77,7 +76,7 @@ pedantic                = { level = "warn", priority = -1 }
 wildcard_imports        = "allow"
 
 [lints.rust]
-unsafe_code           = "allow"
+unsafe_code           = "deny"
 unused_qualifications = "warn"
 
 [profile.release]

@@ -4,12 +4,12 @@
 
 | HTTP status | 触发场景（典型） |
 |---|---|
-| 400 | 参数校验失败（用户名格式、密码为空、邀请码、上传文件格式/大小、批注范围、locator 为空、percent 越界、无效时区、无效搜索 scope、对非 txt 书调用 `/content` 等） |
-| 401 | 未登录 / token 过期 / 账户被锁定 / 账户被ban / token 角色不匹配 |
+| 400 | 参数校验失败（用户名格式、密码为空、邀请码、上传文件格式/大小/损坏（epub/pdf 解析失败）、空文件、章节数超上限、批注范围、locator 为空、percent 越界、无效时区、无效搜索 scope、对非 txt 书调用 `/content` 等） |
+| 401 | 未登录 / token 过期 / 账户被锁定 / 账户被ban / 账户已注销 / token 角色不匹配 |
 | 403 | 无权限访问 / 修改 / 删除目标资源（如非 owner 操作他人书） |
 | 404 | 资源不存在（书 / 章节 / 用户 / 书签 / 批注 / 管理员 / 书籍原文件在磁盘上丢失） |
 | 413 | 请求体超过大小上限（`storage.max_file_size` + multipart 开销，默认约 50MB） |
-| 429 | 限流（按 IP，默认 10 rps / burst 30） |
+| 429 | 限流（按客户端 IP，默认 20 rps / burst 70） |
 | 500 | 数据库 / IO / 内部错误（响应文案统一为 "Internal server error"，详情见服务端日志） |
 
 > 所有业务接口前缀统一为 `/api/v1`；健康检查 `/health` 不在版本前缀下。
@@ -95,16 +95,17 @@ type Annotation = {
 | GET | /health | - | - | 文本 "ok" |
 | POST | /api/v1/auth/register | - | Body: { username: string; password: string; invite_code?: string } | { user_id: number; username: string; token: string } |
 
-> 用户名规则：2-20 个字符，仅限中英文/字母/数字/`_`/`-`；注册、管理员 setup 与新增管理员均校验，不满足返回 400。
+> 用户名规则：1-20 个字符（按字符计），仅限中英文/字母/数字/`_`/`-`；注册、管理员 setup 与新增管理员均校验，不满足返回 400。
 
-> 全局按客户端 IP 维度限流，默认 10 rps / burst 30；超限返回 429。
-> `/health` 与带 If-None-Match 命中的请求不消耗带宽。
+> 全局按客户端 IP 维度限流，默认 20 rps / burst 70；超限返回 429。
+> 限流 key 默认取 TCP 连接的对端地址（直连部署）；部署在反向代理之后时需在 config.json 开启 `rate_limit.trust_proxy_headers`，此时改用 `X-Forwarded-For` / `X-Real-IP` / `Forwarded` 头（务必确保反代会正确改写这些头，否则可被伪造绕过）。
+> `/health` 不受限流；带 If-None-Match 命中的请求不消耗带宽。
 | POST | /api/v1/auth/login | - | Body: { username: string; password: string } | { user_id: number; username: string; token: string } |
 | GET | /api/v1/auth/user_info | Auth | - | { user_id: number; username: string; total_reading_time: number; book_count: number; status: 'active' \| 'banned' } |
 | POST | /api/v1/auth/change_password | Auth | Body: { old_password: string; new_password: string } | {} |
 | DELETE | /api/v1/auth/account | Auth | Body: { password: string } | {} |
 | GET | /api/v1/auth/export | Auth | - | application/zip 流，文件名 `<username>_<timestamp>.zip`，内含 metadata.json（书/章节/进度/设置/书签/批注）+ 所有原始书籍文件（保留原格式） |
-| POST | /api/v1/auth/admin/setup | - | Body: { username: string; password: string } | { admin_token: string } |
+| POST | /api/v1/auth/admin/setup | - | Body: { username: string; password: string } | { admin_token: string }；仅允许一次，重复/并发调用只有首个成功（原子语句保证），其余返回 400 |
 | POST | /api/v1/auth/admin/login | - | Body: { username: string; password: string } | { admin_token: string } |
 
 ### 管理员
@@ -115,7 +116,7 @@ type Annotation = {
 | POST | /api/v1/admin/password | Admin | Body: { old_password: string; new_password: string } | {}；改密后所有旧 admin_token 立即失效 |
 | POST | /api/v1/admin/invite_code | Admin | Body: { limit_times: number; description?: string } | { invite_code: string; limit_times: number; description: string \| null } |
 | GET | /api/v1/admin/invite_codes | Admin | - | { invite_codes: InviteCodeItem[] } |
-| GET | /api/v1/admin/settings | Admin | - | { invite_code_required: boolean } |
+| GET | /api/v1/admin/settings | Admin | - | { id: number; invite_code_required: boolean }（settings 行缺失时返回缺省 invite_code_required=false，与注册侧行为一致） |
 | PUT | /api/v1/admin/settings | Admin | Body: { invite_code_required: boolean } | {} |
 | GET | /api/v1/admin/users | Admin | - | { users: UserItem[] } |
 | POST | /api/v1/admin/users/:user_id/reset_password | Admin | Body: { new_password: string } | {} |
@@ -129,20 +130,23 @@ type Annotation = {
 
 ### 书籍管理
 
-> 文件大小上限默认 50MB（可在 config.json 的 `storage.max_file_size` 调整）；超过请求体上限返回 413，超过文件大小校验返回 400。
-> 上传时服务端基于内容签名（`%PDF-`、zip magic、UTF-8 解码）自动识别格式，不依赖客户端扩展名。
+> 文件大小上限默认 50MB（可在 config.json 的 `storage.max_file_size` 调整）；超过请求体上限返回 413，超过文件大小校验返回 400；0 字节文件返回 400。
+> 上传时服务端基于内容签名（`%PDF-`、zip magic、UTF-8 解码）自动识别格式，不依赖客户端扩展名；内容损坏（epub/pdf 无法解析）返回 400 而非 500。
+> txt 仅支持 UTF-8 编码：非 UTF-8（常见为 GBK/GB18030）返回 400，请转换编码后重新上传。
+> 标题兜底链：用户输入（trim 非空）> epub/pdf 内嵌元数据 > 上传文件名（去扩展名）；全部为空返回 400。
+> 单本书章节数上限 50_000（防御构造性文本），超出返回 400。
 > 分页接口（`/books`、`/books/public`、`/books/search`、`/admin/audit_logs`）：`page` 小于 1 按第一页处理；`limit` 有上限（书籍列表 50、审计日志 100），超限自动钳制。
 
 | 方法 | URL | 权限 | 请求参数 | 响应 data |
 |---|---|---|---|---|
-| POST | /api/v1/books/upload | Auth | FormData: file (txt/epub/pdf), title: string, author?: string, is_public: boolean | { book_id: number; title: string; author: string \| null; format: BookFormat; total_chars: number; total_pages: number; chapters: { chapter_id: number; title: string; position: number }[] } |
+| POST | /api/v1/books/upload | Auth | FormData: file (txt/epub/pdf), title?: string, author?: string, is_public: boolean | { book_id: number; title: string; author: string \| null; format: BookFormat; total_chars: number; total_pages: number; chapters: { chapter_id: number; title: string; position: number }[] } |
 | GET | /api/v1/books?page=number&limit=number | Auth | - | { total: number; books: Book[] } |
 | GET | /api/v1/books/search?q=string&scope=mine\|public\|all&page=number&limit=number | Auth | - | { total: number; books: Book[] } |
 | GET | /api/v1/books/:book_id | Auth | - | BookDetail |
 | GET | /api/v1/books/:book_id/file | Auth | Header: If-None-Match? | 200 + ETag：原文件字节流（Content-Type 按 format：text/plain; application/epub+zip; application/pdf）；ETag 命中返回 304。epub/pdf 客户端渲染时使用，txt 也可用 |
 | GET | /api/v1/books/:book_id/content?position=number&length=number | Auth | Header: If-None-Match? | **仅 txt 格式可用**；epub/pdf 调用返回 400。200 + ETag：{ content: string; next_position: number }；ETag 命中返回 304 |
 | GET | /api/v1/books/:book_id/jump_to_chapter?chapter_id=number | Auth | - | { position: number }（txt=字符偏移；epub=spine 索引；pdf 通常无章节） |
-| PUT | /api/v1/books/:book_id | Auth | Body: { title?: string; author?: string; is_public?: boolean } | {} |
+| PUT | /api/v1/books/:book_id | Auth | Body: { title?: string; author?: string; is_public?: boolean; cover_path?: string } | {} |
 | DELETE | /api/v1/books/:book_id | Auth | - | {} |
 | GET | /api/v1/books/public?page=number&limit=number | Auth | - | { total: number; books: PublicBook[] } |
 | GET | /api/v1/books/:book_id/tags | Auth | - | { tags: string[] } |
@@ -188,8 +192,8 @@ type Annotation = {
 
 | type | 字段 | 说明 |
 |---|---|---|
-| `subscribe` | `book_id: number`, `device_id: string` | 进入阅读页面时调用，声明本连接的设备标识并开始接收该书进度广播；同一连接再次 subscribe 同一本书会以新 `device_id` 覆盖旧订阅 |
-| `heartbeat` | `book_id: number`, `locator: string`, `percent: number` | 上报阅读位置 + 进度（前端计算）；服务端据此累加阅读时间并广播进度。必须先 subscribe 才能心跳。locator/percent 语义见上方"重要概念"小节 |
+| `subscribe` | `book_id: number`, `device_id: string` | 进入阅读页面时调用，声明本连接的设备标识并开始接收该书进度广播；同一连接再次 subscribe 同一本书会以新 `device_id` 覆盖旧订阅。`device_id` 须为 1-64 个字符、仅限 `[A-Za-z0-9_-]`，否则返回 error 帧。`book_id` 必须存在且可访问（本人书籍或公开书），否则返回 error 帧（文案与 HTTP 404/403 语义一致：`Book not found` / `Access denied to this book`）。每连接最多同时订阅 16 本书，超限的新订阅返回 error 帧（已订阅书籍的重订阅不受限） |
+| `heartbeat` | `book_id: number`, `locator: string`, `percent: number` | 上报阅读位置 + 进度（前端计算）；服务端据此累加阅读时间并广播进度。必须先 subscribe 才能心跳。`locator` 非空且不超过 4KB。locator/percent 语义见上方"重要概念"小节 |
 | `unsubscribe` | `book_id: number` | 离开阅读页面时调用 |
 
 #### 服务端 → 客户端（JSON 文本帧，`type` 取值如下）
@@ -197,7 +201,7 @@ type Annotation = {
 | type | 字段 | 说明 |
 |---|---|---|
 | `subscribed` | `book_id` | 订阅成功 |
-| `heartbeat_ack` | `book_id`, `synced: boolean`, `locator: string`, `percent: number`, `reading_time: number` | 心跳响应。`synced=false` 表示上次心跳来自另一台设备：本次不写入进度/时长，但服务端已将设备标识让位给本设备（下一次心跳起正常接管写入），客户端应跳转到返回的 `locator` 以保持多端同步 |
+| `heartbeat_ack` | `book_id`, `synced: boolean`, `updated: boolean`, `locator: string`, `percent: number`, `reading_time: number` | 心跳响应。`synced=false` 表示上次心跳来自另一台设备：本次不写入进度/时长，但服务端已将设备标识让位给本设备（下一次心跳起正常接管写入），客户端应跳转到返回的 `locator` 以保持多端同步。`updated` 表示本次心跳是否真正写入了服务端进度：`false` 时（首跳让位 / 并发心跳竞争失败）`locator`/`percent`/`reading_time` 均为服务端现值，客户端可据此区分「已保存」与「被丢弃」。`updated` 为新增字段，向后兼容：旧前端忽略未知 JSON 字段即可 |
 | `progress_update` | `book_id`, `locator: string`, `percent: number`, `reading_time: number`, `device_id: string` | 广播：同账号下另一台设备刚刚更新了进度，本设备应跳转以保持多端同步 |
 | `bookmark_changed` | `book_id`, `action: 'created' \| 'deleted'`, `bookmark_id: number` | 广播：另一端刚增删了书签；客户端收到后应重新拉取书签列表 |
 | `annotation_changed` | `book_id`, `action: 'created' \| 'updated' \| 'deleted'`, `annotation_id: number` | 广播：另一端刚增改删了批注；客户端收到后应重新拉取批注列表 |
@@ -206,10 +210,12 @@ type Annotation = {
 
 #### 行为细节
 
-- 服务端每 30s 主动发送 WebSocket `Ping`；客户端无响应超过 120s 将被断开。
-- 心跳间隔需 ≤ 30s，否则相邻两次心跳的间隔不计入阅读时间。
+- 同一用户最多同时保持 8 个 ws 连接（正常的多设备 + 标签页使用远不会触及）；超限的新连接在升级完成后被服务端立即关闭。
+- 服务端每 30s 主动发送 WebSocket `Ping`。断开判定只统计客户端上行数据帧（Text/Binary）：超过 120s 未收到任何数据帧即断开连接；`Ping`/`Pong` 不计入活跃，不能用于保活。
+- 只有与上一次成功心跳间隔小于 30s 时，该间隔才计入阅读时长（前端每秒心跳时约计 1s；更长的间隔视为非阅读时间，丢弃）。
 - 阅读时长 / 连续阅读天数按用户的 `reading_settings.timezone` 归算（默认 UTC），避免跨时区用户在日期边界错位。
 - 当某次心跳与 `last_device_id` 不一致时（上次心跳来自另一台设备），返回服务端最新进度并 `synced=false`，**不广播**；同时服务端将 `last_device_id` 让位给本次心跳的设备（不改进度/时长），因此该设备的下一次心跳即可正常接管写入，旧设备若继续心跳则会反过来收到 `synced=false`。
+- 双设备同书同时活跃心跳的设计后果：`last_device_id` 随每次心跳逐秒让位，双方交替收到 `synced=false`，两台设备的进度与阅读时长都不会落库（服务端以"最后接管者"为准）。前端如需两端各自记录进度/时长，应使用不同账号；同账号双端阅读仅适合"接力"场景。
 - 书签 / 批注的 HTTP 写接口会向订阅同 (user, book) 的其它 ws 连接广播 `bookmark_changed` / `annotation_changed`；请求头 `X-Device-Id` 可用于让服务端排除发起方连接，避免回环通知。
 
 ## 前端实现指引（按 format）

@@ -5,6 +5,7 @@ use uuid::Uuid;
 use crate::error::AppError;
 
 pub mod utf8;
+pub mod zip;
 
 /// 简易 `ETag` 哈希：用 FNV-1a 64bit，足够短、足够快、无外部依赖
 /// 返回带双引号的 `ETag` 字符串（符合 RFC 7232）

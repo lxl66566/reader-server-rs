@@ -22,17 +22,26 @@ import {
   convertDirection,
   loadChineseConverter,
 } from '../utils/opencc';
+import {
+  estimatePercent,
+  LOCATIONS_TIMEOUT_MS,
+  settlesWithin,
+} from './epubProgress';
 import { sanitizeEpubArchive } from './epubSanitize';
 import {
-  animateScrollBy,
-  attachTapSwipeGestures,
   bindScrollEdges,
-  PAGE_SCROLL_RATIO,
-  scrollEdges,
+  attachTapSwipeGestures,
+  isTextEntryTarget,
 } from './gestures';
 import PageHint from './PageHint';
 import { stripEpubParagraphIndent } from './paragraph';
-import type { FormatReaderProps } from './types';
+import type { DeepLink, FormatReaderProps } from './types';
+
+// epub.js 的 Spine 类型未声明 spineItems（章节数组），运行时存在；
+// 收窄类型以取得章节数，供降级 percent 估算用
+const spineLengthOf = (b: Book): number =>
+  (b.spine as Book['spine'] & { spineItems?: unknown[] }).spineItems?.length ??
+  0;
 
 const EpubReader = (props: FormatReaderProps) => {
   const { settings } = useSettings();
@@ -51,7 +60,10 @@ const EpubReader = (props: FormatReaderProps) => {
   const [sectionIndex, setSectionIndex] = createSignal<null | number>(null);
   let pendingLocator: null | string = null;
   let locationsReady = false;
+  // locations 超时/失败后的降级模式：percent 按 spine 章节中点估算
+  let percentFallback = false;
   let lastCfi: null | string = null;
+  let deepLinkConsumed = false;
   let detachScrollEdge: (() => void) | null = null;
 
   onMount(() => {
@@ -66,15 +78,18 @@ const EpubReader = (props: FormatReaderProps) => {
     });
   });
 
-  // 主加载链路的统一入口：失败时进入错误态而不是永远停在加载态
-  async function runSetup(): Promise<void> {
+  // 主加载链路的统一入口：失败时进入错误态而不是永远停在加载态。
+  // startAt：重建（切换翻页模式）时传入跳转前的当前位置，避免回退到旧进度
+  async function runSetup(startAt?: string): Promise<void> {
     setError(false);
     detachScrollEdge?.();
     detachScrollEdge = null;
     setAtEdge({ bottom: false, top: false });
     setSectionIndex(null);
+    locationsReady = false; // 重建后 locations 需重新生成
+    percentFallback = false;
     try {
-      await setup();
+      await setup(startAt);
     } catch (err) {
       console.error('Failed to load epub book', err);
       // 销毁半成品实例，让重试从干净状态开始
@@ -86,7 +101,22 @@ const EpubReader = (props: FormatReaderProps) => {
     }
   }
 
-  async function setup(): Promise<void> {
+  // 深链解析：定位直接用 locator；章节经后端换算为 spine 下标后取 href
+  async function resolveDeepLink(link: DeepLink): Promise<null | string> {
+    if (link.kind === 'locator') return link.locator;
+    try {
+      const res = await bookApi.jumpToChapter(
+        props.book.book_id,
+        link.chapterId,
+      );
+      const section = book?.spine.get(res.position);
+      return section ? section.href : null;
+    } catch {
+      return null; // 解析失败回退到保存的进度
+    }
+  }
+
+  async function setup(startAt?: string): Promise<void> {
     if (!container) return;
     // 修复部分电子书（XHTML 允许、HTML 解析器不认）自闭合的 raw-text 标签，
     // 否则章节正文会被 script 标签吞掉，整章渲染为空白
@@ -96,6 +126,20 @@ const EpubReader = (props: FormatReaderProps) => {
     // 每次重建都切一份副本给 epub.js，避免其实例污染共享缓存
     book = ePub(cachedData.slice(0));
     await book.ready;
+
+    // 首次加载消费深链（章节/定位），优先于保存的进度
+    let start = startAt ?? null;
+    if (!deepLinkConsumed && props.deepLink) {
+      deepLinkConsumed = true;
+      start = (await resolveDeepLink(props.deepLink)) ?? start;
+    }
+    const savedCfi =
+      props.initialLocator?.includes('epubcfi') === true
+        ? props.initialLocator
+        : null;
+    const target = start ?? savedCfi;
+    // 无任何 cfi 起点（首次加载且未存进度）时，locations 生成后按 percent 落位
+    const honorBarePercent = target === null;
 
     const scrolled = settings.pagination_mode === 'scroll';
     rendition = book.renderTo(container, {
@@ -119,11 +163,9 @@ const EpubReader = (props: FormatReaderProps) => {
       },
     );
 
-    // initial position: saved cfi, or percent-based cfi once locations exist
-    const startAt = props.initialLocator;
-    if (startAt && startAt.includes('epubcfi')) {
+    if (target) {
       try {
-        await rendition.display(startAt);
+        await rendition.display(target);
       } catch {
         // 保存的 cfi 可能已过期（如书籍重新处理过）：回退到起始位置
         await rendition.display();
@@ -139,43 +181,73 @@ const EpubReader = (props: FormatReaderProps) => {
       pendingLocator = null;
     }
 
-    // locations give us percent mapping; generate in the background
-    void book.locations
-      .generate(1600)
-      .then(() => {
-        locationsReady = true;
-        // honor a bare percent progress when no cfi was saved
-        if (!startAt?.includes('epubcfi') && props.book.percent > 0 && book) {
-          const cfi = book.locations.cfiFromPercentage(props.book.percent);
-          void displaySafe(cfi);
-        }
-        reportPosition();
-      })
-      .catch(() => {
-        // locations are best-effort: progress display degrades to 0
-      });
+    // locations give us percent mapping; generate with a timeout so that
+    // huge books (慢或失败) degrade to spine-based estimates instead of
+    // blocking progress reporting forever
+    generateLocationsWithFallback(book, honorBarePercent);
 
     reportPosition();
   }
 
-  async function displaySafe(target: string): Promise<void> {
-    if (!rendition) return;
+  /**
+   * locations 生成（带超时降级）。一次性判定：超时/失败即转入 spine
+   * 估算且本会话不再升级回精确换算，避免 percent 中途跳变；期间
+   * rendition 重建（book 实例更换）则本次结果作废。
+   */
+  function generateLocationsWithFallback(
+    target: Book,
+    honorBarePercent: boolean,
+  ): void {
+    void settlesWithin(
+      target.locations.generate(1600),
+      LOCATIONS_TIMEOUT_MS,
+    ).then(ok => {
+      if (book !== target) return;
+      if (ok) {
+        locationsReady = true;
+        // honor a bare percent progress when no cfi was saved
+        if (honorBarePercent && props.book.percent > 0) {
+          const cfi = target.locations.cfiFromPercentage(props.book.percent);
+          void displaySafe(cfi);
+        }
+      } else {
+        // 生成超时/失败：降级为 spine 估算，心跳不中断（精度退化到章级）；
+        // 无法换算 cfi，honorBarePercent 的按 percent 落位只能放弃
+        percentFallback = true;
+      }
+      reportPosition();
+    });
+  }
+
+  async function displaySafe(target: string): Promise<boolean> {
+    if (!rendition) return false;
     try {
       await rendition.display(target);
+      return true;
     } catch {
       // stale locator (e.g. from another epub build): stay where we are
+      return false;
     }
   }
 
   function reportPosition(): void {
-    if (!lastCfi) return;
-    let percent = props.book.percent;
-    if (locationsReady && book) {
+    if (!lastCfi || !book) return;
+    let percent: number;
+    if (locationsReady) {
       try {
         percent = book.locations.percentageFromCfi(lastCfi);
       } catch {
-        // cfi outside generated locations: keep previous percent
+        return; // cfi 超出 locations 范围：本次无法给出可靠 percent
       }
+    } else if (percentFallback) {
+      // 降级：locations 不可用，按当前章 spine 中点估算
+      const idx = sectionIndex();
+      if (idx === null) return;
+      percent = estimatePercent(idx, spineLengthOf(book));
+    } else {
+      // locations 仍在生成：跳过本次上报（心跳暂停由 Reader 处理），
+      // 避免把页面加载时的旧 percent 写进跨设备同步
+      return;
     }
     props.onPosition(lastCfi, Math.min(1, Math.max(0, percent)));
   }
@@ -252,6 +324,14 @@ const EpubReader = (props: FormatReaderProps) => {
           convertDirection(settings.chinese_conversion),
         );
       });
+      // iframe 内的事件不会冒泡到父窗口：转发交互信号给宿主的活跃检测，
+      // 否则分页模式点按翻页 60s 后会被判为不活跃、心跳停发
+      const forwardActivity = () => props.onActivity?.();
+      for (const event of ['pointerdown', 'touchstart', 'keydown'] as const) {
+        contents.document.addEventListener(event, forwardActivity, {
+          passive: true,
+        });
+      }
       attachGestures(contents.document);
     });
   }
@@ -307,29 +387,23 @@ const EpubReader = (props: FormatReaderProps) => {
   // --- gestures: swipe flips a page (paginate mode), tap zones flip/toggle ---
   function attachGestures(doc: Document): void {
     attachTapSwipeGestures(doc, {
+      bounds: () => container?.getBoundingClientRect() ?? null,
       onFlip: dir => {
         void flip(dir);
-      },
-      onPageScroll: dir => {
-        pageScroll(dir);
       },
       onTapCenter: () => {
         props.onTapCenter();
       },
       paginate: () => settings.pagination_mode === 'paginate',
-      // iframe 撑满整章内容高度，事件 clientY 相对整章而非可视区，
-      // 需换算到 manager 容器的滚动区才能正确划分上/中/下区
-      visibleRange: () => {
-        const el = scrolledContainer();
-        const top = el?.scrollTop ?? 0;
-        const bottom = el
-          ? top + el.clientHeight
-          : doc.documentElement.clientHeight;
-        return { bottom, top };
-      },
-      width: () => container?.clientWidth ?? 1,
     });
   }
+
+  // 滚动模式下 iframe 之外的宿主区域（短章下方、渲染间隙）没有 iframe
+  // 手势，点击同样唤出 chrome，避免出现"点了没反应"的死区
+  const onHostTap = () => {
+    if (settings.pagination_mode !== 'scroll') return;
+    props.onTapCenter();
+  };
 
   // epub.js 运行时在 rendition 上挂载 manager 实例（类型未声明），
   // 收窄到滚动翻页所需的容器字段
@@ -340,34 +414,6 @@ const EpubReader = (props: FormatReaderProps) => {
         | undefined
         | { manager?: { container?: HTMLDivElement } }
     )?.manager?.container;
-
-  // --- 滚动模式翻页：章内滚动 PAGE_SCROLL_RATIO 视口，章节边界处切换章节 ---
-
-  function pageScroll(dir: -1 | 1): void {
-    const el = scrolledContainer();
-    if (!el) return;
-    const edges = scrollEdges(el);
-    if (dir > 0 ? edges.bottom : edges.top) {
-      void turnChapter(dir);
-      return;
-    }
-    animateScrollBy(el, dir * el.clientHeight * PAGE_SCROLL_RATIO);
-  }
-
-  async function turnChapter(dir: -1 | 1): Promise<void> {
-    if (!rendition) return;
-    if (dir > 0) await rendition.next();
-    else await rendition.prev();
-    // 上一章从头显示，落到其末尾以衔接阅读顺序（首末章越界时 next/prev 为空操作）
-    if (dir < 0) {
-      const el = scrolledContainer();
-      if (el) {
-        requestAnimationFrame(() => {
-          el.scrollTop = el.scrollHeight;
-        });
-      }
-    }
-  }
 
   // 跟踪 manager 容器贴边状态，维护章节边界提示的显隐（仅滚动模式）
   function watchScrollEdge(): void {
@@ -405,9 +451,8 @@ const EpubReader = (props: FormatReaderProps) => {
         book = null;
         rendition = null;
         setReady(false);
-        void runSetup().then(() => {
-          if (current) void displaySafe(current);
-        });
+        // 以当前位置作为重建起点，避免 display(initialLocator) 短暂回退旧进度
+        void runSetup(current ?? undefined);
       },
       { defer: true },
     ),
@@ -417,6 +462,8 @@ const EpubReader = (props: FormatReaderProps) => {
   onMount(() => {
     const onKey = (event: KeyboardEvent) => {
       if (settings.pagination_mode !== 'paginate') return;
+      // 弹窗输入框内的方向键不翻页
+      if (isTextEntryTarget(event.target)) return;
       if (event.key === 'ArrowLeft') void flip(-1);
       if (event.key === 'ArrowRight') void flip(1);
     };
@@ -429,11 +476,13 @@ const EpubReader = (props: FormatReaderProps) => {
   props.registerNavigator({
     jumpToChapter: position => {
       const section = book?.spine.get(position);
-      if (section) void displaySafe(section.href);
+      return section ? displaySafe(section.href) : Promise.resolve(false);
     },
     jumpToLocator: locator => {
-      if (ready()) void displaySafe(locator);
-      else pendingLocator = locator;
+      if (ready()) return displaySafe(locator);
+      // 尚未就绪：暂存到 setup 完成后执行（消费路径触发 relocated → onPosition）
+      pendingLocator = locator;
+      return Promise.resolve(true);
     },
   });
 
@@ -441,6 +490,7 @@ const EpubReader = (props: FormatReaderProps) => {
     <div class="relative h-full w-full">
       <div
         class="mx-auto h-full w-full"
+        onClick={onHostTap}
         ref={container}
         style={{
           // scrolled 模式滚动发生在容器内，全宽让滚动条贴屏幕右缘；

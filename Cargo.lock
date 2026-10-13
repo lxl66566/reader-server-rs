@@ -1063,12 +1063,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fuck-backslash"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4e85622f154e07e30c696eac13b064cba35143d3831323adfd8a1cd96e6789c"
-
-[[package]]
 name = "futures-channel"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2540,7 +2534,6 @@ dependencies = [
  "color-eyre",
  "epub",
  "fancy-regex",
- "fuck-backslash",
  "futures-util",
  "http-body-util",
  "infer",

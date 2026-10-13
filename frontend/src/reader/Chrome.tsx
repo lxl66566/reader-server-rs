@@ -28,11 +28,14 @@ export interface ChromeProps {
   bookmarks: () => Bookmark[] | undefined;
   currentPosition: () => null | { locator: string; percent: number };
   navigator: () => null | ReaderNavigator;
+  onRetryReconnect: () => void;
   percent: () => number;
   reconnecting: () => boolean;
   refetchAnnotations: () => void;
   refetchBookmarks: () => void;
   visible: () => boolean;
+  /** 自动重连已放弃：横幅变为手动重连入口 */
+  wsGaveUp: () => boolean;
 }
 
 type Panel = 'annotations' | 'bookmarks' | 'settings' | 'toc' | null;
@@ -53,9 +56,20 @@ const Chrome = (props: ChromeProps) => {
     <>
       {/* reconnecting hint is always visible, even with chrome hidden */}
       <Show when={props.reconnecting()}>
-        <div class="safe-top absolute top-0 left-0 z-30 w-full bg-black/60 py-1 text-center text-xs text-white">
+        <div class="bg-fg/70 text-bg safe-top absolute top-0 left-0 z-30 w-full py-1 text-center text-xs">
           {t('readerReconnecting')}
         </div>
+      </Show>
+      {/* 自动重连放弃：横幅变为可点击的手动重连入口 */}
+      <Show when={props.wsGaveUp()}>
+        <button
+          class="bg-fg/70 text-bg hover:bg-fg/85 safe-top absolute top-0 left-0 z-30 w-full cursor-pointer py-1 text-center text-xs underline-offset-2 hover:underline"
+          onClick={() => {
+            props.onRetryReconnect();
+          }}
+        >
+          {t('readerReconnectManual')}
+        </button>
       </Show>
 
       <Show when={props.visible()}>
@@ -115,7 +129,7 @@ const Chrome = (props: ChromeProps) => {
         onClose={() => setPanel(null)}
         onJump={position => {
           jump(nav => {
-            nav.jumpToChapter(position);
+            void nav.jumpToChapter(position);
           });
         }}
         open={panel() === 'toc'}
@@ -127,7 +141,7 @@ const Chrome = (props: ChromeProps) => {
         onClose={() => setPanel(null)}
         onJump={locator => {
           jump(nav => {
-            nav.jumpToLocator(locator);
+            void nav.jumpToLocator(locator);
           });
         }}
         open={panel() === 'bookmarks'}
@@ -140,7 +154,7 @@ const Chrome = (props: ChromeProps) => {
         onClose={() => setPanel(null)}
         onJump={locator => {
           jump(nav => {
-            nav.jumpToLocator(locator);
+            void nav.jumpToLocator(locator);
           });
         }}
         open={panel() === 'annotations'}

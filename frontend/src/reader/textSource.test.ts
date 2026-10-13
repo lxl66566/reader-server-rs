@@ -3,10 +3,12 @@ import { describe, expect, it } from 'vitest';
 import {
   chapterBounds,
   chapterIndexAt,
+  codePointLength,
   extendWindowDown,
   extendWindowUp,
   jumpWindow,
   MAX_SCROLL_WINDOW_CHUNKS,
+  sliceByCodePoints,
   TextSource,
   TXT_CHUNK_SIZE,
 } from './textSource';
@@ -74,6 +76,56 @@ describe('TextSource', () => {
     expect(source.slice(TXT_CHUNK_SIZE - 10, TXT_CHUNK_SIZE + 10)).toBe(
       expected(TXT_CHUNK_SIZE - 10, TXT_CHUNK_SIZE),
     );
+  });
+  it('slices by code points when chunks contain non-BMP chars', async () => {
+    // 非 BMP 字符（𝄞 U+1D11E、𠀀 U+20000）占 2 个码元但按 1 个码点计，
+    // 服务端 total_chars / locator / 章节偏移均为码点口径
+    const book = `𝄞${'a'.repeat(9)}\n${'𠀀'.repeat(5)}b\n${'c'.repeat(TXT_CHUNK_SIZE)}tail`;
+    const total = codePointLength(book);
+    const loader = (position: number, length: number) => {
+      const end = Math.min(position + length, total);
+      return Promise.resolve({
+        content: sliceByCodePoints(book, position, end),
+        next_position: end,
+      });
+    };
+    const source = new TextSource(1, total, loader);
+
+    // 跨 chunk、跨代理对切片：结果与按码点构造的期望一致
+    await source.ensureRange(TXT_CHUNK_SIZE - 3, TXT_CHUNK_SIZE + 3);
+    expect(source.slice(TXT_CHUNK_SIZE - 3, TXT_CHUNK_SIZE + 3)).toBe(
+      sliceByCodePoints(book, TXT_CHUNK_SIZE - 3, TXT_CHUNK_SIZE + 3),
+    );
+    // 全书往返：任意码点区间切片不劈开代理对
+    for (const [from, to] of [
+      [0, 1],
+      [1, 8],
+      [total - 4, total],
+    ] as const) {
+      expect(source.slice(from, to)).toBe(sliceByCodePoints(book, from, to));
+      expect(/[\ud800-\udbff]$/.exec(source.slice(from, to))).toBeNull();
+    }
+  });
+});
+
+describe('code point helpers', () => {
+  it('counts surrogate pairs as one code point', () => {
+    expect(codePointLength('abc')).toBe(3);
+    expect(codePointLength('𝄞')).toBe(1);
+    expect(codePointLength('𠀀𠀀x')).toBe(3);
+    // 孤立高代理按 1 计（防御路径，正常内容不出现）
+    expect(codePointLength('\ud800x')).toBe(2);
+  });
+
+  it('slices on code point boundaries', () => {
+    const text = 'a𝄞b𠀀c';
+    expect(sliceByCodePoints(text, 0, 2)).toBe('a𝄞');
+    expect(sliceByCodePoints(text, 2, 4)).toBe('b𠀀');
+    expect(sliceByCodePoints(text, 4, 5)).toBe('c');
+    // 越界钳制
+    expect(sliceByCodePoints(text, 4, 99)).toBe('c');
+    expect(sliceByCodePoints(text, 99, 100)).toBe('');
+    expect(sliceByCodePoints(text, 2, 2)).toBe('');
   });
 });
 

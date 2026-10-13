@@ -9,7 +9,6 @@ const SCHEMA_SQL: &str = include_str!("schema.sql");
 
 // build.rs runs in a sync context, so we need a runtime to run sqlx async
 // functions
-use fuck_backslash::FuckBackslash;
 use path_absolutize::Absolutize;
 // We need the execute trait from sqlx prelude
 use sqlx::Executor;
@@ -106,16 +105,15 @@ async fn setup_schema_db() -> Result<(), Box<dyn std::error::Error>> {
     // --- Set DATABASE_URL environment variable for sqlx macros ---
     // Now that the file is guaranteed to exist, get its canonical path.
     let absolute_db_path = match db_path.absolutize() {
-        Ok(p) => p.into_owned().fuck_backslash(),
+        Ok(p) => p.into_owned(),
         Err(e) => panic!(
             "Failed to get canonical path for {}: {}",
             db_path.display(),
             e
         ),
     };
-    let db_path_str = absolute_db_path
-        .to_str()
-        .ok_or("DB path is not valid UTF-8")?;
+    // sqlite URL 统一用正斜杠：Windows 反斜杠会破坏 URL 解析
+    let db_path_str = absolute_db_path.to_string_lossy().replace('\\', "/");
 
     // Construct the final DATABASE_URL for compile-time checks.
     // It does NOT need mode=rwc, just the path.

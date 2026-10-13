@@ -65,4 +65,33 @@ describe('sanitizeEpubArchive', () => {
 
     await expect(sanitizeEpubArchive(data)).resolves.toBe(data);
   });
+  it('strips @font-face rules with non-relative urls in css and inline styles', async () => {
+    const data = await buildEpub({
+      'OPS/ch1.html':
+        '<html><head><style>@font-face{font-family:X;src:url(http://x/y.ttf)}' +
+        '.keep{color:#333}</style></head><body><p>ok</p></body></html>',
+      'OPS/style.css':
+        '@font-face { font-family: A; src: url(file:///C:/win/font.ttf); }\n' +
+        '@font-face { font-family: B; src: url("res:///system/font.otf") format("opentype"); }\n' +
+        '@font-face { font-family: C; src: url(https://cdn.example.com/f.woff2); }\n' +
+        "@font-face { font-family: D; src: url('fonts/inner.woff') format('woff'); }\n" +
+        '@font-face { font-family: E; src: url(data:font/woff2;base64,AAA); }\n' +
+        'p { color: red; }',
+    });
+
+    const fixed = await sanitizeEpubArchive(data);
+    const css = await readEntry(fixed, 'OPS/style.css');
+
+    expect(css).not.toContain('file:');
+    expect(css).not.toContain('res:');
+    expect(css).not.toContain('cdn.example.com');
+    // 相对路径与 data: 内嵌字体保留
+    expect(css).toContain("url('fonts/inner.woff')");
+    expect(css).toContain('url(data:font/woff2;base64,AAA)');
+    expect(css).toContain('p { color: red; }');
+
+    const html = await readEntry(fixed, 'OPS/ch1.html');
+    expect(html).not.toContain('http://x/y.ttf');
+    expect(html).toContain('.keep{color:#333}');
+  });
 });

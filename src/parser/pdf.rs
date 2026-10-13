@@ -15,7 +15,7 @@ pub fn parse_pdf(data: &[u8]) -> Result<PdfParseResult, AppError> {
     use lopdf::Document;
 
     let doc = Document::load_mem(data)
-        .map_err(|e| AppError::Internal(format!("PDF parsing failed: {e}")))?;
+        .map_err(|e| AppError::FileParseError(format!("invalid PDF structure: {e}")))?;
 
     let num_pages = doc.get_pages().len();
 

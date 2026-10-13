@@ -67,12 +67,13 @@ export const bookApi = {
       { cache: true, query: { length, position } },
     ),
   detail: (bookId: number) => api.get<BookDetail>(`/api/v1/books/${bookId}`),
-  fetchFile: async (bookId: number) => {
-    const res = await api.get<Response>(`/api/v1/books/${bookId}/file`, {
-      raw: true,
-    });
-    return res.arrayBuffer();
-  },
+  fetchFile: (bookId: number) =>
+    api.get<ArrayBuffer>(`/api/v1/books/${bookId}/file`, {
+      // 服务端对文件按内容 hash 返回 ETag：304 时复用缓存，
+      // 切换分页模式 / 重进书籍不再重复下载整本文件
+      binary: true,
+      cache: true,
+    }),
   fileUrl: (bookId: number) => `/api/v1/books/${bookId}/file`,
   jumpToChapter: (bookId: number, chapterId: number) =>
     api.get<{ position: number }>(`/api/v1/books/${bookId}/jump_to_chapter`, {
@@ -105,11 +106,11 @@ export const bookApi = {
     patch: { author?: string; is_public?: boolean; title?: string },
   ) =>
     api.put<Record<string, never>>(`/api/v1/books/${bookId}`, { body: patch }),
-  upload: (form: FormData) =>
+  upload: (form: FormData, signal?: AbortSignal) =>
     api.post<{ book_id: number } & { chapters: Chapter[] }>(
       '/api/v1/books/upload',
       // large files on slow networks need a longer window
-      { form, timeout: 120_000 },
+      { form, signal, timeout: 120_000 },
     ),
 };
 
@@ -245,15 +246,33 @@ function deviceHeader(): Record<string, string> {
 
 let cachedDeviceId: null | string = null;
 
+// device_id = 浏览器基础 id（localStorage）+ 标签页后缀（sessionStorage）。
+// ws 注册表以 (user, book, device_id) 为键、广播按 device_id 排除回声，
+// 同浏览器多标签页共享同一 id 会互相顶掉订阅、互相收不到进度同步，
+// 因此每个标签页必须互异；基础 id 保留浏览器级的稳定身份
 export function getDeviceId(): string {
   if (cachedDeviceId) return cachedDeviceId;
-  const stored = localStorage.getItem('rs_device_id');
-  if (stored) {
-    cachedDeviceId = stored;
-    return stored;
+  let base = localStorage.getItem('rs_device_id');
+  if (!base) {
+    base = randomUuid();
+    localStorage.setItem('rs_device_id', base);
   }
-  const id = crypto.randomUUID();
-  localStorage.setItem('rs_device_id', id);
-  cachedDeviceId = id;
-  return id;
+  let tab = sessionStorage.getItem('rs_device_tab');
+  if (!tab) {
+    tab = randomUuid().slice(0, 8);
+    sessionStorage.setItem('rs_device_tab', tab);
+  }
+  cachedDeviceId = `${base}-${tab}`;
+  return cachedDeviceId;
+}
+
+/** randomUUID 的回退实现：非 secure context（如 http://192.168.x.x）下不可用 */
+function randomUuid(): string {
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  // 按 RFC 4122 v4 固定版本与变体位（?? 0 仅为通过 noUncheckedIndexedAccess）
+  bytes[6] = ((bytes[6] ?? 0) & 0x3f) | 0x40;
+  bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
+  const hex = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }

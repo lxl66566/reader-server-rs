@@ -38,6 +38,10 @@ pub enum AppError {
     #[error("Account has been banned")]
     UserBanned,
 
+    // token 对应用户已被删除（自查注销 / 管理员清理）；与 banned 一致按 401 处理
+    #[error("Account no longer exists")]
+    AccountDeleted,
+
     #[error("Admin not found")]
     AdminNotFound,
 
@@ -127,11 +131,23 @@ pub enum AppError {
     #[error("Request body too large")]
     RequestBodyTooLarge,
 
-    #[error("File encoding is not valid UTF-8")]
+    // 明确指向 GBK/GB18030：中文 txt 最常见的非 UTF-8 编码
+    #[error(
+        "Only UTF-8 encoded text files are supported; detected non-UTF-8 bytes (possibly \
+         GBK/GB18030). Please convert the file to UTF-8 and re-upload"
+    )]
     FileInvalidUtf8,
 
     #[error("Only TXT, EPUB and PDF formats are supported")]
     UnsupportedFileFormat,
+
+    // 上传文件内容损坏导致解析失败（区别于内部错误：这是客户端问题，400）
+    #[error("Failed to parse uploaded file: {0}")]
+    FileParseError(String),
+
+    // 章节数超上限（构造性 txt 可产出百万级行），拒绝而非静默截断
+    #[error("Too many chapters detected; the file appears malformed")]
+    TooManyChapters,
 
     #[error("Position exceeds content range")]
     PositionExceedsRange,
@@ -170,6 +186,8 @@ pub enum AppError {
     #[error(transparent)]
     Database(#[from] sqlx::Error),
 
+    // 仅用于 token 签发（create_token）失败：内部错误，500。
+    // 验证路径的 JWT 错误已在 verify_token 统一映射为 TokenExpiredOrInvalid（401）
     #[error(transparent)]
     Jwt(#[from] jsonwebtoken::errors::Error),
 
@@ -197,7 +215,8 @@ impl IntoResponse for AppError {
             | AppError::TokenExpiredOrInvalid
             | AppError::IncorrectAdminPassword
             | AppError::UserLockedOut
-            | AppError::UserBanned => StatusCode::UNAUTHORIZED,
+            | AppError::UserBanned
+            | AppError::AccountDeleted => StatusCode::UNAUTHORIZED,
 
             AppError::BookAccessDenied
             | AppError::BookModifyDenied
@@ -230,6 +249,8 @@ impl IntoResponse for AppError {
             | AppError::EpubContentTooLarge
             | AppError::FileInvalidUtf8
             | AppError::UnsupportedFileFormat
+            | AppError::FileParseError(_)
+            | AppError::TooManyChapters
             | AppError::PositionExceedsRange
             | AppError::InvalidPosition
             | AppError::InvalidTimezone

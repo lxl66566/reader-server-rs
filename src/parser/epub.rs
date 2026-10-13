@@ -70,15 +70,15 @@ fn check_epub_entry_sizes(data: &[u8], max_entry_bytes: u64) -> Result<(), AppEr
     use std::io::Read as _;
 
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(data))
-        .map_err(|e| AppError::Internal(format!("EPUB zip reading failed: {e}")))?;
+        .map_err(|e| AppError::FileParseError(format!("invalid EPUB zip: {e}")))?;
     for i in 0..archive.len() {
         let entry = archive
             .by_index(i)
-            .map_err(|e| AppError::Internal(format!("EPUB zip entry reading failed: {e}")))?;
+            .map_err(|e| AppError::FileParseError(format!("invalid EPUB zip entry: {e}")))?;
         // 多读 1 字节用于判断是否超限；io::copy 是流式的，不会把超限内容全量载入内存
         let mut limited = entry.take(max_entry_bytes + 1);
         let copied = std::io::copy(&mut limited, &mut std::io::sink())
-            .map_err(|e| AppError::Internal(format!("EPUB entry decompress failed: {e}")))?;
+            .map_err(|e| AppError::FileParseError(format!("corrupted EPUB entry: {e}")))?;
         if copied > max_entry_bytes {
             return Err(AppError::EpubContentTooLarge);
         }
@@ -110,7 +110,7 @@ fn parse_epub_with_limits(
     check_epub_entry_sizes(data, max_entry_bytes)?;
 
     let mut doc = EpubDoc::from_reader(std::io::Cursor::new(data))
-        .map_err(|e| AppError::Internal(format!("EPUB parsing failed: {e}")))?;
+        .map_err(|e| AppError::FileParseError(format!("invalid EPUB structure: {e}")))?;
 
     let p_selector = Selector::parse("p")
         .map_err(|e| AppError::Internal(format!("CSS selector error: {e:?}")))?;

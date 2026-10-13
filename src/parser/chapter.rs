@@ -2,6 +2,12 @@ use std::sync::LazyLock;
 
 use fancy_regex::Regex;
 
+use crate::error::AppError;
+
+/// 单本书章节数上限：防御构造性文本（如 50MB 全是短章节标题行）
+/// 产出百万级章节的一次性巨型 INSERT
+pub const MAX_CHAPTERS: usize = 50_000;
+
 static CHAPTER_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r"^[　\s]*(序章|序言|卷首语|扉页|楔子|正文(?!完|结)|终章|后记|尾声|番外|第?\s{0,4}[\d〇零一二两三四五六七八九十百千万壹贰叁肆伍陆柒捌玖拾佰仟]+?\s{0,4}(?:章|节(?!课)|卷|集(?![合和])|部(?![分赛游])|篇(?!张))).{0,30}$"
@@ -14,8 +20,10 @@ static CHAPTER_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// 偏移量统一以"字符"（`chars().count()`）为单位，与
 /// `reading_progress.locator`、`bookmarks.locator`、`get_book_content`
 /// 的 `position` 参数保持一致——章节跳转、内容切片才能对齐。
+///
+/// 章节数超过 [`MAX_CHAPTERS`] 时返回错误（视为畸形文件），不做静默截断。
 #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-pub fn extract_chapters(content: &str) -> Vec<(String, i64)> {
+pub fn extract_chapters(content: &str) -> Result<Vec<(String, i64)>, AppError> {
     let mut chapters = Vec::new();
     let mut char_offset = 0i64; // 当前行首字符在全文中的偏移
     let mut is_first_line = true;
@@ -32,6 +40,9 @@ pub fn extract_chapters(content: &str) -> Vec<(String, i64)> {
             CHAPTER_RE.is_match(trimmed).unwrap_or(false)
         };
         if should_record {
+            if chapters.len() >= MAX_CHAPTERS {
+                return Err(AppError::TooManyChapters);
+            }
             chapters.push((trimmed.to_string(), char_offset));
         }
         // 累加真实行宽（split_inclusive 保留了行尾换行符）
@@ -39,7 +50,7 @@ pub fn extract_chapters(content: &str) -> Vec<(String, i64)> {
         is_first_line = false;
     }
 
-    chapters
+    Ok(chapters)
 }
 
 #[cfg(test)]
@@ -61,7 +72,7 @@ mod tests {
     #[test]
     fn extract_chapters_lf_offsets() {
         let content = "序章 开始\n一些内容\n第二章 进展\n更多内容\n";
-        let chapters = extract_chapters(content);
+        let chapters = extract_chapters(content).unwrap();
         assert_eq!(chapters.len(), 2);
         assert_eq!(chapters[0].0, "序章 开始");
         assert_eq!(chapters[1].0, "第二章 进展");
@@ -72,7 +83,7 @@ mod tests {
     fn extract_chapters_crlf_offsets() {
         // 纯 CRLF：每行行尾占 2 个字符，偏移必须按真实行宽累加
         let content = "序章 开始\r\n一些内容\r\n第二章 进展\r\n更多内容\r\n";
-        let chapters = extract_chapters(content);
+        let chapters = extract_chapters(content).unwrap();
         assert_eq!(chapters.len(), 2);
         assert_eq!(chapters[0].1, 0);
         // "序章 开始\r\n正文内容\r\n" = (5 + 2) + (4 + 2) = 13
@@ -84,7 +95,7 @@ mod tests {
     fn extract_chapters_mixed_crlf_lf_offsets() {
         // CRLF 与 LF 混合：偏移同样必须按真实行宽累加
         let content = "line1\r\n第二章 abc\n第三章 def\r\n";
-        let chapters = extract_chapters(content);
+        let chapters = extract_chapters(content).unwrap();
         assert_eq!(chapters.len(), 3);
         assert_eq!(chapters[0].1, 0);
         // "line1\r\n" = 7
@@ -98,7 +109,7 @@ mod tests {
     fn extract_chapters_no_trailing_newline() {
         // 末尾无换行符时偏移也不应被多算
         let content = "第一章 开头\n内容\n第二章 结尾";
-        let chapters = extract_chapters(content);
+        let chapters = extract_chapters(content).unwrap();
         assert_eq!(chapters.len(), 2);
         assert_offsets_point_to_titles(content, &chapters);
     }

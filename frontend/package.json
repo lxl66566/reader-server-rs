@@ -16,7 +16,8 @@
     "fmt:check": "oxfmt --check",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
-    "prepare": "simple-git-hooks"
+    "prepare": "simple-git-hooks",
+    "e2e": "./e2e/run.sh"
   },
   "dependencies": {
     "@solidjs/router": "^1.0.0",
@@ -31,6 +32,8 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "1.63.0",
+    "@types/node": "^26.6.5",
     "@unocss/preset-wind4": "^66.7.5",
     "@vitest/eslint-plugin": "^1.6.24",
     "eslint": "^10.8.0",

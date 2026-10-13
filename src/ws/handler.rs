@@ -9,7 +9,7 @@
 //! 2. 主循环 select! 五路事件：客户端消息、待发送队列、定时 ping、idle 超时、周期鉴权重验
 //! 3. 任一端断开 → 退出循环 → 清理注册表中的订阅
 
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use axum::{
     extract::{Query, State},
@@ -25,14 +25,14 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use crate::{
-    access::check_user_token,
+    access::{check_book_access, check_user_token},
     app::AppState,
     auth::verify_token,
     error::AppError,
     models::UserRole,
     routes::reading::process_heartbeat_logic,
     ws::{
-        manager::OUTBOUND_CAPACITY,
+        manager::{ConnToken, ConnectionRegistry, OUTBOUND_CAPACITY},
         protocol::{ClientMessage, ServerMessage},
     },
 };
@@ -44,6 +44,9 @@ const PING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
 /// 周期性重验用户状态间隔：握手后 ban / 吊销 token（token_version 变化）/ 删号
 /// 不会立即断开已有连接，靠该定时重验兜底，最长延迟一个间隔
 const REVALIDATE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+/// 每连接订阅数上限：正常阅读场景单连接仅持 1-2 个订阅，
+/// 上限仅防御恶意客户端无界 subscribe 撑大注册表与 session.subs
+pub(crate) const MAX_SUBS_PER_CONN: usize = 16;
 
 #[derive(Debug, Deserialize, Default)]
 pub struct WsAuthQuery {
@@ -76,10 +79,13 @@ pub async fn ws_handler(
 
 /// 单个连接的会话状态：本连接持有的所有订阅 key
 ///
-/// 一个连接可订阅多本书（前端切书）；同一连接订阅新书前会先退订旧书，
-/// 但如果前端希望同标签页切换书籍、保留旧订阅也可以——只要 `device_id` 一致。
+/// 一个连接可同时订阅多本书（上限 [`MAX_SUBS_PER_CONN`]）：subscribe 不退订旧书，
+/// 旧订阅保留到显式 unsubscribe 或连接关闭时统一清理
 struct Session {
     user_id: i64,
+    /// 本连接的订阅令牌：注册表覆盖/驱逐/退订的属主校验依据，
+    /// 在连接建立时生成一次，生命周期内不变
+    token: ConnToken,
     /// `book_id` -> `device_id`（本连接订阅 book 时声明的 `device_id`）
     subs: HashMap<i64, String>,
 }
@@ -88,6 +94,7 @@ impl Session {
     fn new(user_id: i64) -> Self {
         Self {
             user_id,
+            token: ConnToken::new(),
             subs: HashMap::new(),
         }
     }
@@ -106,6 +113,17 @@ async fn handle_socket(
     token_version: i64,
     state: AppState,
 ) {
+    // 每用户连接数上限：超限直接关闭（升级已完成，握手层面无法拒绝）。
+    // RAII 计数在函数任何出口都会释放
+    if !state.ws.acquire_connection(user_id) {
+        warn!(user_id, "ws connection limit reached, closing");
+        return;
+    }
+    let _conn_guard = ConnGuard {
+        registry: state.ws.clone(),
+        user_id,
+    };
+
     let (mut sink, mut stream) = socket.split();
     // 每个连接一个有界出站队列：广播方 try_send（满则把该订阅驱逐出注册表），
     // 主循环 recv 后通过 sink 发出。handler 自身回包也用非阻塞 try_send，
@@ -218,13 +236,25 @@ async fn handle_socket(
         }
     }
 
-    // 清理所有订阅
+    // 清理所有订阅（令牌校验：不会误删已接管同 key 的新连接）
     for book_id in session.subs.keys().copied().collect::<Vec<_>>() {
         if let Some(key) = session.key(book_id) {
-            state.ws.unsubscribe(&key).await;
+            state.ws.unsubscribe(&key, &session.token).await;
         }
     }
     info!(user_id, "ws disconnected");
+}
+
+/// 连接计数守卫：Drop 时释放，覆盖正常断开、idle 超时、重验失败等全部出口
+struct ConnGuard {
+    registry: Arc<ConnectionRegistry>,
+    user_id: i64,
+}
+
+impl Drop for ConnGuard {
+    fn drop(&mut self) {
+        self.registry.release_connection(self.user_id);
+    }
 }
 
 /// 处理一条文本消息：反序列化 → 派发到对应业务。
@@ -245,19 +275,39 @@ async fn handle_text(
         },
     };
 
+    // 协议层统一输入校验（device_id 长度/字符集、locator 长度等）
+    if let Err(message) = msg.validate() {
+        return reply(out_tx, ServerMessage::error(message));
+    }
+
     match msg {
         ClientMessage::Subscribe { book_id, device_id } => {
-            if device_id.trim().is_empty() {
-                return reply(out_tx, ServerMessage::error("device_id must not be empty"));
+            // 订阅数上限：仅约束新增订阅；同书重订阅（换 device_id）不增长
+            // session.subs，不受限
+            if session.subs.len() >= MAX_SUBS_PER_CONN && !session.subs.contains_key(&book_id) {
+                return reply(
+                    out_tx,
+                    ServerMessage::error(format!(
+                        "too many subscriptions: limit is {MAX_SUBS_PER_CONN} per connection"
+                    )),
+                );
             }
-            // 已订阅同书 → 视为重复订阅，先退订再用新 device_id 注册
-            // （通常不会发生，但防御性处理）
+            // 与 heartbeat 同源的存在性+权限校验：不存在的书（404 语义）、
+            // 他人私有书（403 语义）一律以 error 帧拒绝，不进注册表
+            if let Err(e) = check_book_access(&state.db, session.user_id, book_id).await {
+                return reply(out_tx, ServerMessage::error(e.to_string()));
+            }
+            // 已订阅同书 → 视为重复订阅，先退订旧注册（仅自身令牌命中时生效），
+            // 再用新 device_id 注册（通常不会发生，但防御性处理）
             if let Some(old_key) = session.key(book_id) {
-                state.ws.unsubscribe(&old_key).await;
+                state.ws.unsubscribe(&old_key, &session.token).await;
             }
             let key = (session.user_id, book_id, device_id.clone());
             // clone 出一个 sender 给 registry：广播方通过它把消息塞进本连接的接收队列
-            state.ws.subscribe(key, out_tx.clone()).await;
+            state
+                .ws
+                .subscribe(key, session.token.clone(), out_tx.clone())
+                .await;
             session.subs.insert(book_id, device_id);
             reply(out_tx, ServerMessage::Subscribed { book_id })
         },
@@ -272,6 +322,17 @@ async fn handle_text(
                     ServerMessage::error("not subscribed to this book; send subscribe first"),
                 );
             };
+            // 自愈重注册：本连接可能因出站队列满被广播方驱逐出注册表，
+            // 借每次心跳（约 1s 一次）幂等重注册，恢复实时广播；
+            // 队列持续满时连接会因心跳回包失败被断开，不会无限堆积
+            state
+                .ws
+                .subscribe(
+                    (session.user_id, book_id, device_id.clone()),
+                    session.token.clone(),
+                    out_tx.clone(),
+                )
+                .await;
             match process_heartbeat_logic(
                 &state.db,
                 session.user_id,
@@ -286,6 +347,7 @@ async fn handle_text(
                     if !reply(out_tx, ServerMessage::HeartbeatAck {
                         book_id,
                         synced: result.synced,
+                        updated: result.updated,
                         locator: result.locator.clone(),
                         percent: result.percent,
                         reading_time: result.reading_time,
@@ -317,7 +379,7 @@ async fn handle_text(
         },
         ClientMessage::Unsubscribe { book_id } => {
             if let Some(key) = session.key(book_id) {
-                state.ws.unsubscribe(&key).await;
+                state.ws.unsubscribe(&key, &session.token).await;
             }
             session.subs.remove(&book_id);
             reply(out_tx, ServerMessage::Unsubscribed { book_id })

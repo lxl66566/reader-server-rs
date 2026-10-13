@@ -35,8 +35,10 @@ export function setToken(kind: TokenKind, token: null | string): void {
 // Called when the server rejects a user token (expired / revoked / banned).
 let onUnauthorized: (() => void) | null = null;
 
-interface EtagEntry<T> {
-  data: T;
+interface CacheEntry {
+  /** 二进制条目的字节量（内存预算用）；JSON 条目为 undefined */
+  bytes?: number;
+  data: unknown;
   etag: string;
 }
 
@@ -45,10 +47,15 @@ export function setUnauthorizedHandler(handler: () => void): void {
 }
 
 // Bounded in-memory cache for ETag-capable GETs (settings, txt content).
-const etagCache = new Map<string, EtagEntry<unknown>>();
+const etagCache = new Map<string, CacheEntry>();
 const ETAG_CACHE_LIMIT = 200;
+// 二进制条目（整本书文件）的内存预算，超出后从最旧条目开始淘汰
+const ETAG_BINARY_BUDGET_BYTES = 128 * 1024 * 1024;
+let etagBinaryBytes = 0;
 
 export interface RequestOptions {
+  /** 返回 ArrayBuffer（整本文件等二进制下载）；配合 cache 支持 ETag 复用 */
+  binary?: boolean;
   body?: unknown;
   /** use ETag cache for this GET request */
   cache?: boolean;
@@ -57,7 +64,9 @@ export interface RequestOptions {
   query?: Record<string, boolean | number | string | undefined>;
   /** return raw Response (for zip downloads etc.) */
   raw?: boolean;
-  /** timeout in ms (0 = no timeout); default 15s, disabled for raw */
+  /** 外部中止信号（如用户取消上传），与 timeout 组合生效 */
+  signal?: AbortSignal;
+  /** timeout in ms (0 = no timeout); default 15s, disabled for raw/binary */
   timeout?: number;
   tokenKind?: TokenKind;
 }
@@ -87,8 +96,14 @@ export async function request<T>(
     body = JSON.stringify(options.body);
   }
 
-  const timeout = options.timeout ?? (options.raw ? 0 : DEFAULT_TIMEOUT_MS);
-  const signal = timeout > 0 ? AbortSignal.timeout(timeout) : undefined;
+  const timeout =
+    options.timeout ?? (options.binary || options.raw ? 0 : DEFAULT_TIMEOUT_MS);
+  const timeoutSignal = timeout > 0 ? AbortSignal.timeout(timeout) : undefined;
+  // 外部中止信号与超时信号合并生效
+  const signals = [options.signal, timeoutSignal].filter(
+    (s): s is AbortSignal => s !== undefined,
+  );
+  const signal = signals.length > 0 ? AbortSignal.any(signals) : undefined;
 
   let res: Response;
   try {
@@ -99,11 +114,27 @@ export async function request<T>(
     if (err instanceof DOMException && err.name === 'TimeoutError') {
       throw new ApiError(0, translateGlobal('errorTimeout'));
     }
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new ApiError(0, translateGlobal('errorAborted'));
+    }
     throw new ApiError(0, translateGlobal('errorNetwork'));
   }
 
   if (res.status === 304 && cached) {
     return cached.data as T;
+  }
+  if (options.binary) {
+    if (!res.ok) throw await toApiError(res);
+    const etag = res.headers.get('ETag');
+    const data: unknown = await res.arrayBuffer();
+    if (options.cache && etag) {
+      cachePut(cacheKey, {
+        bytes: (data as ArrayBuffer).byteLength,
+        data,
+        etag,
+      });
+    }
+    return data as T;
   }
   if (options.raw) {
     if (!res.ok) throw await toApiError(res);
@@ -136,13 +167,25 @@ function buildUrl(path: string, query?: RequestOptions['query']): string {
   return qs ? `${path}?${qs}` : path;
 }
 
-function cachePut<T>(key: string, entry: EtagEntry<T>): void {
-  if (etagCache.size >= ETAG_CACHE_LIMIT) {
-    // Map iterates in insertion order; drop the oldest entry.
-    const oldest = etagCache.keys().next();
-    if (!oldest.done) etagCache.delete(oldest.value);
-  }
+function cachePut(key: string, entry: CacheEntry): void {
+  // 同 key 覆盖时先归还旧条目的字节量，避免重复累计
+  const prev = etagCache.get(key);
+  if (prev?.bytes !== undefined) etagBinaryBytes -= prev.bytes;
+  if (entry.bytes !== undefined) etagBinaryBytes += entry.bytes;
   etagCache.set(key, entry);
+  // Map 按插入序迭代：条数或二进制预算超限时从最旧条目开始淘汰；
+  // 始终保留至少一条（单文件不可能超过预算：上传大小有服务端上限）
+  while (
+    (etagCache.size > ETAG_CACHE_LIMIT ||
+      etagBinaryBytes > ETAG_BINARY_BUDGET_BYTES) &&
+    etagCache.size > 1
+  ) {
+    const oldest = etagCache.keys().next();
+    if (oldest.done) break;
+    const evicted = etagCache.get(oldest.value);
+    etagCache.delete(oldest.value);
+    if (evicted?.bytes !== undefined) etagBinaryBytes -= evicted.bytes;
+  }
 }
 
 async function toApiError(res: Response): Promise<ApiError> {

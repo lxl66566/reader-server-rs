@@ -38,7 +38,10 @@ const PdfReader = (props: FormatReaderProps) => {
   const [pageWidth, setPageWidth] = createSignal(0);
 
   function initialPage(): number {
-    const parsed = parsePageLocator(props.initialLocator);
+    // 深链定位优先于保存的进度；pdf 无章节，忽略章节深链
+    const deep =
+      props.deepLink?.kind === 'locator' ? props.deepLink.locator : null;
+    const parsed = parsePageLocator(deep ?? props.initialLocator);
     if (parsed !== null) return parsed;
     const total = props.book.total_pages;
     if (total > 0) {
@@ -54,7 +57,9 @@ const PdfReader = (props: FormatReaderProps) => {
     setError(false);
     try {
       const data = await bookApi.fetchFile(props.book.book_id);
-      loadingTask = pdfjs.getDocument({ data });
+      // getDocument 会把 buffer transfer 给 worker（原件被 detach），
+      // 复制一份保住 ETag 缓存里的原 buffer
+      loadingTask = pdfjs.getDocument({ data: data.slice(0) });
       const loaded = await loadingTask.promise;
       setDoc(loaded);
       setReady(true);
@@ -105,15 +110,18 @@ const PdfReader = (props: FormatReaderProps) => {
   };
 
   props.registerNavigator({
-    jumpToChapter: () => undefined, // backend has no pdf outline yet
+    jumpToChapter: () => Promise.resolve(false), // backend has no pdf outline yet
     jumpToLocator: locator => {
       const parsed = parsePageLocator(locator);
-      if (parsed !== null) goTo(parsed);
+      if (parsed === null) return Promise.resolve(false);
+      goTo(parsed);
+      return Promise.resolve(true);
     },
   });
 
   // --- flipping (same strip interaction model as the txt paginator) ---
   const gestures = useStripFlip({
+    bounds: () => container?.getBoundingClientRect() ?? null,
     canNext,
     canPrev,
     onCommit: dir => {
@@ -122,7 +130,6 @@ const PdfReader = (props: FormatReaderProps) => {
     onTapCenter: () => {
       props.onTapCenter();
     },
-    width: () => container?.clientWidth ?? 1,
   });
 
   const stripPages = () => [page() - 1, page(), page() + 1];

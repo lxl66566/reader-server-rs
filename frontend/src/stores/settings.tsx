@@ -28,19 +28,20 @@ const THEME_DEFAULT_COLORS = {
 const themeDefaultColors = () =>
   THEME_DEFAULT_COLORS[resolvedTheme() === 'dark' ? 'dark' : 'light'];
 
+// 访客/加载失败时的兜底默认值，与服务端 schema（reading_settings 表
+// DEFAULT 值）保持一致，避免登录前后排版跳变
 const FALLBACK: ReadingSettings = {
   ...themeDefaultColors(),
-  // 与服务端 schema 默认值（DEFAULT 'none'）保持一致
   chinese_conversion: 'none',
-  font_family: 'default',
+  font_family: 'serif',
   font_size: 18,
-  letter_spacing: 0,
-  line_height: 1.8,
-  pagination_mode: 'paginate',
-  paragraph_spacing: 0.8,
+  letter_spacing: 0.05,
+  line_height: 1.5,
+  pagination_mode: 'scroll',
+  paragraph_spacing: 1.2,
   reading_width: 40,
   text_indent: 2,
-  theme: 'system',
+  theme: 'light',
   timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
 };
 
@@ -87,15 +88,23 @@ export const SettingsProvider: ParentComponent = props => {
       applyRemote({ ...FALLBACK, ...themeDefaultColors() });
       return;
     }
-    // 初始化：颜色仍是服务端默认（用户未自定义过）时，按当前主题写入默认色
+    // 时区与本地不一致：随初始化一次性上报，让服务端按本地时区归算日报
+    const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const tzPatch: Partial<ReadingSettings> =
+      localTz && value.timezone !== localTz ? { timezone: localTz } : {};
+    // 初始化：颜色仍是服务端默认（用户未自定义过）时，按当前主题写入默认色。
+    // 先整体应用服务端值再补色，否则新用户首会话停留在 FALLBACK 排版
+    // （分页模式/错误行距），第二次打开才跳到服务端配置
     if (
       value.background_color === SERVER_DEFAULT_COLORS.background &&
       value.text_color === SERVER_DEFAULT_COLORS.text
     ) {
-      update(themeDefaultColors());
+      applyRemote(value);
+      update({ ...themeDefaultColors(), ...tzPatch });
       return;
     }
     applyRemote(value);
+    if (Object.keys(tzPatch).length > 0) update(tzPatch);
   });
 
   let syncTimer: ReturnType<typeof setTimeout> | undefined;
@@ -110,7 +119,9 @@ export const SettingsProvider: ParentComponent = props => {
       const body = pending;
       pending = {};
       void readingApi.updateSettings(body).catch(() => {
-        // keep optimistic state; next change will retry the merge
+        // 同步失败：补丁并回 pending（请求期间到达的新补丁优先），
+        // 下次设置变更时一并发送
+        pending = { ...body, ...pending };
       });
     }, 500);
   };

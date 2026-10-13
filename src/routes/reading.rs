@@ -52,15 +52,23 @@ fn parse_tz(s: &str) -> chrono_tz::Tz {
     s.parse().unwrap_or(DEFAULT_TZ)
 }
 
-/// 返回用户本地"现在"；读不到 `reading_settings` 时按 UTC
+/// 返回用户本地"现在"；未设置时区按 UTC，
+/// DB 查询失败记录告警后同样按 UTC 回退（不让统计接口因此 500）
 async fn user_local_now(pool: &Pool<Sqlite>, user_id: i64) -> DateTime<chrono_tz::Tz> {
-    let tz_str: Option<String> =
-        sqlx::query_scalar("SELECT timezone FROM reading_settings WHERE user_id = ?")
-            .bind(user_id)
-            .fetch_optional(pool)
-            .await
-            .ok()
-            .flatten();
+    let tz_str = match sqlx::query_scalar::<_, Option<String>>(
+        "SELECT timezone FROM reading_settings WHERE user_id = ?",
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    {
+        // Ok(None)：无设置行；Ok(Some(None))：行存在但未设置时区
+        Ok(row) => row.flatten(),
+        Err(e) => {
+            tracing::warn!(user_id, error = %e, "query user timezone failed, fallback to UTC");
+            None
+        },
+    };
     let tz = tz_str.as_deref().map_or(DEFAULT_TZ, parse_tz);
     Utc::now().with_timezone(&tz)
 }
@@ -173,23 +181,15 @@ async fn update_reading_settings(
     State(pool): State<Pool<Sqlite>>,
     Json(req): Json<UpdateReadingSettingsRequest>,
 ) -> Result<Json<ApiResponse<()>>, AppError> {
-    // 检查设置是否存在
-    let settings_exists = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(SELECT 1 FROM reading_settings WHERE user_id = ?)",
+    // 确保设置行存在。INSERT OR IGNORE：并发首更会同时走到这里，
+    // 裸 INSERT 会撞 UNIQUE(user_id) 变 500；IGNORE 命中（已被其他请求创建）
+    // 时下方 UPDATE 兜底生效，无需关心本请求是否真正建了行
+    sqlx::query!(
+        "INSERT OR IGNORE INTO reading_settings (user_id) VALUES (?)",
+        auth.user_id
     )
-    .bind(auth.user_id)
-    .fetch_one(&pool)
+    .execute(&pool)
     .await?;
-
-    if !settings_exists {
-        // 如果设置不存在，创建默认设置
-        sqlx::query!(
-            "INSERT INTO reading_settings (user_id) VALUES (?)",
-            auth.user_id
-        )
-        .execute(&pool)
-        .await?;
-    }
 
     // 构建动态更新 SQL（使用 separated 自动处理逗号分隔）
     let mut query_builder: sqlx::QueryBuilder<Sqlite> =
@@ -308,10 +308,37 @@ pub struct HeartbeatResult {
     pub updated: bool,
 }
 
+/// 心跳逻辑所需的 reading_progress 当前行
+struct ProgressRow {
+    locator: String,
+    percent: f64,
+    reading_time: i64,
+    last_read_at: Option<String>,
+    last_device_id: Option<String>,
+}
+
+/// 读取进度行；不存在返回 None
+async fn fetch_progress(
+    pool: &Pool<Sqlite>,
+    user_id: i64,
+    book_id: i64,
+) -> Result<Option<ProgressRow>, AppError> {
+    Ok(sqlx::query_as!(
+        ProgressRow,
+        "SELECT locator, percent, reading_time, last_read_at, last_device_id 
+             FROM reading_progress 
+             WHERE user_id = ? AND book_id = ?",
+        user_id,
+        book_id
+    )
+    .fetch_optional(pool)
+    .await?)
+}
+
 /// 处理心跳的核心逻辑
 ///
 /// 设计要点：
-/// - 首次心跳会创建进度记录
+/// - 首次心跳会创建进度记录；并发首心跳败者（INSERT 被忽略）走让位语义
 /// - 若 `last_device_id` 与本次不同，返回服务器进度（让新设备同步），不更新进度/时长， 但会将
 ///   `last_device_id` 让位给本设备，使其下一次心跳即可接管写入
 /// - 同设备正常更新进度，累加阅读时间（与上次间隔 < 30s 才计入）
@@ -341,25 +368,16 @@ pub async fn process_heartbeat_logic(
     // 检查书籍存在性与读权限（所有者或公开书）
     check_book_access(pool, user_id, book_id).await?;
 
-    // 获取当前进度
-    let progress = sqlx::query!(
-        "SELECT locator, percent, reading_time, last_read_at, last_device_id 
-         FROM reading_progress 
-         WHERE user_id = ? AND book_id = ?",
-        user_id,
-        book_id
-    )
-    .fetch_optional(pool)
-    .await?;
-
     let now = Utc::now();
     let now_str = now.to_rfc3339_opts(SecondsFormat::Millis, true);
 
     // 如果没有阅读进度记录，创建一个
-    // INSERT OR IGNORE：并发首心跳会同时进入此分支，裸 INSERT 会让后到的请求撞
-    // UNIQUE(user_id, book_id) 变 500；忽略冲突后双方各自返回自己的进度即可
-    if progress.is_none() {
-        sqlx::query!(
+    let progress = if let Some(p) = fetch_progress(pool, user_id, book_id).await? {
+        p
+    } else {
+        // INSERT OR IGNORE：并发首心跳会同时进入此分支，裸 INSERT 会让后到的请求撞
+        // UNIQUE(user_id, book_id) 变 500
+        let res = sqlx::query!(
             "INSERT OR IGNORE INTO reading_progress 
              (user_id, book_id, locator, percent, last_read_at, last_device_id) 
              VALUES (?, ?, ?, ?, ?, ?)",
@@ -373,16 +391,22 @@ pub async fn process_heartbeat_logic(
         .execute(pool)
         .await?;
 
-        return Ok(HeartbeatResult {
-            synced: true,
-            locator: locator.to_string(),
-            percent,
-            reading_time: 0,
-            updated: true,
-        });
-    }
-
-    let progress = progress.unwrap();
+        if res.rows_affected() == 1 {
+            return Ok(HeartbeatResult {
+                synced: true,
+                locator: locator.to_string(),
+                percent,
+                reading_time: 0,
+                updated: true,
+            });
+        }
+        // 并发首心跳败者：行已被抢插（rows_affected == 0），重查现值
+        // 走下方统一流程——设备不同则进让位分支，返回 synced=false + DB 现值，
+        // 避免谎称已保存并广播 DB 中不存在的进度
+        fetch_progress(pool, user_id, book_id)
+            .await?
+            .ok_or(AppError::Internal("reading_progress row vanished".into()))?
+    };
     let last_device_id = progress.last_device_id;
     let last_read_at = progress.last_read_at;
 
@@ -411,7 +435,9 @@ pub async fn process_heartbeat_logic(
         });
     }
 
-    // 计算阅读时间增量；解析失败时跳过（不累加），避免 panic
+    // 计算阅读时间增量；解析失败时跳过（不累加），避免 panic。
+    // 时钟回拨防护：seconds <= 0（now 早于上次记录）时丢弃该间隔，
+    // 影响上界为一次心跳间隔（<30s），恢复后从新的 last_read_at 起算
     let mut reading_time_increment = 0;
     if let Some(last_time) = last_read_at.as_deref() {
         if let Ok(last_dt) = last_time.parse::<DateTime<Utc>>() {
@@ -422,6 +448,24 @@ pub async fn process_heartbeat_logic(
             }
         }
     }
+
+    // 当日统计日期需在事务开始前取好：事务会占用池中连接，
+    // 单连接池（测试）下事务内再查 reading_settings 会死锁
+    let today = if reading_time_increment > 0 {
+        // 日期按用户本地时区归算，避免 UTC+8 凌晨被记到前一天
+        Some(
+            user_local_now(pool, user_id)
+                .await
+                .format("%Y-%m-%d")
+                .to_string(),
+        )
+    } else {
+        None
+    };
+
+    // 三条写语句（progress / users / daily_reading_stats）包单事务，
+    // 避免部分成功导致 reading_time 与用户/每日统计不一致
+    let mut tx = pool.begin().await?;
 
     // 使用乐观锁更新阅读进度：WHERE 条件包含 last_read_at 原始值，
     // 若在此期间被其他并发心跳修改，rows_affected == 0。
@@ -451,11 +495,12 @@ pub async fn process_heartbeat_logic(
         },
     }
 
-    let result = qb.build().execute(pool).await?;
+    let result = qb.build().execute(&mut *tx).await?;
 
     // 乐观锁竞争失败：并发请求已抢先更新，返回当前最新进度（设备相同 →
-    // synced=true，但未广播）
+    // synced=true，但未广播）。本事务尚无任何写入，直接回滚
     if result.rows_affected() == 0 {
+        tx.rollback().await?;
         let current = sqlx::query!(
             "SELECT locator, percent, reading_time FROM reading_progress WHERE user_id = ? AND \
              book_id = ?",
@@ -474,8 +519,10 @@ pub async fn process_heartbeat_logic(
         });
     }
 
-    // 更新用户总阅读时间
-    if reading_time_increment > 0 {
+    if reading_time_increment > 0
+        && let Some(today) = today
+    {
+        // 更新用户总阅读时间
         sqlx::query!(
             "UPDATE users 
              SET total_reading_time = total_reading_time + ? 
@@ -483,13 +530,10 @@ pub async fn process_heartbeat_logic(
             reading_time_increment,
             user_id
         )
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
         // 同步累加当日阅读统计；INSERT ON CONFLICT 处理 upsert
-        // 注意：日期按用户本地时区归算，避免 UTC+8 凌晨被记到前一天
-        let local_now = user_local_now(pool, user_id).await;
-        let today = local_now.format("%Y-%m-%d").to_string();
         sqlx::query!(
             "INSERT INTO daily_reading_stats (user_id, date, reading_seconds) VALUES (?, ?, ?) ON \
              CONFLICT (user_id, date) DO UPDATE SET reading_seconds = reading_seconds + \
@@ -498,9 +542,11 @@ pub async fn process_heartbeat_logic(
             today,
             reading_time_increment,
         )
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
     }
+
+    tx.commit().await?;
 
     let new_reading_time = progress.reading_time + reading_time_increment;
 

@@ -1,8 +1,6 @@
 use axum::{
     Json, Router,
-    body::Body,
     extract::State,
-    http::header,
     response::Response,
     routing::{delete, get, post},
 };
@@ -51,6 +49,14 @@ pub(crate) fn validate_username(username: &str) -> Result<(), AppError> {
     Ok(())
 }
 
+// 校验密码非空：注册 / 改密 / setup / 重置 / 新建管理员共用同一规则
+pub(crate) fn validate_password(password: &str) -> Result<(), AppError> {
+    if password.is_empty() {
+        return Err(AppError::PasswordEmpty);
+    }
+    Ok(())
+}
+
 // RFC 5987：把 attr-char 之外的字节做 UTF-8 percent 编码，
 // 用于 Content-Disposition 的 filename* 参数（支持中文文件名，且不会产生非法 header）。
 fn percent_encode_filename(filename: &str) -> String {
@@ -90,16 +96,14 @@ async fn register(
     validate_username(&req.username)?;
 
     // 验证密码格式
-    if req.password.is_empty() {
-        return Err(AppError::PasswordEmpty);
-    }
+    validate_password(&req.password)?;
 
-    // 检查系统设置
+    // 检查系统设置（settings 行缺失时用统一缺省值）
     let invite_code_required =
         sqlx::query_scalar::<_, bool>("SELECT invite_code_required FROM settings WHERE id = 1")
             .fetch_optional(&pool)
             .await?
-            .unwrap_or(false);
+            .unwrap_or(crate::models::DEFAULT_INVITE_CODE_REQUIRED);
 
     // 如果系统需要邀请码，但用户未提供
     if invite_code_required && req.invite_code.is_none() {
@@ -182,13 +186,11 @@ const MAX_FAILED_ATTEMPTS: i64 = 5;
 // 锁定时长（秒）
 const LOCK_DURATION_SECS: i64 = 15 * 60;
 
-// 失败计数达到阈值时返回锁定截止时间的 RFC3339 字符串，否则为 None。
+// 锁定截止时间的 RFC3339 字符串。
 // 用户与管理员登录共用同一套“5 次失败锁 15 分钟”机制与状态字段。
-fn locked_until_for_attempts(attempts: i64) -> Option<String> {
-    (attempts >= MAX_FAILED_ATTEMPTS).then(|| {
-        (Utc::now() + Duration::seconds(LOCK_DURATION_SECS))
-            .to_rfc3339_opts(SecondsFormat::Millis, true)
-    })
+fn lock_deadline() -> String {
+    (Utc::now() + Duration::seconds(LOCK_DURATION_SECS))
+        .to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 // 用户登录
@@ -213,7 +215,7 @@ async fn login(
             None,
             Some(&req.username),
         )
-        .await?;
+        .await;
         return Err(AppError::InvalidCredentials);
     };
 
@@ -232,17 +234,24 @@ async fn login(
 
     // 验证密码
     if !verify_password(&req.password, &user.password_hash)? {
-        // 登录失败：增加失败计数，达到阈值时锁定
-        let new_attempts = user.failed_login_attempts + 1;
-        let locked_until = locked_until_for_attempts(new_attempts);
-        sqlx::query!(
-            "UPDATE users SET failed_login_attempts = ?, locked_until = ? WHERE id = ?",
-            new_attempts,
-            locked_until,
+        // 失败计数与锁定判定合并为单条自增语句，消除并发错密登录的漏计窗口；
+        // CASE 在达到阈值时写入新的锁定截止时间，否则清空
+        let attempts: Option<i64> = sqlx::query_scalar!(
+            "UPDATE users SET failed_login_attempts = failed_login_attempts + 1, locked_until = \
+             CASE WHEN failed_login_attempts + 1 >= ? THEN ? ELSE NULL END WHERE id = ? RETURNING \
+             failed_login_attempts",
+            MAX_FAILED_ATTEMPTS,
+            lock_deadline(),
             user.id
         )
-        .execute(&pool)
+        .fetch_optional(&pool)
         .await?;
+        if attempts.is_some_and(|n| n >= MAX_FAILED_ATTEMPTS) {
+            tracing::info!(
+                user_id = user.id,
+                "user account locked after repeated login failures"
+            );
+        }
         // 审计：用户登录失败（密码错误）
         log_audit_event(
             &pool,
@@ -253,7 +262,7 @@ async fn login(
             Some(user.id),
             Some(&user.username),
         )
-        .await?;
+        .await;
         return Err(AppError::InvalidCredentials);
     }
 
@@ -322,6 +331,9 @@ async fn change_password(
     if !verify_password(&req.old_password, &user.password_hash)? {
         return Err(AppError::IncorrectOldPassword);
     }
+
+    // 校验新密码非空
+    validate_password(&req.new_password)?;
 
     // 哈希新密码
     let new_password_hash = hash_password(&req.new_password)?;
@@ -484,60 +496,57 @@ async fn export_data(
     let metadata_bytes =
         serde_json::to_vec_pretty(&metadata).map_err(|e| AppError::Internal(e.to_string()))?;
 
-    // 在内存里构建 zip：用户的书通常不多，单用户全量导出可控；
-    // 压缩与文件读取是同步阻塞操作，放入 spawn_blocking 避免占用 tokio worker
-    let zip_buf = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, AppError> {
-        use std::io::Write;
+    // 顺序把 zip 写入临时文件再流式回传：书籍文件用 io::copy 搬运，
+    // 内存占用与书的数量/体积无关，反复导出也无法把内存打高
+    // 条目扩展名取书籍 format（此前兜底为 "txt"，非 txt 书会导出错误扩展名）
+    let entries: Vec<(String, String)> = books
+        .iter()
+        .enumerate()
+        .map(|(idx, b)| {
+            // 文件名做基础净化（去掉路径分隔符）
+            let safe_title: String = b
+                .title
+                .chars()
+                .map(|c| match c {
+                    '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+                    other => other,
+                })
+                .collect();
+            (
+                format!("{idx:03}_{safe_title}.{}", b.format.ext()),
+                b.file_path.clone(),
+            )
+        })
+        .collect();
 
-        let mut zip_buf: Vec<u8> = Vec::with_capacity(8 * 1024);
-        {
-            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut zip_buf));
-            let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
-                .compression_method(zip::CompressionMethod::Deflated);
+    let (zip_path, _) = crate::utils::zip::write_temp_zip(move |zip| {
+        use std::io::Write as _;
 
-            zip.start_file("metadata.json", opts)
-                .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
-            zip.write_all(&metadata_bytes)
-                .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
+        let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        let zip_err = crate::utils::zip::zip_write_err;
 
-            // 把每本书的源文件加入 zip；文件名加序号前缀防止重名
-            for (idx, b) in books.iter().enumerate() {
-                let path = std::path::Path::new(&b.file_path);
-                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("txt");
-                // 文件名做基础净化（去掉路径分隔符）
-                let safe_title: String = b
-                    .title
-                    .chars()
-                    .map(|c| match c {
-                        '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
-                        other => other,
-                    })
-                    .collect();
-                let entry = format!("{idx:03}_{safe_title}.{ext}");
-                zip.start_file(entry, opts)
-                    .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
-                match std::fs::read(&b.file_path) {
-                    Ok(bytes) => {
-                        zip.write_all(&bytes)
-                            .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
-                    },
-                    Err(e) => {
-                        tracing::warn!(error = %e, file_path = %b.file_path, "skip book file in export");
-                        // 写入一个 README 说明
-                        let note = format!("# 文件读取失败：{e}\n原路径：{}\n", b.file_path);
-                        zip.write_all(note.as_bytes())
-                            .map_err(|e| AppError::Internal(format!("zip error: {e}")))?;
-                    },
-                }
+        zip.start_file("metadata.json", opts).map_err(zip_err)?;
+        zip.write_all(&metadata_bytes).map_err(AppError::Io)?;
+
+        // 把每本书的源文件加入 zip；文件名加序号前缀防止重名
+        for (entry, file_path) in &entries {
+            zip.start_file(entry.as_str(), opts).map_err(zip_err)?;
+            match std::fs::File::open(file_path) {
+                Ok(mut file) => {
+                    std::io::copy(&mut file, zip).map_err(AppError::Io)?;
+                },
+                Err(e) => {
+                    tracing::warn!(error = %e, file_path, "skip book file in export");
+                    // 写入一个 README 说明
+                    let note = format!("# 文件读取失败：{e}\n原路径：{file_path}\n");
+                    zip.write_all(note.as_bytes()).map_err(AppError::Io)?;
+                },
             }
-
-            zip.finish()
-                .map_err(|e| AppError::Internal(format!("zip finalize: {e}")))?;
         }
-        Ok(zip_buf)
+        Ok(())
     })
-    .await
-    .map_err(|e| AppError::Internal(format!("export task failed: {e}")))??;
+    .await?;
 
     let timestamp = Utc::now().format("%Y%m%d_%H%M%S");
     let filename = format!("{}_{timestamp}.zip", user.username);
@@ -547,11 +556,7 @@ async fn export_data(
         percent_encode_filename(&filename)
     );
 
-    Response::builder()
-        .header(header::CONTENT_TYPE, "application/zip")
-        .header(header::CONTENT_DISPOSITION, content_disposition)
-        .body(Body::from(zip_buf))
-        .map_err(|e| AppError::Internal(format!("failed to build export response: {e}")))
+    crate::utils::zip::stream_temp_zip(zip_path, content_disposition).await
 }
 
 // 管理员首次设置
@@ -563,37 +568,32 @@ async fn admin_setup(
     // 验证用户名格式（长度 + 字符白名单）
     validate_username(&req.username)?;
 
-    // 检查是否已有管理员（初始管理员只能设置一次）
-    let admin_exists = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM admin)")
-        .fetch_one(&pool)
-        .await?;
+    // 验证密码非空
+    validate_password(&req.password)?;
 
-    if admin_exists {
-        return Err(AppError::AdminAlreadySetup);
-    }
-
-    // 检查用户名唯一
-    let username_exists =
-        sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM admin WHERE username = ?)")
-            .bind(&req.username)
-            .fetch_one(&pool)
-            .await?;
-    if username_exists {
-        return Err(AppError::AdminUsernameAlreadyExists);
-    }
-
-    // 哈希密码
+    // 哈希密码（耗时操作，在写入前完成）
     let password_hash = hash_password(&req.password)?;
 
-    // 创建管理员
-    let admin_id = sqlx::query!(
-        "INSERT INTO admin (username, password_hash) VALUES (?, ?)",
+    // 单条原子语句创建首个管理员：INSERT ... WHERE NOT EXISTS 消除
+    // “先查后插”的 TOCTOU——并发 setup 只有一个能插入成功
+    let admin_id = match sqlx::query!(
+        "INSERT INTO admin (username, password_hash)
+         SELECT ?, ? WHERE NOT EXISTS(SELECT 1 FROM admin)",
         req.username,
         password_hash
     )
     .execute(&pool)
-    .await?
-    .last_insert_rowid();
+    .await
+    {
+        Ok(result) if result.rows_affected() > 0 => result.last_insert_rowid(),
+        // rows_affected == 0：已有管理员（初始管理员只能设置一次）
+        Ok(_) => return Err(AppError::AdminAlreadySetup),
+        // 用户名唯一约束兜底（防御性：表非空时理论上已被上面拦截）
+        Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
+            return Err(AppError::AdminUsernameAlreadyExists);
+        },
+        Err(e) => return Err(e.into()),
+    };
 
     // 初始化系统设置
     sqlx::query!("INSERT OR IGNORE INTO settings (id, invite_code_required) VALUES (1, 1)")
@@ -610,7 +610,7 @@ async fn admin_setup(
         None,
         None,
     )
-    .await?;
+    .await;
 
     // 生成JWT令牌（新管理员 token_version 默认为 0）
     let claims = Claims::new_admin(admin_id, 0, &config);
@@ -644,7 +644,7 @@ async fn admin_login(
             None,
             Some(&req.username),
         )
-        .await?;
+        .await;
         return Err(AppError::InvalidCredentials);
     };
 
@@ -658,17 +658,23 @@ async fn admin_login(
 
     // 验证密码
     if !verify_password(&req.password, &admin.password_hash)? {
-        // 登录失败：增加失败计数，达到阈值时锁定
-        let new_attempts = admin.failed_login_attempts + 1;
-        let locked_until = locked_until_for_attempts(new_attempts);
-        sqlx::query!(
-            "UPDATE admin SET failed_login_attempts = ?, locked_until = ? WHERE id = ?",
-            new_attempts,
-            locked_until,
+        // 失败计数与锁定判定合并为单条自增语句（与用户登录同一机制）
+        let attempts: Option<i64> = sqlx::query_scalar!(
+            "UPDATE admin SET failed_login_attempts = failed_login_attempts + 1, locked_until = \
+             CASE WHEN failed_login_attempts + 1 >= ? THEN ? ELSE NULL END WHERE id = ? RETURNING \
+             failed_login_attempts",
+            MAX_FAILED_ATTEMPTS,
+            lock_deadline(),
             admin.id
         )
-        .execute(&pool)
+        .fetch_optional(&pool)
         .await?;
+        if attempts.is_some_and(|n| n >= MAX_FAILED_ATTEMPTS) {
+            tracing::info!(
+                admin_id = admin.id,
+                "admin account locked after repeated login failures"
+            );
+        }
         // 审计：管理员登录失败（密码错误）
         log_audit_event(
             &pool,
@@ -679,7 +685,7 @@ async fn admin_login(
             None,
             None,
         )
-        .await?;
+        .await;
         return Err(AppError::IncorrectAdminPassword);
     }
 
@@ -703,7 +709,7 @@ async fn admin_login(
         None,
         None,
     )
-    .await?;
+    .await;
 
     // 生成JWT令牌
     let claims = Claims::new_admin(admin.id, admin.token_version, &config);

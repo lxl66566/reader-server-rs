@@ -45,8 +45,12 @@ export const UploadModal: ParentComponent<{
     void doUpload();
   };
 
+  // 上传控制器：上传中「取消」按钮 abort；关闭弹窗同样中止后台请求
+  let uploadController: AbortController | null = null;
+
   const doUpload = async () => {
     setUploading(true);
+    uploadController = new AbortController();
     try {
       const f = file();
       if (!f) return;
@@ -55,20 +59,24 @@ export const UploadModal: ParentComponent<{
       form.append('title', title().trim());
       if (author().trim()) form.append('author', author().trim());
       form.append('is_public', isPublic() ? 'true' : 'false');
-      await bookApi.upload(form);
+      await bookApi.upload(form, uploadController.signal);
       toast.success(t('uploadSuccess'));
       props.onUploaded();
       props.onClose();
     } catch (error) {
-      toastError(error, t);
+      // 主动取消不弹错误
+      if (!uploadController.signal.aborted) toastError(error, t);
     } finally {
       setUploading(false);
+      uploadController = null;
     }
   };
 
   return (
     <Modal
       onClose={() => {
+        // 上传中禁止关闭：弹窗状态由上传结果或取消按钮驱动
+        if (uploading()) return;
         props.onClose();
       }}
       open={props.open}
@@ -103,11 +111,12 @@ export const UploadModal: ParentComponent<{
           <Button
             class="flex-1"
             onClick={() => {
-              props.onClose();
+              if (uploading()) uploadController?.abort();
+              else props.onClose();
             }}
             variant="ghost"
           >
-            {t('cancel')}
+            {uploading() ? t('uploadCancel') : t('cancel')}
           </Button>
           <Button
             class="flex-1"

@@ -248,6 +248,24 @@ async fn test_full_integration() {
     let book1 = upload_test_book(&app, &token1, "测试书籍1", TEST_BOOK_CONTENT, true).await;
     let book1_id = book1["book_id"].as_i64().unwrap();
 
+    // 夹具修复回归：四行章节标题（首行自动成章 + 第一/二/三章）必须全部提取
+    let titles: Vec<&str> = book1["chapters"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["title"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        titles,
+        [
+            "测试小说",
+            "第一章 测试章节",
+            "第二章 另一个章节",
+            "第三章 最终章"
+        ],
+        "chapter extraction must cover every heading in the fixture"
+    );
+
     // D2: upload private book
     let book2 = upload_test_book(&app, &token1, "测试书籍2", TEST_BOOK_CONTENT, false).await;
     let book2_id = book2["book_id"].as_i64().unwrap();
@@ -916,6 +934,20 @@ async fn test_book_search() {
     .await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
+    // 超大 page 不应 panic（(page-1)*limit 的 u32 乘法溢出回归），返回空页
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/v1/books/search?q=%E4%B8%89&page=4294967295&limit=50",
+        Body::empty(),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = response_json(resp).await;
+    assert_eq!(json["data"]["total"], 1);
+    assert_eq!(json["data"]["books"].as_array().unwrap().len(), 0);
+
     println!("\n===== Book search tests passed! =====");
 }
 
@@ -1199,6 +1231,7 @@ async fn test_ws_reading_session() {
     let v = recv_json(&mut ws_a).await;
     assert_eq!(v["type"], "heartbeat_ack");
     assert_eq!(v["synced"], true);
+    assert_eq!(v["updated"], true);
     assert_eq!(v["locator"], "100");
     assert_eq!(v["percent"], 0.05);
     assert_eq!(v["reading_time"], 0); // 首次心跳不累加
@@ -1221,6 +1254,7 @@ async fn test_ws_reading_session() {
     let v = recv_json(&mut ws_b).await;
     assert_eq!(v["type"], "heartbeat_ack");
     assert_eq!(v["synced"], false);
+    assert_eq!(v["updated"], false); // 让位：未写入，locator 为服务端现值
     assert_eq!(v["locator"], "100"); // 服务端进度（来自 device1）
 
     // 注意：设备接管语义已变更——设备 2 上一次心跳虽 synced=false，但服务端
@@ -1262,6 +1296,62 @@ async fn test_ws_reading_session() {
 
     let _ = ws_a.close(None).await;
     let _ = ws_b.close(None).await;
+}
+
+/// 并发首心跳：无进度记录时两设备同时创建，败者应收到 synced=false
+/// 且以 DB 现值为准（不谎称已保存、不广播未持久化的进度）
+#[tokio::test]
+async fn test_concurrent_first_heartbeat() {
+    let (app, pool) = setup_test_app().await.unwrap();
+    let token = register_and_login(&app, "hb_race", "password").await;
+    let book = upload_test_book(&app, &token, "racebook", TEST_BOOK_CONTENT, false).await;
+    let book_id = book["book_id"].as_i64().unwrap();
+    let user_id: i64 = sqlx::query_scalar("SELECT id FROM users WHERE username = 'hb_race'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    // upload 会预创建 locator='' 的进度行；删掉以构造"无进度记录"场景，
+    // 两条并发首心跳将同时进入 INSERT OR IGNORE 创建分支
+    sqlx::query("DELETE FROM reading_progress WHERE user_id = ? AND book_id = ?")
+        .bind(user_id)
+        .bind(book_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let (r1, r2) = tokio::join!(
+        crate::routes::reading::process_heartbeat_logic(
+            &pool, user_id, book_id, "100", 0.1, "dev1",
+        ),
+        crate::routes::reading::process_heartbeat_logic(
+            &pool, user_id, book_id, "200", 0.2, "dev2",
+        ),
+    );
+    let (r1, r2) = (r1.unwrap(), r2.unwrap());
+
+    // 恰好一个胜者真正写入；败者让位（synced=false）且拿到 DB 现值
+    let (winner, loser) = if r1.synced {
+        (r1, r2)
+    } else {
+        (r2, r1)
+    };
+    assert!(winner.synced);
+    assert!(winner.updated);
+    assert!(!loser.synced);
+    assert!(!loser.updated);
+    assert_eq!(loser.locator, winner.locator);
+
+    // DB 中只存在胜者的进度
+    let db_loc: String = sqlx::query_scalar(
+        "SELECT locator FROM reading_progress WHERE user_id = ? AND book_id = ?",
+    )
+    .bind(user_id)
+    .bind(book_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(db_loc, winner.locator);
 }
 
 #[tokio::test]
@@ -1392,6 +1482,157 @@ async fn test_ws_annotation_bookmark_sync() {
 
     let _ = ws_a.close(None).await;
     let _ = ws_b.close(None).await;
+}
+
+/// subscribe 的访问控制：不存在的 book_id 与他人私有书均回 error 帧
+/// （文案与对应 HTTP 错误一致），且连接保持、合法订阅可继续
+#[tokio::test]
+async fn test_ws_subscribe_access_control() {
+    let (app, _pool) = setup_test_app().await.unwrap();
+    let token = register_and_login(&app, "subowner", "password1").await;
+    let intruder_token = register_and_login(&app, "subintruder", "password1").await;
+    let book = upload_test_book(&app, &token, "subbook", TEST_BOOK_CONTENT, false).await;
+    let book_id = book["book_id"].as_i64().unwrap();
+
+    let addr = spawn_server(app).await;
+
+    let mut ws = ws_connect(addr, &token).await;
+    let mut ws_other = ws_connect(addr, &intruder_token).await;
+
+    // 不存在的 book_id → error 帧（404 语义）
+    send_json(
+        &mut ws,
+        &serde_json::json!({"type":"subscribe","book_id":999_999,"device_id":"d1"}),
+    )
+    .await;
+    let v = recv_json(&mut ws).await;
+    assert_eq!(v["type"], "error");
+    assert_eq!(v["message"], "Book not found");
+
+    // 他人私有书 → error 帧（403 语义）
+    send_json(
+        &mut ws_other,
+        &serde_json::json!({"type":"subscribe","book_id":book_id,"device_id":"d2"}),
+    )
+    .await;
+    let v = recv_json(&mut ws_other).await;
+    assert_eq!(v["type"], "error");
+    assert_eq!(v["message"], "Access denied to this book");
+
+    // error 后连接保持：owner 自身的合法订阅不受影响
+    send_json(
+        &mut ws,
+        &serde_json::json!({"type":"subscribe","book_id":book_id,"device_id":"d1"}),
+    )
+    .await;
+    let v = recv_json(&mut ws).await;
+    assert_eq!(v["type"], "subscribed");
+
+    let _ = ws.close(None).await;
+    let _ = ws_other.close(None).await;
+}
+
+/// 每连接订阅数上限：第 MAX+1 本新书的 subscribe 被拒（error 帧），
+/// 已订阅书的重订阅（换 device_id）不受上限影响
+#[tokio::test]
+async fn test_ws_subscribe_limit() {
+    let (app, _pool) = setup_test_app().await.unwrap();
+    let token = register_and_login(&app, "sublimit", "password1").await;
+
+    // 上传"上限+1"本可访问的书
+    let book_count = crate::ws::handler::MAX_SUBS_PER_CONN + 1;
+    let mut book_ids = Vec::with_capacity(book_count);
+    for i in 0..book_count {
+        let book = upload_test_book(
+            &app,
+            &token,
+            &format!("sublimit_book{i}"),
+            TEST_BOOK_CONTENT,
+            false,
+        )
+        .await;
+        book_ids.push(book["book_id"].as_i64().unwrap());
+    }
+
+    let addr = spawn_server(app).await;
+    let mut ws = ws_connect(addr, &token).await;
+
+    for id in &book_ids[..book_count - 1] {
+        send_json(
+            &mut ws,
+            &serde_json::json!({"type":"subscribe","book_id":id,"device_id":"d"}),
+        )
+        .await;
+        let v = recv_json(&mut ws).await;
+        assert_eq!(v["type"], "subscribed");
+    }
+
+    // 超限的新订阅 → error 帧
+    send_json(
+        &mut ws,
+        &serde_json::json!({"type":"subscribe","book_id":book_ids[book_count - 1],"device_id":"d"}),
+    )
+    .await;
+    let v = recv_json(&mut ws).await;
+    assert_eq!(v["type"], "error");
+
+    // 已订阅书的重订阅不受上限影响
+    send_json(
+        &mut ws,
+        &serde_json::json!({"type":"subscribe","book_id":book_ids[0],"device_id":"d2"}),
+    )
+    .await;
+    let v = recv_json(&mut ws).await;
+    assert_eq!(v["type"], "subscribed");
+
+    let _ = ws.close(None).await;
+}
+
+/// 每用户连接数上限：第 MAX+1 个连接升级后即被服务端关闭；
+/// 断开一个释放名额后可重新连接
+#[tokio::test]
+async fn test_ws_connection_limit() {
+    use futures_util::StreamExt;
+    use tokio_tungstenite::tungstenite::Message;
+
+    let (app, _pool) = setup_test_app().await.unwrap();
+    let token = register_and_login(&app, "connlimit", "password1").await;
+    let addr = spawn_server(app).await;
+
+    let mut conns = Vec::with_capacity(crate::ws::manager::MAX_CONNS_PER_USER);
+    for _ in 0..crate::ws::manager::MAX_CONNS_PER_USER {
+        conns.push(ws_connect(addr, &token).await);
+    }
+
+    // 超限连接：升级后立即被关闭（None / Close / 错误均视为关闭）
+    let mut extra = ws_connect(addr, &token).await;
+    let closed = tokio::time::timeout(std::time::Duration::from_secs(5), extra.next())
+        .await
+        .expect("over-limit connection should close");
+    assert!(matches!(
+        closed,
+        None | Some(Ok(Message::Close(_)) | Err(_))
+    ));
+
+    // 断开一个连接释放名额后可重连（服务端清理计数存在微小延迟，重试等待）
+    let _ = conns.pop().unwrap().close(None).await;
+    let mut reconnected = false;
+    for _ in 0..50 {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let Ok(mut ws) =
+            tokio::time::timeout(std::time::Duration::from_secs(2), ws_connect(addr, &token)).await
+        else {
+            continue;
+        };
+        reconnected = true;
+        let _ = ws.close(None).await;
+        break;
+    }
+    assert!(reconnected, "slot should be reusable after a disconnect");
+
+    for mut ws in conns {
+        let _ = ws.close(None).await;
+    }
 }
 
 // ----------------------------------------------------------------
@@ -1890,7 +2131,7 @@ async fn test_access_check_helpers() {
     ));
     assert!(matches!(
         check_user_token(&pool, i64::MAX, ver).await,
-        Err(AppError::UserNotFound)
+        Err(AppError::AccountDeleted)
     ));
     sqlx::query("UPDATE users SET status = 'banned' WHERE id = ?")
         .bind(other_id)

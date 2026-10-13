@@ -47,7 +47,8 @@ pub async fn check_user_token(
     .await?;
 
     match user {
-        None => Err(AppError::UserNotFound),
+        // 用户已删除：token 自然失效，与封禁同为 401 语义（而非 404）
+        None => Err(AppError::AccountDeleted),
         Some(row) if row.token_version != token_version => Err(AppError::TokenExpiredOrInvalid),
         Some(row) if row.status == UserStatus::Banned => Err(AppError::UserBanned),
         Some(_) => Ok(()),

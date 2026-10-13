@@ -22,7 +22,7 @@ import { useI18n } from '../i18n';
 import Chrome from '../reader/Chrome';
 import { createReadingSession } from '../reader/session';
 import TxtReader from '../reader/TxtReader';
-import type { ReaderNavigator } from '../reader/types';
+import type { DeepLink, ReaderNavigator } from '../reader/types';
 import { useRequireAuth } from '../stores/auth';
 import { useSettings } from '../stores/settings';
 
@@ -33,6 +33,10 @@ const PdfReader = lazy(() => import('../reader/PdfReader'));
 const HEARTBEAT_MS = 1000;
 // no interaction for this long -> the user is not reading; pause time tracking
 const ACTIVITY_WINDOW_MS = 60_000;
+// 远端进度应用的节流间隔与距离阈值：双端同读时避免每秒互跳 + toast 轰炸
+const SYNC_JUMP_MIN_INTERVAL_MS = 2000;
+const SYNC_JUMP_MIN_PERCENT_DELTA = 0.005;
+const SYNC_TOAST_MIN_INTERVAL_MS = 10_000;
 
 const Reader = () => {
   useRequireAuth();
@@ -82,7 +86,7 @@ export default Reader;
 
 const ReaderBody = (props: { book: BookDetail }) => {
   const { t } = useI18n();
-  const { settings } = useSettings();
+  const { reload: reloadSettings, settings } = useSettings();
   const [searchParams] = useSearchParams<{
     chapter?: string;
     locator?: string;
@@ -90,6 +94,8 @@ const ReaderBody = (props: { book: BookDetail }) => {
 
   const [chromeVisible, setChromeVisible] = createSignal(false);
   const [reconnecting, setReconnecting] = createSignal(false);
+  // 重连放弃状态：横幅变为可点击的手动重连入口
+  const [wsGaveUp, setWsGaveUp] = createSignal(false);
   const [percent, setPercent] = createSignal(props.book.percent);
   const [annotationsVersion, setAnnotationsVersion] = createSignal(0);
 
@@ -103,9 +109,58 @@ const ReaderBody = (props: { book: BookDetail }) => {
   let navigatorRef: null | ReaderNavigator = null;
   let positionRef: null | { locator: string; percent: number } = null;
 
-  const syncJump = (locator: string) => {
-    navigatorRef?.jumpToLocator(locator);
-    toast(t('readerSyncJump'), { icon: null });
+  // --- 跨设备进度同步 ---
+  // 跳转是异步的（txt 需加载窗口、epub 需加载章节）：期间清空 positionRef
+  // 挂起心跳回写，避免旧位置被写入服务器再广播出去形成多端乒乓。
+  let syncJumpSeq = 0; // 代际：旧跳转的收尾不得覆盖新跳转期间的状态
+  let remoteJumping = false; // 当前 onPosition 是否源于远端同步跳转
+  // 跳转期间到达的位置上报暂存于此：epub 的 relocated 会在 display 过程中
+  // 陆续触发，直接回填 positionRef 会把章节起始等中间位置当最新进度写回
+  // 服务端；跳转完成后取最后一次上报（无则恢复跳转前位置）回填
+  let deferredPosition: null | { locator: string; percent: number } = null;
+  let lastSyncJumpAt = 0;
+  let lastSyncToastAt = 0;
+
+  const syncJump = (locator: string): void => {
+    const nav = navigatorRef;
+    if (!nav) return;
+    const seq = ++syncJumpSeq;
+    const prev = positionRef;
+    deferredPosition = null;
+    positionRef = null;
+    remoteJumping = true;
+    void nav.jumpToLocator(locator).then(() => {
+      if (seq !== syncJumpSeq) return;
+      remoteJumping = false;
+      // 跳转失败：仍停留在原位。无论成败都以上报过的实际位置优先
+      // （无上报时恢复 prev，保证心跳不会无限挂起）
+      positionRef = deferredPosition ?? prev;
+      if (deferredPosition) setPercent(deferredPosition.percent);
+    });
+  };
+
+  // 远端进度（他端更新 / 设备让位）统一入口：节流 + 距离阈值 + toast 去重。
+  // 位置已收敛时直接跳过——服务端在让位时已把设备归属交给本机，
+  // 不跳转也不会丢失写入权。
+  const applyRemoteProgress = (
+    locator: string,
+    remotePercent: number,
+  ): void => {
+    const now = Date.now();
+    if (
+      positionRef !== null &&
+      Math.abs(remotePercent - positionRef.percent) <
+        SYNC_JUMP_MIN_PERCENT_DELTA
+    ) {
+      return;
+    }
+    if (now - lastSyncJumpAt < SYNC_JUMP_MIN_INTERVAL_MS) return;
+    lastSyncJumpAt = now;
+    syncJump(locator);
+    if (now - lastSyncToastAt > SYNC_TOAST_MIN_INTERVAL_MS) {
+      lastSyncToastAt = now;
+      toast(t('readerSyncJump'), { icon: null });
+    }
   };
 
   const session = createReadingSession(props.book.book_id, {
@@ -114,13 +169,13 @@ const ReaderBody = (props: { book: BookDetail }) => {
       void refetchAnnotations();
     },
     onBookmarkChanged: () => void refetchBookmarks(),
-    onReconnecting: setReconnecting,
-    onRemoteProgress: locator => {
-      syncJump(locator);
+    onGaveUp: () => setWsGaveUp(true),
+    onReconnecting: reconnecting => {
+      setReconnecting(reconnecting);
+      if (!reconnecting) setWsGaveUp(false);
     },
-    onSyncRequired: locator => {
-      syncJump(locator);
-    },
+    onRemoteProgress: applyRemoteProgress,
+    onSyncRequired: applyRemoteProgress,
   });
 
   // --- activity-aware heartbeat: only count time while the user is active ---
@@ -130,6 +185,9 @@ const ReaderBody = (props: { book: BookDetail }) => {
   };
 
   onMount(() => {
+    // 拉取一次最新设置：settings store 仅在登录态变化时请求，
+    // 同账号其他设备改过的设置本会话内否则不可见
+    reloadSettings();
     // capture: the reader scrolls an inner container, window scroll never fires
     for (const event of ['pointerdown', 'touchstart', 'scroll', 'keydown']) {
       window.addEventListener(event, markActivity, {
@@ -138,6 +196,7 @@ const ReaderBody = (props: { book: BookDetail }) => {
       });
     }
     const timer = setInterval(() => {
+      // positionRef 为空说明正在同步跳转或进度未知：心跳整体跳过
       if (!positionRef) return;
       if (Date.now() - lastActivity > ACTIVITY_WINDOW_MS) return;
       session.send(positionRef.locator, positionRef.percent);
@@ -150,23 +209,28 @@ const ReaderBody = (props: { book: BookDetail }) => {
     });
   });
 
-  // deep links from the detail page: ?chapter=<id> or ?locator=<locator>
-  onMount(() => {
-    const chapterId = searchParams.chapter;
+  // 详情页深链（?chapter=<id> / ?locator=<locator>）：作为 props 传给各
+  // Reader 由其就绪后消费。不能在 onMount 里经 navigatorRef 分发——
+  // EpubReader/PdfReader 是 lazy 加载，注册 navigator 时 onMount 早已跑完。
+  const deepLink = (): DeepLink | null => {
+    const chapterId = Number.parseInt(searchParams.chapter ?? '', 10);
+    if (Number.isFinite(chapterId)) return { chapterId, kind: 'chapter' };
     const locator = searchParams.locator;
-    if (chapterId) {
-      void bookApi
-        .jumpToChapter(props.book.book_id, Number(chapterId))
-        .then(res => navigatorRef?.jumpToChapter(res.position))
-        .catch(() => undefined);
-    } else if (locator) {
-      navigatorRef?.jumpToLocator(locator);
-    }
-  });
+    return locator ? { kind: 'locator', locator } : null;
+  };
 
   const onPosition = (locator: string, nextPercent: number) => {
+    // 远端同步跳转进行中：暂存而非回填，避免 epub relocated 在 display
+    // 过程中报出的中间位置被心跳写入服务端（见 syncJump 注释）
+    if (remoteJumping) {
+      deferredPosition = { locator, percent: nextPercent };
+      setPercent(nextPercent);
+      return;
+    }
     positionRef = { locator, percent: nextPercent };
     setPercent(nextPercent);
+    // 位置变化是活跃证据（如 epub 分页翻页）；远端同步跳转除外
+    markActivity();
   };
 
   // page uses the user's custom reading colors, overriding the global theme
@@ -197,6 +261,7 @@ const ReaderBody = (props: { book: BookDetail }) => {
             <TxtReader
               annotationsVersion={annotationsVersion}
               book={props.book}
+              deepLink={deepLink()}
               initialLocator={props.book.locator}
               onPosition={onPosition}
               onTapCenter={() => setChromeVisible(v => !v)}
@@ -209,7 +274,9 @@ const ReaderBody = (props: { book: BookDetail }) => {
             <EpubReader
               annotationsVersion={annotationsVersion}
               book={props.book}
+              deepLink={deepLink()}
               initialLocator={props.book.locator}
+              onActivity={markActivity}
               onPosition={onPosition}
               onTapCenter={() => setChromeVisible(v => !v)}
               registerNavigator={nav => {
@@ -221,6 +288,7 @@ const ReaderBody = (props: { book: BookDetail }) => {
             <PdfReader
               annotationsVersion={annotationsVersion}
               book={props.book}
+              deepLink={deepLink()}
               initialLocator={props.book.locator}
               onPosition={onPosition}
               onTapCenter={() => setChromeVisible(v => !v)}
@@ -246,11 +314,15 @@ const ReaderBody = (props: { book: BookDetail }) => {
         bookmarks={bookmarks}
         currentPosition={() => positionRef}
         navigator={() => navigatorRef}
+        onRetryReconnect={() => {
+          session.retry();
+        }}
         percent={percent}
         reconnecting={reconnecting}
         refetchAnnotations={() => void refetchAnnotations()}
         refetchBookmarks={() => void refetchBookmarks()}
         visible={chromeVisible}
+        wsGaveUp={wsGaveUp}
       />
     </div>
   );

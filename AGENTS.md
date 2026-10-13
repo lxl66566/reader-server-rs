@@ -21,11 +21,17 @@ temperature: 0
 reader-server-rs 是一个读书服务端软件，用户可以向服务器上传 txt 与 epub 书籍，并在任意设备的网页上进行阅读，所有的设置与阅读进度将通过服务端同步
 
 - [接口文档](doc/interface.md)，接口变更必须同步到其中
-- 目前未投入生产，不需要考虑 db 或配置的兼容性
-- 修改 db schema 后需要删除 target/sqlx_schema.db（build.rs 自动重建）
+- 修改 db schema 后需要做一下迁移
 - 前端代码必须同时考虑 PC 与移动端页面、i18n、light/dark theme、屏幕比例的兼容性
 - 你可以使用 solid-icons 图标库、solid-toast 提示库、kobalte 辅助组件开发
 - TS 侧的动态 import 仅允许字符串字面量路径（如路由/模态框的 `lazy(() => import('./Xxx'))`，类型完全静态可推导）；禁止变量路径的动态 import（类型会退化为 `Promise<any>`）
+
+## E2E 测试（Playwright）
+
+- 前端 `frontend/` 下 `pnpm e2e` 运行，默认打 `http://127.0.0.1:3000` 的运行中服务；用 `E2E_BASE_URL` 可指向其他实例（如前端改动未构建时指向 `pnpm dev` 的 5173）。
+- `@playwright/test` 版本必须匹配本机 `~/.cache/ms-playwright` 的 chromium 构建（1.63 ↔ 1243），升级前先查 `playwright-core/browsers.json`；NixOS 启动环境由 `e2e/run.sh` + `e2e/chromium-deps.nix` 封装（nix-ld）。
+- 测试书：`2.txt` 是 GBK 编码会被服务端拒收，测试用 `e2e/run.sh` 生成的 UTF-8 副本；`1.epub` 用于大书进度回归。
+- release 构建通过 rust-embed 内嵌 `frontend/dist`：前端改动要在 3000 端口生效，需 `pnpm build && cargo build --release` 并重启服务；日常验证用 vite dev server + `E2E_BASE_URL`。
 
 ## 技术栈
 

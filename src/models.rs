@@ -153,6 +153,10 @@ pub struct Settings {
     pub invite_code_required: bool,
 }
 
+/// settings 行缺失时的统一缺省值：公开注册语义（不强制邀请码）。
+/// 注册侧与管理端 GET /settings 必须引用同一常量，避免语义分叉
+pub const DEFAULT_INVITE_CODE_REQUIRED: bool = false;
+
 // 邀请码模型
 #[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct InviteCode {

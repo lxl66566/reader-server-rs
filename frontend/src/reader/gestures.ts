@@ -15,33 +15,37 @@ const SCROLL_CANCEL_EVENTS = ['wheel', 'touchstart'] as const;
 const runningScrolls = new WeakMap<HTMLElement, () => void>();
 
 export interface StripFlipOptions {
+  /** tap 区域划分的基准范围（容器在视口中的实际位置） */
+  bounds: () => null | TapBounds;
   canNext: () => boolean;
   canPrev: () => boolean;
   /** 动画结束、位移归零后提交翻页（dir 为本次动画方向） */
   onCommit: (dir: -1 | 1) => void;
   onTapCenter: () => void;
-  /** tap 区域划分的基准宽度（容器宽度） */
-  width: () => number;
+}
+
+/** tap 横向分区的基准范围（容器在视口坐标系中的左右边界） */
+export interface TapBounds {
+  left: number;
+  right: number;
 }
 
 export interface TapSwipeOptions {
+  /** tap 区域划分的基准范围（容器在视口中的实际位置） */
+  bounds: () => null | TapBounds;
   onFlip: (dir: -1 | 1) => void;
-  /** 滚动模式：tap 上/下区触发的翻页（章内滚动，章节边界处切章） */
-  onPageScroll: (dir: -1 | 1) => void;
   onTapCenter: () => void;
-  /** 是否翻页模式：滚动模式下 swipe 不翻页，tap 按纵向分区 */
+  /** 是否翻页模式：滚动模式下 swipe 不翻页、tap 一律唤出 chrome */
   paginate: () => boolean;
-  /**
-   * 事件 clientY 所在坐标系中可视区域的纵向范围。epub iframe 撑满整章内容
-   * 高度，clientY 相对整章而非可视区，需由宿主传入滚动偏移换算
-   */
-  visibleRange: () => { bottom: number; top: number };
-  width: () => number;
 }
 
 export type TapZone = 'center' | 'left' | 'right';
 
+/** 容器范围不可得时的兜底：零宽按中区处理 */
+const ZERO_BOUNDS: TapBounds = { left: 0, right: 0 };
+
 export type VerticalTapZone = 'bottom' | 'center' | 'top';
+
 interface TouchState {
   id: number;
   moved: boolean;
@@ -101,9 +105,10 @@ export interface ScrollEdges {
 }
 
 /**
- * 在 epub iframe 文档上挂 touch/click 手势（无跟手动画）：横向滑动超过阈值
- * 翻页；tap 在分页模式按左右区翻页、滚动模式按上/中/下区翻页或开 chrome。
- * 返回解绑函数。
+ * 在 epub iframe 文档上挂 touch/click 手势（无跟手动画）：翻页模式下
+ * 横向滑动超过阈值翻页、tap 按左右区翻页、中区开 chrome；滚动模式下
+ * 滚动交给原生手势，任意 tap 唤出 chrome（iframe 内容高与宿主可视区
+ * 的比例换算不可靠，分区翻页曾错位，故不在此分区）。返回解绑函数。
  */
 export function attachTapSwipeGestures(
   doc: Document,
@@ -136,37 +141,30 @@ export function attachTapSwipeGestures(
     }
     if (isTap(Date.now() - t, deltaX, deltaY)) {
       event.preventDefault();
-      handleTap(t0.clientX, t0.clientY);
+      handleTap(t0.clientX);
     }
   };
 
-  const handleTap = (clientX: number, clientY: number) => {
-    if (options.paginate()) {
-      const zone = tapZone(clientX, options.width());
-      if (zone === 'left') {
-        options.onFlip(-1);
-        return;
-      }
-      if (zone === 'right') {
-        options.onFlip(1);
-        return;
-      }
-    } else {
-      const zone = tapZoneVertical(clientY, options.visibleRange());
-      if (zone === 'top') {
-        options.onPageScroll(-1);
-        return;
-      }
-      if (zone === 'bottom') {
-        options.onPageScroll(1);
-        return;
-      }
+  const handleTap = (clientX: number) => {
+    if (!options.paginate()) {
+      // 滚动模式：任意 tap 唤出 chrome
+      options.onTapCenter();
+      return;
+    }
+    const zone = tapZone(clientX, options.bounds() ?? undefined);
+    if (zone === 'left') {
+      options.onFlip(-1);
+      return;
+    }
+    if (zone === 'right') {
+      options.onFlip(1);
+      return;
     }
     options.onTapCenter();
   };
 
   const onClick = (event: MouseEvent) => {
-    handleTap(event.clientX, event.clientY);
+    handleTap(event.clientX);
   };
 
   doc.addEventListener('touchstart', onTouchStart, { passive: true });
@@ -226,6 +224,27 @@ export function isTap(durationMs: number, dx: number, dy: number): boolean {
   return durationMs < TAP_MAX_MS && Math.hypot(dx, dy) < TAP_MAX_MOVE_PX;
 }
 
+const EDITABLE_TAGS = new Set(['INPUT', 'SELECT', 'TEXTAREA']);
+
+export interface VerticalTapZoneOptions {
+  /** 滚动容器在视口中的纵向范围；不可得时 tap 一律按中区处理 */
+  bounds: () => null | { bottom: number; top: number };
+  /** 上/下区触发的章内翻页 */
+  onPageScroll: (dir: -1 | 1) => void;
+  onTapCenter: () => void;
+}
+
+/**
+ * 键盘事件目标是否为文本输入类元素：这类目标上的按键（含方向键，
+ * 如弹窗输入框内移动光标）不应触发翻页。
+ */
+export function isTextEntryTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    (target.isContentEditable || EDITABLE_TAGS.has(target.tagName))
+  );
+}
+
 /** 滚动容器的贴边状态：内容不足一屏时上下同时贴边 */
 export function scrollEdges(el: HTMLElement): ScrollEdges {
   const maxScroll = el.scrollHeight - el.clientHeight;
@@ -235,9 +254,18 @@ export function scrollEdges(el: HTMLElement): ScrollEdges {
   };
 }
 
-/** 按横向位置把 tap 划入左/中/右三区（左 1/3 翻上一页，右 1/3 翻下一页） */
-export function tapZone(clientX: number, width: number): TapZone {
-  const ratio = clientX / Math.max(1, width);
+/**
+ * 按横向位置把 tap 划入左/中/右三区（左 1/3 翻上一页，右 1/3 翻下一页）。
+ * 以容器实际边界为基准：居中列布局下屏幕坐标需先减去容器左偏移，
+ * 否则屏幕正中会被误判为右区。零宽/未知范围按中区处理（交给 chrome）。
+ */
+export function tapZone(
+  clientX: number,
+  bounds: TapBounds = ZERO_BOUNDS,
+): TapZone {
+  const width = bounds.right - bounds.left;
+  if (width <= 0) return 'center';
+  const ratio = (clientX - bounds.left) / width;
   if (ratio < 0.33) return 'left';
   if (ratio > 0.67) return 'right';
   return 'center';
@@ -248,7 +276,9 @@ export function tapZoneVertical(
   clientY: number,
   range: { bottom: number; top: number },
 ): VerticalTapZone {
-  const height = Math.max(1, range.bottom - range.top);
+  const height = range.bottom - range.top;
+  // 退化范围（未知/零高）按中区处理：唤出 chrome 是最安全的兜底
+  if (height <= 0) return 'center';
   const ratio = (clientY - range.top) / height;
   if (ratio < 0.33) return 'top';
   if (ratio > 0.67) return 'bottom';
@@ -355,7 +385,7 @@ export function useStripFlip(options: StripFlipOptions) {
 
   const handleTap = (clientX: number) => {
     if (transitioning()) return;
-    const zone = tapZone(clientX, options.width());
+    const zone = tapZone(clientX, options.bounds() ?? undefined);
     if (zone === 'left') flip(-1);
     else if (zone === 'right') flip(1);
     else options.onTapCenter();
@@ -367,6 +397,8 @@ export function useStripFlip(options: StripFlipOptions) {
   };
 
   const onKeyDown = (event: KeyboardEvent) => {
+    // 弹窗输入框内的方向键不翻页
+    if (isTextEntryTarget(event.target)) return;
     if (event.key === 'ArrowLeft') flip(-1);
     if (event.key === 'ArrowRight') flip(1);
   };
@@ -391,4 +423,59 @@ export function useStripFlip(options: StripFlipOptions) {
     stripTransform,
     transitioning,
   };
+}
+
+/**
+ * 滚动模式的纵向 tap 分区：上/下 1/3 章内翻页、中区开 chrome。
+ * 触摸路径必须走 touchend——可滚动容器上 pointercancel 会取代 pointerup
+ * （浏览器接管滚动手势），pointer 事件判 tap 在触摸设备上完全失效；
+ * 桌面走 click，但用 mousedown 位置做 isTap 门控以免文本拖选触发翻页。
+ * 触摸消费时 preventDefault 吞掉随后的合成 click，避免重复 dispatch。
+ */
+export function useVerticalTapZones(options: VerticalTapZoneOptions) {
+  let touch: null | { t: number; x: number; y: number } = null;
+  let mouse: null | { t: number; x: number; y: number } = null;
+
+  const dispatch = (clientY: number) => {
+    const zone = tapZoneVertical(
+      clientY,
+      options.bounds() ?? {
+        bottom: 0,
+        top: 0,
+      },
+    );
+    if (zone === 'top') options.onPageScroll(-1);
+    else if (zone === 'bottom') options.onPageScroll(1);
+    else options.onTapCenter();
+  };
+
+  const onMouseDown = (event: MouseEvent) => {
+    mouse = { t: Date.now(), x: event.clientX, y: event.clientY };
+  };
+
+  const onClick = (event: MouseEvent) => {
+    if (!mouse) return;
+    const { t, x, y } = mouse;
+    mouse = null;
+    if (!isTap(Date.now() - t, event.clientX - x, event.clientY - y)) return;
+    dispatch(event.clientY);
+  };
+
+  const onTouchStart = (event: TouchEvent) => {
+    const t0 = event.touches[0];
+    if (t0) touch = { t: Date.now(), x: t0.clientX, y: t0.clientY };
+  };
+
+  const onTouchEnd = (event: TouchEvent) => {
+    if (!touch) return;
+    const { t, x, y } = touch;
+    touch = null;
+    const t0 = event.changedTouches[0];
+    if (!t0) return;
+    if (!isTap(Date.now() - t, t0.clientX - x, t0.clientY - y)) return;
+    event.preventDefault();
+    dispatch(t0.clientY);
+  };
+
+  return { onClick, onMouseDown, onTouchEnd, onTouchStart };
 }

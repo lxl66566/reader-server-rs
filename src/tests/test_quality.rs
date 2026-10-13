@@ -169,3 +169,51 @@ async fn test_update_reading_settings_invalid_not_persisted() {
     // 仍是 schema 默认值 18，未被非法请求覆盖
     assert_eq!(json["data"]["font_size"], 18);
 }
+
+/// 并发首次更新设置：两个请求同时建行，败者不得因裸 INSERT 撞
+/// UNIQUE(user_id) 而返回 500（INSERT OR IGNORE + UPDATE 兜底）
+#[tokio::test]
+async fn test_concurrent_first_settings_update() {
+    use tower::ServiceExt;
+
+    let (app, pool) = setup_test_app().await.unwrap();
+    let token = register_and_login(&app, "settings_race", "pass123").await;
+
+    let make_put = || {
+        let req = axum::http::Request::builder()
+            .method(Method::PUT)
+            .uri("/api/v1/reading/settings")
+            .header("Content-Type", "application/json")
+            .header("Authorization", format!("Bearer {token}"))
+            .header("X-Forwarded-For", "127.0.0.1")
+            .body(axum::body::Body::from(r#"{"font_size": 20}"#))
+            .unwrap();
+        app.clone().oneshot(req)
+    };
+
+    let (resp_a, resp_b) = tokio::join!(make_put(), make_put());
+    assert_eq!(resp_a.unwrap().status(), StatusCode::OK);
+    assert_eq!(resp_b.unwrap().status(), StatusCode::OK);
+
+    // 每用户仍只有一行设置，且更新已生效
+    let user_id: i64 = sqlx::query_scalar("SELECT id FROM users WHERE username = 'settings_race'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    let (row_count,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM reading_settings WHERE user_id = ?")
+            .bind(user_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(row_count, 1);
+
+    let font_size: i64 =
+        sqlx::query_scalar("SELECT font_size FROM reading_settings WHERE user_id = ?")
+            .bind(user_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(font_size, 20);
+}

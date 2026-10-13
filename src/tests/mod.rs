@@ -1,5 +1,6 @@
 pub mod test_integration;
 pub mod test_quality;
+pub mod test_security;
 
 use anyhow::Result;
 use axum::{
@@ -14,12 +15,37 @@ use tower::ServiceExt;
 
 use crate::{app::create_app, config::Config, db::create_test_pool};
 
-pub const TEST_BOOK_CONTENT: &str = "\
-测试小说\n第一章 测试章节\n这是第一章的内容，用于测试书籍上传功能。\n这是一段普通的文本。\n\\
-                                     n第二章 另一个章节\n这是第二章的内容，用于测试章节提取功能。\\
-                                     n更多内容在这里。\n\n第三章 最终章\n这是第三章的内容。";
+// 测试书籍正文夹具。必须用 concat! 逐行拼接：
+// 此前用 `\` 行继续符 + 缩进拼接，"第二章" 行首被吃掉一个字面 `n`，
+// 章节正则永远匹配不到第二章，导致章节数断言失真
+pub const TEST_BOOK_CONTENT: &str = concat!(
+    "测试小说\n",
+    "第一章 测试章节\n",
+    "这是第一章的内容，用于测试书籍上传功能。\n",
+    "这是一段普通的文本。\n",
+    "第二章 另一个章节\n",
+    "这是第二章的内容，用于测试章节提取功能。\n",
+    "更多内容在这里。\n",
+    "\n",
+    "第三章 最终章\n",
+    "这是第三章的内容。",
+);
 
 pub async fn setup_test_app() -> Result<(Router, Pool<Sqlite>)> {
+    setup_test_app_with_rate_limit(crate::config::RateLimitConfig {
+        per_second: std::num::NonZeroU32::new(1000).unwrap(),
+        burst_size: std::num::NonZeroU32::new(1000).unwrap(),
+        // oneshot 测试没有 peer addr（ConnectInfo），开启代理头信任
+        // 使 X-Forwarded-For 注入的测试 IP 生效
+        trust_proxy_headers: true,
+    })
+    .await
+}
+
+/// 以自定义限流配置构建测试应用（限流行为相关测试需要极小配额）
+pub async fn setup_test_app_with_rate_limit(
+    rate_limit: crate::config::RateLimitConfig,
+) -> Result<(Router, Pool<Sqlite>)> {
     let pool = create_test_pool().await?;
 
     let book_dir = std::env::temp_dir().join("test_books");
@@ -47,10 +73,7 @@ pub async fn setup_test_app() -> Result<(Router, Pool<Sqlite>)> {
             dir: std::env::temp_dir().join("test_logs"),
             rotation: "never".to_string(),
         },
-        rate_limit: crate::config::RateLimitConfig {
-            per_second: std::num::NonZeroU32::new(1000).unwrap(),
-            burst_size: std::num::NonZeroU32::new(1000).unwrap(),
-        },
+        rate_limit,
     };
 
     let app = create_app(pool.clone(), &config);
@@ -68,8 +91,8 @@ pub async fn make_request<B>(
 where
     B: Into<Body>,
 {
-    // 测试用 oneshot 没有 peer_addr；tower_governor 默认从 X-Forwarded-For
-    // 取 IP，故统一注入一个测试 IP 以避免被限流层拒绝
+    // 测试用 oneshot 没有 peer_addr（ConnectInfo），测试配置开启了
+    // trust_proxy_headers，故统一注入一个测试 IP 以避免被限流层拒绝
     let mut req_builder = Request::builder()
         .method(&method)
         .uri(uri)

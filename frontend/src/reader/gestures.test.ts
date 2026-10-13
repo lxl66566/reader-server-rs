@@ -27,17 +27,27 @@ describe('isTap', () => {
 });
 
 describe('tapZone', () => {
-  it('splits the width into left / center / right thirds', () => {
-    expect(tapZone(0, 300)).toBe('left');
-    expect(tapZone(98, 300)).toBe('left');
-    expect(tapZone(100, 300)).toBe('center');
-    expect(tapZone(200, 300)).toBe('center');
-    expect(tapZone(202, 300)).toBe('right');
-    expect(tapZone(299, 300)).toBe('right');
+  const bounds = { left: 100, right: 400 };
+
+  it('splits the container width into left / center / right thirds', () => {
+    // 300px 宽的三区边界在 199 与 201（相对容器左缘 99 与 101）
+    expect(tapZone(100, bounds)).toBe('left');
+    expect(tapZone(198, bounds)).toBe('left');
+    expect(tapZone(200, bounds)).toBe('center');
+    expect(tapZone(300, bounds)).toBe('center');
+    expect(tapZone(302, bounds)).toBe('right');
+    expect(tapZone(399, bounds)).toBe('right');
   });
 
-  it('clamps a zero width instead of dividing by zero', () => {
-    expect(tapZone(0.5, 0)).toBe('center');
+  it('subtracts the container offset for centered layouts', () => {
+    // 回归：屏幕正中在居中容器内属于中央区，不能按 clientX/宽 误判为右区
+    expect(tapZone(640, { left: 280, right: 1000 })).toBe('center');
+    expect(tapZone(950, { left: 280, right: 1000 })).toBe('right');
+  });
+
+  it('treats a degenerate range as the center zone', () => {
+    expect(tapZone(640, { left: 0, right: 0 })).toBe('center');
+    expect(tapZone(640)).toBe('center');
   });
 });
 

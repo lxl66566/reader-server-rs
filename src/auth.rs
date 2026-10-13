@@ -75,7 +75,9 @@ pub fn verify_token(token: &str, config: &Config) -> Result<Claims, AppError> {
 
     decode::<Claims>(token, &decoding_key, &validation)
         .map(|data| data.claims)
-        .map_err(AppError::Jwt)
+        // decode 失败均源自客户端提供的 token 内容（结构垃圾/伪造签名/过期/算法不匹配）；
+        // HS256 的 DecodingKey 构造不可失败，此路径不存在服务端内部错误，统一按 401 处理
+        .map_err(|_| AppError::TokenExpiredOrInvalid)
 }
 
 // 提取用户的认证中间件

@@ -41,6 +41,24 @@ pub struct JwtConfig {
     pub admin_expiration: u64,
 }
 
+impl JwtConfig {
+    /// 启动期校验：过期时间上限 365 天。
+    /// 超大 u64 会在签发路径触发 i64 转换 panic，这里提前 bail 给出明确报错
+    fn validate(&self) -> Result<()> {
+        const MAX_EXPIRATION_SECS: u64 = 365 * 24 * 60 * 60;
+        for (field, value) in [
+            ("jwt.expiration", self.expiration),
+            ("jwt.admin_expiration", self.admin_expiration),
+        ] {
+            anyhow::ensure!(
+                value <= MAX_EXPIRATION_SECS,
+                "{field} must be <= {MAX_EXPIRATION_SECS} seconds (365 days), got {value}"
+            );
+        }
+        Ok(())
+    }
+}
+
 /// 日志轮转配置
 /// rotation: "hourly" | "daily" | "never"（never 时只输出到 stderr）
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,6 +75,12 @@ pub struct RateLimitConfig {
     pub per_second: NonZeroU32,
     /// 令牌桶最大突发容量
     pub burst_size: NonZeroU32,
+    /// 是否信任反代设置的 X-Forwarded-For / X-Real-IP / Forwarded 头。
+    /// 默认 false（直连部署）：限流 key 取连接 peer addr，客户端伪造这些头无效；
+    /// 仅当部署在正确改写下这些头的反向代理之后时才应开启。
+    /// serde(default)：旧 config.json 无此字段时按 false 处理，无需手动迁移
+    #[serde(default)]
+    pub trust_proxy_headers: bool,
 }
 
 impl RateLimitConfig {
@@ -104,6 +128,7 @@ impl Default for Config {
             rate_limit: RateLimitConfig {
                 per_second: NonZeroU32::new(20).unwrap(),
                 burst_size: NonZeroU32::new(70).unwrap(),
+                trust_proxy_headers: false,
             },
         }
     }
@@ -128,6 +153,7 @@ pub async fn load_config() -> Result<Config> {
         }
 
         config.rate_limit.validate()?;
+        config.jwt.validate()?;
 
         Ok(config)
     } else {
@@ -137,8 +163,36 @@ pub async fn load_config() -> Result<Config> {
 
         let config_str = serde_json::to_string_pretty(&config)?;
         fs::write(&config_path, config_str).await?;
+        // 文件含 JWT secret：立即收紧权限为仅属主可读写
+        restrict_config_permissions(&config_path).await?;
 
         tracing::info!("Generated config.json with a random JWT secret");
         Ok(config)
+    }
+}
+
+/// 把 config.json 权限收紧为 0600（仅 Unix；其他平台为空操作）
+async fn restrict_config_permissions(path: &std::path::Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o600);
+        fs::set_permissions(path, perms).await?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 回归：新增配置字段必须带 serde(default)，旧 config.json 免迁移可直接启动
+    #[test]
+    fn rate_limit_config_parses_without_trust_proxy_headers() {
+        let legacy = r#"{"per_second": 20, "burst_size": 70}"#;
+        let config: RateLimitConfig = serde_json::from_str(legacy).unwrap();
+        assert!(!config.trust_proxy_headers);
     }
 }

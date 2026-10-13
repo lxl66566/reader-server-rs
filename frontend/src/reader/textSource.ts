@@ -5,6 +5,10 @@ import { bookApi } from '../api';
 
 export const TXT_CHUNK_SIZE = 6000;
 
+/** 缓存 chunk 数上限：分页模式连续翻页时避免整本书常驻内存；
+ * 超出按插入序（FIFO）淘汰最旧块，被淘汰的块在再次访问时重新加载 */
+export const MAX_CACHED_CHUNKS = 512;
+
 /** 滚动窗口最多保留的 chunk 数，超出后按滚动方向回收远端，避免 DOM 无界增长 */
 export const MAX_SCROLL_WINDOW_CHUNKS = 9;
 
@@ -17,10 +21,21 @@ export interface ScrollWindow {
 }
 
 interface Chunk {
+  /** 含非 BMP 字符（码元数 ≠ 码点数）：切片须走码点换算的慢路径 */
+  astral: boolean;
   /** server-reported char offset right after this chunk */
   next: number;
+  /** 码点数：与服务端 chars().count() 同口径，切片上界按它钳制 */
+  scalarLength: number;
   text: string;
 }
+
+/**
+ * 按 Unicode 标量（码点）计数与切片，对齐服务端 `chars()` 口径。
+ * JS 字符串下标是 UTF-16 码元：含非 BMP 字符（emoji、CJK 扩展汉字）时
+ * 码元数 > 码点数，直接用原生 length/slice 会让段落偏移、章节跳转与
+ * 服务端保存的进度随字符数线性漂移。
+ */
 
 export class TextSource {
   private chunks = new Map<number, Chunk>();
@@ -65,7 +80,8 @@ export class TextSource {
     return this.chunks.has(this.chunkStart(offset));
   }
 
-  /** Sync slice; caller must ensureRange first. Tolerates partial coverage. */
+  /** Sync slice; caller must ensureRange first. Tolerates partial coverage.
+   *  start/end 为码点口径（与服务端偏移一致） */
   slice(start: number, end: number): string {
     let out = '';
     for (
@@ -76,8 +92,10 @@ export class TextSource {
       const chunk = this.chunks.get(at);
       if (!chunk) break;
       const from = Math.max(start - at, 0);
-      const to = Math.min(end - at, chunk.text.length);
-      out += chunk.text.slice(from, to);
+      const to = Math.min(end - at, chunk.scalarLength);
+      out += chunk.astral
+        ? sliceByCodePoints(chunk.text, from, to)
+        : chunk.text.slice(from, to);
     }
     return out;
   }
@@ -87,7 +105,19 @@ export class TextSource {
     if (existing) return existing;
     const job = this.loader(at, TXT_CHUNK_SIZE)
       .then(res => {
-        this.chunks.set(at, { next: res.next_position, text: res.content });
+        const text = res.content;
+        const scalarLength = codePointLength(text);
+        this.chunks.set(at, {
+          astral: scalarLength !== text.length,
+          next: res.next_position,
+          scalarLength,
+          text,
+        });
+        // FIFO 淘汰：Map 迭代序即插入序，首个 key 为最旧 chunk
+        if (this.chunks.size > MAX_CACHED_CHUNKS) {
+          const oldest = this.chunks.keys().next().value;
+          if (oldest !== undefined && oldest !== at) this.chunks.delete(oldest);
+        }
       })
       .finally(() => {
         this.pending.delete(at);
@@ -121,6 +151,14 @@ export function chapterIndexAt(
   }
   return best;
 }
+export function codePointLength(text: string): number {
+  let count = 0;
+  for (let at = 0; at < text.length;) {
+    at += codePointSizeAt(text, at);
+    count++;
+  }
+  return count;
+}
 
 /**
  * 向下扩展一个 chunk。超过上限且 `canDropTop` 时回收顶部 chunk；
@@ -139,8 +177,6 @@ export function extendWindowDown(
       : win.start;
   return { end, start };
 }
-
-// --- 章节范围换算（TXT 章节由后端按行解析，position 为字符偏移） ---
 
 /**
  * 向上扩展一个 chunk。超过上限且 `canDropBottom` 时回收底部 chunk；
@@ -171,4 +207,35 @@ export function jumpWindow(
 ): ScrollWindow {
   if (target >= win.start && target < win.end) return win;
   return { end: Math.min(target + 1, maxEnd), start: target };
+}
+
+// --- 章节范围换算（TXT 章节由后端按行解析，position 为字符偏移） ---
+
+/** 按码点下标切片 [start, end)，start/end 与服务端字符偏移同单位 */
+export function sliceByCodePoints(
+  text: string,
+  start: number,
+  end: number,
+): string {
+  if (start < 0 || start >= end) return '';
+  let at = 0;
+  let cp = 0;
+  let startAt = -1;
+  while (at < text.length && cp < end) {
+    if (cp === start) startAt = at;
+    at += codePointSizeAt(text, at);
+    cp++;
+  }
+  // start 超出文本码点数时无内容可取
+  return startAt === -1 ? '' : text.slice(startAt, at);
+}
+
+/** 下标处码点的码元步长：高代理项后跟低代理项为 2，孤立代理按 1 兜底 */
+function codePointSizeAt(text: string, at: number): number {
+  const code = text.charCodeAt(at);
+  if (code >= 0xd800 && code <= 0xdbff) {
+    const next = text.charCodeAt(at + 1);
+    if (next >= 0xdc00 && next <= 0xdfff) return 2;
+  }
+  return 1;
 }
