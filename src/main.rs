@@ -8,6 +8,7 @@ mod frontend;
 mod models;
 mod parser;
 mod routes;
+mod user_data;
 mod utils;
 mod ws;
 

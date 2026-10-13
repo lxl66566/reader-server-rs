@@ -206,6 +206,17 @@ export const adminApi = {
       body: { description, limit_times: limitTimes },
       tokenKind: 'admin',
     }),
+  exportUser: (userId: number) =>
+    api.get<Response>(`/api/v1/admin/users/${userId}/export`, {
+      raw: true,
+      tokenKind: 'admin',
+    }),
+  importUser: (form: FormData) =>
+    api.post<{ book_count: number; user_id: number; username: string }>(
+      '/api/v1/admin/users/import',
+      // 大包导入需要更长的窗口
+      { form, timeout: 600_000, tokenKind: 'admin' },
+    ),
   inviteCodes: () =>
     api.get<{ invite_codes: InviteCodeItem[] }>('/api/v1/admin/invite_codes', {
       tokenKind: 'admin',

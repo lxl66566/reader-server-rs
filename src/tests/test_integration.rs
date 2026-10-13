@@ -2341,3 +2341,549 @@ async fn test_audit_logs_record_login_events() {
 
     println!("\n===== Audit login events test passed! =====");
 }
+
+// ================================================================
+// 用户数据迁移：管理员导出 / 导入
+// ================================================================
+
+/// 解析导出包里的 metadata.json（用 zip crate 直接读条目）
+fn read_export_metadata(zip_bytes: &[u8]) -> serde_json::Value {
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip_bytes)).unwrap();
+    let mut entry = archive.by_name("metadata.json").unwrap();
+    let mut buf = Vec::new();
+    std::io::Read::read_to_end(&mut entry, &mut buf).unwrap();
+    serde_json::from_slice(&buf).unwrap()
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn test_admin_export_and_import_user() {
+    let (app, pool) = setup_test_app().await.unwrap();
+
+    // 源用户先注册（setup_admin 会开启邀请码注册）
+    let alice_token = register_and_login(&app, "alice", "pass1234").await;
+    let book = upload_test_book(&app, &alice_token, "测试书", TEST_BOOK_CONTENT, false).await;
+    let book_id = book["book_id"].as_i64().unwrap();
+
+    // 标签 / 书签 / 批注 / 设置
+    let resp = make_json_request(
+        &app,
+        Method::PUT,
+        &format!("/api/v1/books/{book_id}/tags"),
+        &serde_json::json!({"tags": ["科幻", "经典"]}),
+        Some(&alice_token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = make_json_request(
+        &app,
+        Method::POST,
+        &format!("/api/v1/books/{book_id}/bookmarks"),
+        &serde_json::json!({"locator": "10", "percent": 0.25, "label": "记号"}),
+        Some(&alice_token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = make_json_request(
+        &app,
+        Method::POST,
+        &format!("/api/v1/books/{book_id}/annotations"),
+        &serde_json::json!({
+            "kind": "highlight", "start_locator": "5", "end_locator": "20",
+            "start_percent": 0.1, "end_percent": 0.4,
+            "excerpt": "一段文字", "content": "感想"
+        }),
+        Some(&alice_token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = make_json_request(
+        &app,
+        Method::PUT,
+        "/api/v1/reading/settings",
+        &serde_json::json!({"font_size": 22, "timezone": "Asia/Shanghai", "theme": "sepia"}),
+        Some(&alice_token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 进度 / 时长 / 每日统计直接 SQL（进度写入路径在 ws 心跳里）
+    let alice_id: i64 = sqlx::query_scalar!("SELECT id FROM users WHERE username = ?", "alice")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    sqlx::query!(
+        "UPDATE reading_progress SET locator = '42', percent = 0.5, reading_time = 120 WHERE \
+         user_id = ? AND book_id = ?",
+        alice_id,
+        book_id
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query!(
+        "UPDATE users SET total_reading_time = 360 WHERE id = ?",
+        alice_id
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query!(
+        "INSERT INTO daily_reading_stats (user_id, date, reading_seconds) VALUES (?, \
+         '2024-01-01', 60), (?, '2024-01-02', 90)",
+        alice_id,
+        alice_id
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // 管理员导出
+    let (admin_token, _) = setup_admin(&app).await;
+    let resp = make_request(
+        &app,
+        Method::GET,
+        &format!("/api/v1/admin/users/{alice_id}/export"),
+        Body::empty(),
+        Some(&admin_token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let export_bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    assert!(!export_bytes.is_empty());
+
+    // 迁移导出包含密码哈希与版本号
+    let metadata = read_export_metadata(&export_bytes);
+    assert_eq!(metadata["version"], 2);
+    assert!(metadata["password_hash"].is_string());
+
+    // 导入为新用户 bob（显式新密码）
+    let resp = make_multipart_request(
+        &app,
+        "/api/v1/admin/users/import",
+        vec![("username", "bob"), ("password", "newpass99")],
+        Some(("file", "export.zip", &export_bytes)),
+        Some(&admin_token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK, "import failed");
+    let json = response_json(resp).await;
+    assert_eq!(json["data"]["username"], "bob");
+    assert_eq!(json["data"]["book_count"], 1);
+
+    // 同一包再导入且不指定用户名 → 与 alice 冲突
+    let resp = make_multipart_request(
+        &app,
+        "/api/v1/admin/users/import",
+        vec![],
+        Some(("file", "export.zip", &export_bytes)),
+        Some(&admin_token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // 新用户可登录且数据完整
+    let resp = make_json_request(
+        &app,
+        Method::POST,
+        "/api/v1/auth/login",
+        &serde_json::json!({"username": "bob", "password": "newpass99"}),
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = response_json(resp).await;
+    let bob_token = json["data"]["token"].as_str().unwrap().to_string();
+
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/v1/auth/user_info",
+        Body::empty(),
+        Some(&bob_token),
+    )
+    .await;
+    let json = response_json(resp).await;
+    assert_eq!(json["data"]["total_reading_time"], 360);
+    assert_eq!(json["data"]["book_count"], 1);
+
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/v1/books",
+        Body::empty(),
+        Some(&bob_token),
+    )
+    .await;
+    let json = response_json(resp).await;
+    assert_eq!(json["data"]["total"], 1);
+    let books = json["data"]["books"].as_array().unwrap();
+    assert_eq!(books[0]["title"], "测试书");
+    assert_eq!(books[0]["locator"], "42");
+    assert_eq!(books[0]["percent"], 0.5);
+    assert_eq!(books[0]["reading_time"], 120);
+    let new_book_id = books[0]["book_id"].as_i64().unwrap();
+
+    // 书籍文件内容完整
+    let resp = make_request(
+        &app,
+        Method::GET,
+        &format!("/api/v1/books/{new_book_id}/content?position=0&length=4"),
+        Body::empty(),
+        Some(&bob_token),
+    )
+    .await;
+    let json = response_json(resp).await;
+    assert!(
+        json["data"]["content"]
+            .as_str()
+            .unwrap()
+            .starts_with("测试小说")
+    );
+
+    // 章节 / 标签 / 书签 / 批注
+    let resp = make_request(
+        &app,
+        Method::GET,
+        &format!("/api/v1/books/{new_book_id}"),
+        Body::empty(),
+        Some(&bob_token),
+    )
+    .await;
+    let json = response_json(resp).await;
+    assert_eq!(json["data"]["chapters"].as_array().unwrap().len(), 4);
+
+    let resp = make_request(
+        &app,
+        Method::GET,
+        &format!("/api/v1/books/{new_book_id}/tags"),
+        Body::empty(),
+        Some(&bob_token),
+    )
+    .await;
+    let json = response_json(resp).await;
+    let tags = json["data"]["tags"].as_array().unwrap();
+    assert_eq!(tags.len(), 2);
+
+    let resp = make_request(
+        &app,
+        Method::GET,
+        &format!("/api/v1/books/{new_book_id}/bookmarks"),
+        Body::empty(),
+        Some(&bob_token),
+    )
+    .await;
+    let json = response_json(resp).await;
+    let bookmarks = json["data"]["bookmarks"].as_array().unwrap();
+    assert_eq!(bookmarks.len(), 1);
+    assert_eq!(bookmarks[0]["label"], "记号");
+
+    let resp = make_request(
+        &app,
+        Method::GET,
+        &format!("/api/v1/books/{new_book_id}/annotations"),
+        Body::empty(),
+        Some(&bob_token),
+    )
+    .await;
+    let json = response_json(resp).await;
+    let annotations = json["data"]["annotations"].as_array().unwrap();
+    assert_eq!(annotations.len(), 1);
+    assert_eq!(annotations[0]["kind"], "highlight");
+    assert_eq!(annotations[0]["excerpt"], "一段文字");
+
+    // 设置与每日统计
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/v1/reading/settings",
+        Body::empty(),
+        Some(&bob_token),
+    )
+    .await;
+    let json = response_json(resp).await;
+    assert_eq!(json["data"]["font_size"], 22);
+    assert_eq!(json["data"]["timezone"], "Asia/Shanghai");
+    assert_eq!(json["data"]["theme"], "sepia");
+
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/v1/reading/stats",
+        Body::empty(),
+        Some(&bob_token),
+    )
+    .await;
+    let json = response_json(resp).await;
+    assert_eq!(json["data"]["total_reading_seconds"], 360);
+
+    // 源用户未受影响
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/v1/books",
+        Body::empty(),
+        Some(&alice_token),
+    )
+    .await;
+    let json = response_json(resp).await;
+    assert_eq!(json["data"]["total"], 1);
+
+    // 审计记录
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/v1/admin/audit_logs?limit=100",
+        Body::empty(),
+        Some(&admin_token),
+    )
+    .await;
+    let json = response_json(resp).await;
+    let actions: Vec<&str> = json["data"]["logs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|l| l["action"].as_str())
+        .collect();
+    assert!(actions.contains(&"export_user"), "{actions:?}");
+    assert!(actions.contains(&"import_user"), "{actions:?}");
+
+    println!("\n===== Admin export/import user test passed! =====");
+}
+
+#[tokio::test]
+async fn test_import_legacy_export_package() {
+    let (app, _pool) = setup_test_app().await.unwrap();
+    let (admin_token, _) = setup_admin(&app).await;
+
+    // 历史自助导出格式：无 version、books 用 id、无 file 字段、条目名 000_ 前缀
+    let metadata = serde_json::json!({
+        "user": {"id": 1, "username": "legacy_user", "created_at": "2020-01-01T00:00:00.000Z", "total_reading_time": 30},
+        "books": [{
+            "id": 7, "user_id": 1, "title": "旧书", "author": null, "file_path": "/old/path",
+            "is_public": true, "cover_path": null, "total_chars": 100, "total_pages": 0,
+            "description": null, "format": "txt", "content_hash": "xx", "created_at": "2020-01-01T00:00:00.000Z"
+        }],
+        "chapters": [{"chapter_id": 1, "book_id": 7, "title": "第一章", "position": 0}],
+        "reading_progress": [{"book_id": 7, "locator": "8", "percent": 0.4, "reading_time": 30, "last_read_at": null}],
+        "reading_settings": [{
+            "id": 1, "user_id": 1, "font_size": 20, "background_color": "#FFFFFF",
+            "text_color": "#000000", "line_height": 1.6, "letter_spacing": 0.1,
+            "paragraph_spacing": 1.0, "reading_width": 40, "text_indent": 2.0,
+            "chinese_conversion": "none", "timezone": "UTC", "font_family": "serif",
+            "theme": "light", "pagination_mode": "scroll"
+        }],
+        "bookmarks": [{"id": 1, "user_id": 1, "book_id": 7, "locator": "3", "percent": 0.1, "label": "旧书签", "created_at": "2020-01-02T00:00:00.000Z"}],
+        "annotations": [],
+        "exported_at": "2020-01-02T00:00:00.000Z"
+    });
+
+    let mut buf = Vec::new();
+    {
+        use std::io::Write as _;
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+        let opts = zip::write::SimpleFileOptions::default();
+        w.start_file("metadata.json", opts).unwrap();
+        w.write_all(&serde_json::to_vec_pretty(&metadata).unwrap())
+            .unwrap();
+        w.start_file("000_旧书.txt", opts).unwrap();
+        w.write_all(TEST_BOOK_CONTENT.as_bytes()).unwrap();
+        w.finish().unwrap();
+    }
+
+    // 不提供用户名 → 沿用包内 legacy_user；提供密码
+    let resp = make_multipart_request(
+        &app,
+        "/api/v1/admin/users/import",
+        vec![("password", "legacy123")],
+        Some(("file", "legacy.zip", &buf)),
+        Some(&admin_token),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "legacy import failed: {}",
+        String::from_utf8_lossy(&resp.into_body().collect().await.unwrap().to_bytes())
+    );
+    let json = response_json(resp).await;
+    assert_eq!(json["data"]["username"], "legacy_user");
+
+    let resp = make_json_request(
+        &app,
+        Method::POST,
+        "/api/v1/auth/login",
+        &serde_json::json!({"username": "legacy_user", "password": "legacy123"}),
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = response_json(resp).await;
+    let token = json["data"]["token"].as_str().unwrap();
+
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/v1/books",
+        Body::empty(),
+        Some(token),
+    )
+    .await;
+    let json = response_json(resp).await;
+    assert_eq!(json["data"]["total"], 1);
+    let books = json["data"]["books"].as_array().unwrap();
+    assert_eq!(books[0]["title"], "旧书");
+    assert_eq!(books[0]["is_public"], true);
+    assert_eq!(books[0]["percent"], 0.4);
+    assert_eq!(books[0]["reading_time"], 30);
+    let book_id = books[0]["book_id"].as_i64().unwrap();
+
+    let resp = make_request(
+        &app,
+        Method::GET,
+        &format!("/api/v1/books/{book_id}/content?position=0&length=4"),
+        Body::empty(),
+        Some(token),
+    )
+    .await;
+    let json = response_json(resp).await;
+    assert!(
+        json["data"]["content"]
+            .as_str()
+            .unwrap()
+            .starts_with("测试小说")
+    );
+
+    let resp = make_request(
+        &app,
+        Method::GET,
+        &format!("/api/v1/books/{book_id}/bookmarks"),
+        Body::empty(),
+        Some(token),
+    )
+    .await;
+    let json = response_json(resp).await;
+    assert_eq!(json["data"]["bookmarks"].as_array().unwrap().len(), 1);
+
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/v1/reading/settings",
+        Body::empty(),
+        Some(token),
+    )
+    .await;
+    let json = response_json(resp).await;
+    assert_eq!(json["data"]["font_size"], 20);
+    assert_eq!(json["data"]["line_height"], 1.6);
+
+    println!("\n===== Legacy export import test passed! =====");
+}
+
+#[tokio::test]
+async fn test_import_self_service_export_requires_password() {
+    let (app, _pool) = setup_test_app().await.unwrap();
+    let token = register_and_login(&app, "carol", "pass1234").await;
+    upload_test_book(&app, &token, "卡罗尔的书", TEST_BOOK_CONTENT, false).await;
+
+    // 自助导出不含密码哈希
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/v1/auth/export",
+        Body::empty(),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let export_bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let metadata = read_export_metadata(&export_bytes);
+    assert!(metadata.get("password_hash").is_none());
+
+    let (admin_token, _) = setup_admin(&app).await;
+
+    // 不带密码导入 → 400
+    let resp = make_multipart_request(
+        &app,
+        "/api/v1/admin/users/import",
+        vec![("username", "carol2")],
+        Some(("file", "export.zip", &export_bytes)),
+        Some(&admin_token),
+    )
+    .await;
+    let status = resp.status();
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "import without password: {}",
+        String::from_utf8_lossy(&resp.into_body().collect().await.unwrap().to_bytes())
+    );
+
+    // 提供密码即可导入并登录
+    let resp = make_multipart_request(
+        &app,
+        "/api/v1/admin/users/import",
+        vec![("username", "carol2"), ("password", "newpass77")],
+        Some(("file", "export.zip", &export_bytes)),
+        Some(&admin_token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let resp = make_json_request(
+        &app,
+        Method::POST,
+        "/api/v1/auth/login",
+        &serde_json::json!({"username": "carol2", "password": "newpass77"}),
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    println!("\n===== Self-service export import test passed! =====");
+}
+
+#[tokio::test]
+async fn test_admin_user_export_access_control() {
+    let (app, _pool) = setup_test_app().await.unwrap();
+    // 先注册再 setup（setup 会开启邀请码注册）
+    let token = register_and_login(&app, "dave", "pass1234").await;
+    let (admin_token, _) = setup_admin(&app).await;
+
+    // 用户 token 不能调管理员接口
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/v1/admin/users/999/export",
+        Body::empty(),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    // 不存在的用户
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/v1/admin/users/999/export",
+        Body::empty(),
+        Some(&admin_token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    // 导入同样要求管理员（403）
+    let resp = make_multipart_request(
+        &app,
+        "/api/v1/admin/users/import",
+        vec![],
+        None,
+        Some(&token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    println!("\n===== Admin export access control test passed! =====");
+}

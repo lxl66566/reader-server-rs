@@ -29,6 +29,12 @@ export const UsersTab: Component<{ onUnauthorized: () => void }> = props => {
   const [pending, setPending] = createSignal<null | PendingAction>(null);
   const [newPassword, setNewPassword] = createSignal('');
   const [busy, setBusy] = createSignal(false);
+  const [exportingId, setExportingId] = createSignal<null | number>(null);
+  const [importOpen, setImportOpen] = createSignal(false);
+  const [importFile, setImportFile] = createSignal<File | null>(null);
+  const [importUsername, setImportUsername] = createSignal('');
+  const [importPassword, setImportPassword] = createSignal('');
+  const [importing, setImporting] = createSignal(false);
   const [users, { refetch }] = createResource(async () => {
     try {
       const res = await adminApi.users();
@@ -43,6 +49,63 @@ export const UsersTab: Component<{ onUnauthorized: () => void }> = props => {
   const closePending = () => {
     setPending(null);
     setNewPassword('');
+  };
+
+  const closeImport = () => {
+    setImportOpen(false);
+    setImportFile(null);
+    setImportUsername('');
+    setImportPassword('');
+  };
+
+  const onImportFileChange = (event: Event) => {
+    const input = event.currentTarget as HTMLInputElement;
+    setImportFile(input.files?.[0] ?? null);
+  };
+
+  // 导出用户全部数据（含书籍文件）为 zip 下载
+  const downloadExport = async (user: AdminUserItem) => {
+    setExportingId(user.user_id);
+    try {
+      const res = await adminApi.exportUser(user.user_id);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${user.username}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      if (isUnauthorized(err)) props.onUnauthorized();
+      toastError(err, t);
+    } finally {
+      setExportingId(null);
+    }
+  };
+
+  const submitImport = async () => {
+    const file = importFile();
+    if (!file) return;
+    setImporting(true);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const username = importUsername().trim();
+      const password = importPassword();
+      if (username) form.append('username', username);
+      if (password) form.append('password', password);
+      await adminApi.importUser(form);
+      toast.success(t('importSuccess'));
+      closeImport();
+      void refetch();
+    } catch (err) {
+      if (isUnauthorized(err)) props.onUnauthorized();
+      toastError(err, t);
+    } finally {
+      setImporting(false);
+    }
   };
 
   const runAction = async () => {
@@ -94,7 +157,15 @@ export const UsersTab: Component<{ onUnauthorized: () => void }> = props => {
   };
 
   return (
-    <SectionCard title={t('adminTabUsers')}>
+    <SectionCard
+      actions={
+        <Button onClick={() => setImportOpen(true)} variant="ghost">
+          {importing() ? <Spinner class="size-4" /> : null}
+          {t('importUser')}
+        </Button>
+      }
+      title={t('adminTabUsers')}
+    >
       <Show fallback={<EmptyState text={t('none')} />} when={list().length > 0}>
         <div class="overflow-x-auto">
           <table class="w-full min-w-[640px] text-sm">
@@ -124,6 +195,15 @@ export const UsersTab: Component<{ onUnauthorized: () => void }> = props => {
                     </td>
                     <td class="py-2">
                       <div class="flex flex-wrap gap-1">
+                        <ActionButton
+                          disabled={exportingId() === item.user_id}
+                          label={
+                            exportingId() === item.user_id
+                              ? t('loading')
+                              : t('exportUserData')
+                          }
+                          onClick={() => void downloadExport(item)}
+                        />
                         <ActionButton
                           label={t('resetPassword')}
                           onClick={() =>
@@ -191,6 +271,49 @@ export const UsersTab: Component<{ onUnauthorized: () => void }> = props => {
           </div>
         </Modal>
       </Show>
+      <Modal onClose={closeImport} open={importOpen()} title={t('importUser')}>
+        <p class="text-muted mb-3 text-sm">{t('importUserDesc')}</p>
+        <label class="border-edge bg-page text-muted hover:bg-surface mb-3 block cursor-pointer rounded border px-3 py-2 text-sm">
+          <span class="block truncate">
+            {importFile() ? importFile()!.name : t('importSelectFile')}
+          </span>
+          <input
+            accept=".zip"
+            class="hidden"
+            onChange={onImportFileChange}
+            type="file"
+          />
+        </label>
+        <label class="mb-3 flex flex-col gap-1 text-sm">
+          <span class="text-muted">{t('username')}</span>
+          <Input
+            onInput={setImportUsername}
+            placeholder={t('importUsernamePlaceholder')}
+            value={importUsername()}
+          />
+        </label>
+        <label class="mb-4 flex flex-col gap-1 text-sm">
+          <span class="text-muted">{t('password')}</span>
+          <Input
+            onInput={setImportPassword}
+            placeholder={t('importPasswordPlaceholder')}
+            type="password"
+            value={importPassword()}
+          />
+        </label>
+        <div class="flex justify-end gap-2">
+          <Button disabled={importing()} onClick={closeImport} variant="ghost">
+            {t('cancel')}
+          </Button>
+          <Button
+            disabled={importing() || !importFile()}
+            onClick={() => void submitImport()}
+          >
+            {importing() ? <Spinner class="size-4" /> : null}
+            {t('confirm')}
+          </Button>
+        </div>
+      </Modal>
 
       <ConfirmDialog
         message={t('confirmAction')}
@@ -219,11 +342,13 @@ const StatusBadge: Component<{ status: AdminUserItem['status'] }> = props => {
 };
 
 const ActionButton: Component<{
+  disabled?: boolean;
   label: string;
   onClick: () => void;
 }> = props => (
   <button
-    class="border-edge text-muted hover:bg-page hover:text-ink cursor-pointer rounded border px-2 py-1 text-xs"
+    class="border-edge text-muted hover:bg-page hover:text-ink cursor-pointer rounded border px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-50"
+    disabled={props.disabled}
     onClick={() => {
       props.onClick();
     }}

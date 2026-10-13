@@ -137,7 +137,7 @@ pub fn routes() -> Router<crate::app::AppState> {
 
 // 上传书籍
 /// 映射 multipart 解析错误：超过请求体上限时返回 413，其余按原有错误处理
-fn map_multipart_err(
+pub(crate) fn map_multipart_err(
     e: &axum::extract::multipart::MultipartError,
     other: impl FnOnce(String) -> AppError,
 ) -> AppError {
@@ -146,6 +146,21 @@ fn map_multipart_err(
     } else {
         other(e.to_string())
     }
+}
+
+/// 标签净化：trim、去空、长度限制（32 字符）、去重（保留首次出现顺序）。
+/// set_book_tags 与用户数据导入共用同一规则
+pub(crate) fn clean_tags(tags: impl IntoIterator<Item = String>) -> Vec<String> {
+    let cleaned: Vec<String> = tags
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && s.chars().count() <= 32)
+        .collect();
+    let mut seen = std::collections::HashSet::new();
+    cleaned
+        .into_iter()
+        .filter(|t| seen.insert(t.clone()))
+        .collect()
 }
 
 async fn upload_book(
@@ -1141,19 +1156,7 @@ async fn set_book_tags(
 ) -> Result<Json<ApiResponse<BookTagsResponse>>, AppError> {
     require_book_owner(&pool, &auth, book_id).await?;
 
-    // 防止标签里夹带超长或空字符串
-    let cleaned: Vec<String> = req
-        .tags
-        .into_iter()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty() && s.chars().count() <= 32)
-        .collect();
-    // 去重（保留首次出现顺序）
-    let mut seen = std::collections::HashSet::new();
-    let tags: Vec<String> = cleaned
-        .into_iter()
-        .filter(|t| seen.insert(t.clone()))
-        .collect();
+    let tags = clean_tags(req.tags);
 
     let mut tx = pool.begin().await?;
 

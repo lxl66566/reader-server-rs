@@ -180,6 +180,10 @@ pub enum AppError {
     #[error("Failed to parse form data: {0}")]
     FormParseError(String),
 
+    // 用户数据导入包无效：zip 损坏 / 缺 metadata.json / 条目缺失 / 版本不支持 / 字段非法
+    #[error("Invalid user data package: {0}")]
+    ImportPackageInvalid(String),
+
     #[error("Failed to read field '{0}': {1}")]
     FieldReadError(String, String),
 
@@ -264,7 +268,8 @@ impl IntoResponse for AppError {
             | AppError::EmptyLocator
             | AppError::ContentEndpointNotSupported
             | AppError::FormParseError(_)
-            | AppError::FieldReadError(..) => StatusCode::BAD_REQUEST,
+            | AppError::FieldReadError(..)
+            | AppError::ImportPackageInvalid(_) => StatusCode::BAD_REQUEST,
 
             AppError::Database(_) | AppError::Jwt(_) | AppError::Io(_) | AppError::Internal(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR

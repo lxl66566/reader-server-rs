@@ -4,7 +4,7 @@
 
 | HTTP status | 触发场景（典型） |
 |---|---|
-| 400 | 参数校验失败（用户名格式、密码为空、邀请码、上传文件格式/大小/损坏（epub/pdf 解析失败）、空文件、章节数超上限、批注范围、locator 为空、percent 越界、无效时区、无效搜索 scope、对非 txt 书调用 `/content` 等） |
+| 400 | 参数校验失败（用户名格式、密码为空、邀请码、上传文件格式/大小/损坏（epub/pdf 解析失败）、空文件、章节数超上限、批注范围、locator 为空、percent 越界、无效时区、无效搜索 scope、对非 txt 书调用 `/content`、用户数据导入包无效（zip 损坏 / 缺 metadata.json / 缺书籍条目 / 版本不支持 / 字段非法）等） |
 | 401 | 未登录 / token 过期 / 账户被锁定 / 账户被ban / 账户已注销 / token 角色不匹配 |
 | 403 | 无权限访问 / 修改 / 删除目标资源（如非 owner 操作他人书） |
 | 404 | 资源不存在（书 / 章节 / 用户 / 书签 / 批注 / 管理员 / 书籍原文件在磁盘上丢失） |
@@ -104,7 +104,7 @@ type Annotation = {
 | GET | /api/v1/auth/user_info | Auth | - | { user_id: number; username: string; total_reading_time: number; book_count: number; status: 'active' \| 'banned' } |
 | POST | /api/v1/auth/change_password | Auth | Body: { old_password: string; new_password: string } | {} |
 | DELETE | /api/v1/auth/account | Auth | Body: { password: string } | {} |
-| GET | /api/v1/auth/export | Auth | - | application/zip 流，文件名 `<username>_<timestamp>.zip`，内含 metadata.json（书/章节/进度/设置/书签/批注）+ 所有原始书籍文件（保留原格式） |
+| GET | /api/v1/auth/export | Auth | - | application/zip 流，文件名 `<username>_<timestamp>.zip`，内含 metadata.json（书（含标签）/章节/进度/设置/书签/批注/每日统计，不含密码哈希）+ 所有原始书籍文件（保留原格式）；任何书籍文件读取失败会整体返回 500 而不是产出残缺包。包格式与管理员导出一致，可直接被 `/admin/users/import` 导入（需显式提供新密码） |
 | POST | /api/v1/auth/admin/setup | - | Body: { username: string; password: string } | { admin_token: string }；仅允许一次，重复/并发调用只有首个成功（原子语句保证），其余返回 400 |
 | POST | /api/v1/auth/admin/login | - | Body: { username: string; password: string } | { admin_token: string } |
 
@@ -123,6 +123,8 @@ type Annotation = {
 | POST | /api/v1/admin/users/:user_id/revoke_tokens | Admin | - | {} |
 | POST | /api/v1/admin/users/:user_id/ban | Admin | - | {} |
 | POST | /api/v1/admin/users/:user_id/unban | Admin | - | {} |
+| GET | /api/v1/admin/users/:user_id/export | Admin | - | application/zip 流，文件名 `<username>_<timestamp>.zip`；迁移范围导出：metadata.json（账号（含密码哈希，导入后可凭原密码登录）/书籍（含标签）/章节/进度/设置/书签/批注/每日统计）+ 所有书籍原文件；任何文件缺失/读取失败会整体返回 500 |
+| POST | /api/v1/admin/users/import | Admin | FormData: file (zip，用户数据导出包), username?: string, password?: string | { user_id: number; username: string; book_count: number }；username/password 省略或留空时使用包内原值；包内无密码哈希（用户自助导出）时必须提供 password，否则 400；用户名冲突返回 400。请求体上限独立放宽为 4GB（可打包用户全部书籍），服务端流式落盘。同时兼容导入历史版本（无版本号）的用户自助导出包 |
 | GET | /api/v1/admin/admins | Admin | - | { admins: AdminItem[] } |
 | POST | /api/v1/admin/admins | Admin | Body: { username: string; password: string } | {} |
 | GET | /api/v1/admin/audit_logs?page=number&limit=number | Admin | - | { total: number; logs: AuditLogItem[] }；除管理操作外还记录登录事件（admin_setup / admin_login / admin_login_failed / user_login_failed），登录类事件的 admin_id/admin_username 可能为 null |

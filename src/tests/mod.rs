@@ -32,6 +32,13 @@ pub const TEST_BOOK_CONTENT: &str = concat!(
 );
 
 pub async fn setup_test_app() -> Result<(Router, Pool<Sqlite>)> {
+    // RS_TEST_LOG=1 时把 tracing 输出定向到测试捕获器：只有失败的测试会打印日志
+    if std::env::var("RS_TEST_LOG").is_ok() {
+        let _ = tracing_subscriber::fmt()
+            .with_test_writer()
+            .with_env_filter("reader_server=trace,error")
+            .try_init();
+    }
     setup_test_app_with_rate_limit(crate::config::RateLimitConfig {
         per_second: std::num::NonZeroU32::new(1000).unwrap(),
         burst_size: std::num::NonZeroU32::new(1000).unwrap(),

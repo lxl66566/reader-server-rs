@@ -1,11 +1,12 @@
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
+    extract::{DefaultBodyLimit, Path, Query, State, multipart::Multipart},
     response::Response,
     routing::{get, post},
 };
 use chrono::{SecondsFormat, Utc};
 use sqlx::{Pool, Sqlite};
+use tokio::io::AsyncWriteExt as _;
 
 use crate::{
     auth::AuthAdmin,
@@ -14,14 +15,15 @@ use crate::{
     models::{
         AdminListItem, AdminUserListItem, AuditLog, ChangePasswordRequest, CheckSetupResponse,
         CreateAdminRequest, CreateInviteCodeRequest, CreateInviteCodeResponse,
-        DEFAULT_INVITE_CODE_REQUIRED, InviteCode, ListAdminsResponse, ListAuditLogsResponse,
-        ListInviteCodesResponse, ListUsersResponse, ResetUserPasswordRequest, Settings,
-        UpdateSettingsRequest, UserStatus,
+        DEFAULT_INVITE_CODE_REQUIRED, ImportUserResponse, InviteCode, ListAdminsResponse,
+        ListAuditLogsResponse, ListInviteCodesResponse, ListUsersResponse,
+        ResetUserPasswordRequest, Settings, UpdateSettingsRequest, UserStatus,
     },
     routes::{
         auth::{validate_password, validate_username},
-        books::PaginationParams,
+        books::{PaginationParams, map_multipart_err},
     },
+    user_data::{self, ExportScope},
     utils::{generate_invite_code, generate_uuid, hash_password, verify_password},
 };
 
@@ -34,14 +36,23 @@ pub fn routes() -> Router<crate::app::AppState> {
         .route("/invite_codes", get(list_invite_codes))
         .route("/settings", get(get_settings).put(update_settings))
         .route("/users", get(list_users))
+        .route(
+            "/users/import",
+            post(import_user).layer(DefaultBodyLimit::max(IMPORT_BODY_LIMIT)),
+        )
         .route("/users/{user_id}/reset_password", post(reset_password))
         .route("/users/{user_id}/revoke_tokens", post(revoke_user_tokens))
         .route("/users/{user_id}/ban", post(ban_user))
         .route("/users/{user_id}/unban", post(unban_user))
+        .route("/users/{user_id}/export", get(export_user))
         .route("/admins", get(list_admins).post(create_admin))
         .route("/audit_logs", get(list_audit_logs))
         .route("/backup", get(backup_global))
 }
+
+/// 导入请求体上限：导出 zip 打包用户全部书籍，远超单书上传上限；
+/// handler 内流式落盘，内存占用与包大小无关
+const IMPORT_BODY_LIMIT: usize = 4 * 1024 * 1024 * 1024;
 
 /// 审计文本字段入库前的截断上限（按字符计）
 const AUDIT_TEXT_MAX_CHARS: usize = 256;
@@ -295,6 +306,112 @@ async fn list_users(
     .await?;
 
     Ok(Json(ApiResponse::success(ListUsersResponse { users })))
+}
+
+// 导出指定用户的全部数据（迁移范围：含密码哈希与书籍文件），用于跨实例迁移。
+// 任何书籍文件缺失/读取失败都整体报错，绝不产出残缺包
+async fn export_user(
+    admin: AuthAdmin,
+    State(pool): State<Pool<Sqlite>>,
+    Path(user_id): Path<i64>,
+) -> Result<Response, AppError> {
+    log_audit(
+        &pool,
+        &admin,
+        "export_user",
+        Some("user"),
+        Some(user_id),
+        None,
+    )
+    .await;
+
+    let (zip_path, filename) =
+        user_data::build_user_export_zip(&pool, user_id, ExportScope::Migration).await?;
+
+    let content_disposition = format!(
+        "attachment; filename*=UTF-8''{}",
+        user_data::percent_encode_filename(&filename)
+    );
+    crate::utils::zip::stream_temp_zip(zip_path, content_disposition).await
+}
+
+// 导入用户数据包：恢复账号 + 书籍 + 全部阅读数据为新用户。
+// username / password 缺省（或留空）时使用导出包内的原值
+async fn import_user(
+    admin: AuthAdmin,
+    State(pool): State<Pool<Sqlite>>,
+    State(config): State<Config>,
+    mut multipart: Multipart,
+) -> Result<Json<ApiResponse<ImportUserResponse>>, AppError> {
+    let zip_path = std::env::temp_dir().join(format!("reader-import-{}.zip", generate_uuid()));
+
+    let result = async {
+        // zip 流式落盘（可能打包用户全部书籍），内存占用与包大小无关
+        let mut have_file = false;
+        let mut username = None;
+        let mut password = None;
+        while let Some(mut field) = multipart
+            .next_field()
+            .await
+            .map_err(|e| map_multipart_err(&e, AppError::FormParseError))?
+        {
+            let name = field.name().unwrap_or("").to_string();
+            match name.as_str() {
+                "file" => {
+                    let mut file = tokio::fs::File::create(&zip_path)
+                        .await
+                        .map_err(AppError::Io)?;
+                    let mut written: usize = 0;
+                    while let Some(chunk) = field.chunk().await.map_err(|e| {
+                        map_multipart_err(&e, |s| AppError::FieldReadError("file".to_string(), s))
+                    })? {
+                        written += chunk.len();
+                        // body limit 已限制总量，此处防御性双保险
+                        if written > IMPORT_BODY_LIMIT {
+                            return Err(AppError::FileTooLarge);
+                        }
+                        file.write_all(&chunk).await.map_err(AppError::Io)?;
+                    }
+                    // 落盘后再交给 spawn_blocking；省略 flush 有读到截断文件的风险
+                    file.flush().await.map_err(AppError::Io)?;
+                    drop(file);
+                    have_file = written > 0;
+                },
+                "username" => {
+                    username = Some(field.text().await.map_err(|e| {
+                        AppError::FieldReadError("username".to_string(), e.to_string())
+                    })?);
+                },
+                "password" => {
+                    password = Some(field.text().await.map_err(|e| {
+                        AppError::FieldReadError("password".to_string(), e.to_string())
+                    })?);
+                },
+                _ => {},
+            }
+        }
+        if !have_file {
+            return Err(AppError::FileEmpty);
+        }
+
+        user_data::restore_user_export(&pool, &config, &zip_path, username, password).await
+    }
+    .await;
+    // 无论成败都清理临时 zip
+    let _ = tokio::fs::remove_file(&zip_path).await;
+    let outcome = result?;
+
+    log_audit(
+        &pool,
+        &admin,
+        "import_user",
+        Some("user"),
+        Some(outcome.user_id),
+        Some(&outcome.username),
+    )
+    .await;
+
+    Ok(Json(ApiResponse::success(outcome)))
 }
 
 // 重置用户密码

@@ -12,9 +12,9 @@ use crate::{
     config::Config,
     error::{ApiResponse, AppError},
     models::{
-        Admin, AdminAuthResponse, AdminLoginRequest, AdminSetupRequest, Annotation, AuthResponse,
-        Book, Bookmark, ChangePasswordRequest, CreateUserRequest, DeleteAccountRequest,
-        LoginRequest, User, UserInfoResponse,
+        Admin, AdminAuthResponse, AdminLoginRequest, AdminSetupRequest, AuthResponse,
+        ChangePasswordRequest, CreateUserRequest, DeleteAccountRequest, LoginRequest, User,
+        UserInfoResponse,
     },
     routes::admin::log_audit_event,
     utils::{hash_password, verify_password},
@@ -55,35 +55,6 @@ pub(crate) fn validate_password(password: &str) -> Result<(), AppError> {
         return Err(AppError::PasswordEmpty);
     }
     Ok(())
-}
-
-// RFC 5987：把 attr-char 之外的字节做 UTF-8 percent 编码，
-// 用于 Content-Disposition 的 filename* 参数（支持中文文件名，且不会产生非法 header）。
-fn percent_encode_filename(filename: &str) -> String {
-    use std::fmt::Write as _;
-
-    let mut out = String::with_capacity(filename.len());
-    for byte in filename.bytes() {
-        match byte {
-            b'A'..=b'Z'
-            | b'a'..=b'z'
-            | b'0'..=b'9'
-            | b'!'
-            | b'#'
-            | b'$'
-            | b'&'
-            | b'+'
-            | b'-'
-            | b'.'
-            | b'^'
-            | b'_'
-            | b'`'
-            | b'|'
-            | b'~' => out.push(char::from(byte)),
-            _ => write!(out, "%{byte:02X}").expect("writing to a String never fails"),
-        }
-    }
-    out
 }
 
 // 用户注册
@@ -398,162 +369,24 @@ async fn delete_account(
     )))
 }
 
-// 导出当前用户的数据：所有书（原 txt 文件）+ JSON 元数据（书 / 章节 / 进度 /
-// 设置 / 书签 / 批注）。返回 application/zip 流，文件名包含用户名与时间戳。
+// 导出当前用户的数据（自助范围：不含密码哈希）：所有书（原格式文件）+
+// JSON 元数据（书 / 章节 / 标签 / 进度 / 设置 / 书签 / 批注 / 每日统计）。
+// 返回 application/zip 流，文件名包含用户名与时间戳
 async fn export_data(
     auth: AuthUser,
     State(pool): State<Pool<Sqlite>>,
 ) -> Result<Response, AppError> {
-    let user: User = sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = ?")
-        .bind(auth.user_id)
-        .fetch_one(&pool)
-        .await?;
-
-    // 拉取所有结构化数据
-    let books: Vec<Book> = sqlx::query_as::<_, Book>("SELECT * FROM books WHERE user_id = ?")
-        .bind(auth.user_id)
-        .fetch_all(&pool)
-        .await?;
-    let book_ids: Vec<i64> = books.iter().map(|b| b.id).collect();
-
-    let settings: Vec<crate::models::ReadingSettings> =
-        sqlx::query_as::<_, crate::models::ReadingSettings>(
-            "SELECT * FROM reading_settings WHERE user_id = ?",
-        )
-        .bind(auth.user_id)
-        .fetch_all(&pool)
-        .await?;
-
-    // 章节按书分组
-    let chapters: Vec<crate::models::ChapterResponse> = if book_ids.is_empty() {
-        Vec::new()
-    } else {
-        // 用动态 IN 查询
-        let mut qb = sqlx::QueryBuilder::new(
-            "SELECT id AS chapter_id, book_id, title, position FROM chapters WHERE book_id IN (",
-        );
-        let mut sep = qb.separated(", ");
-        for id in &book_ids {
-            sep.push_bind(id);
-        }
-        qb.push(")");
-        qb.build_query_as::<crate::models::ChapterResponse>()
-            .fetch_all(&pool)
-            .await?
-    };
-
-    // 书签
-    let bookmarks: Vec<Bookmark> =
-        sqlx::query_as::<_, Bookmark>("SELECT * FROM bookmarks WHERE user_id = ?")
-            .bind(auth.user_id)
-            .fetch_all(&pool)
-            .await?;
-
-    // 批注
-    let annotations: Vec<Annotation> =
-        sqlx::query_as::<_, Annotation>("SELECT * FROM annotations WHERE user_id = ?")
-            .bind(auth.user_id)
-            .fetch_all(&pool)
-            .await?;
-
-    // 进度
-    let progress_rows = sqlx::query!(
-        "SELECT book_id, locator, percent, reading_time, last_read_at FROM reading_progress WHERE \
-         user_id = ?",
-        auth.user_id
+    let (zip_path, filename) = crate::user_data::build_user_export_zip(
+        &pool,
+        auth.user_id,
+        crate::user_data::ExportScope::SelfService,
     )
-    .fetch_all(&pool)
-    .await?;
-    let progress_json: Vec<serde_json::Value> = progress_rows
-        .into_iter()
-        .map(|p| {
-            serde_json::json!({
-                "book_id": p.book_id,
-                "locator": p.locator,
-                "percent": p.percent,
-                "reading_time": p.reading_time,
-                "last_read_at": p.last_read_at,
-            })
-        })
-        .collect();
-
-    // 元数据 JSON
-    let metadata = serde_json::json!({
-        "user": {
-            "id": user.id,
-            "username": user.username,
-            "created_at": user.created_at,
-            "total_reading_time": user.total_reading_time,
-        },
-        "books": books,
-        "chapters": chapters,
-        "reading_progress": progress_json,
-        "reading_settings": settings,
-        "bookmarks": bookmarks,
-        "annotations": annotations,
-        "exported_at": Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
-    });
-    let metadata_bytes =
-        serde_json::to_vec_pretty(&metadata).map_err(|e| AppError::Internal(e.to_string()))?;
-
-    // 顺序把 zip 写入临时文件再流式回传：书籍文件用 io::copy 搬运，
-    // 内存占用与书的数量/体积无关，反复导出也无法把内存打高
-    // 条目扩展名取书籍 format（此前兜底为 "txt"，非 txt 书会导出错误扩展名）
-    let entries: Vec<(String, String)> = books
-        .iter()
-        .enumerate()
-        .map(|(idx, b)| {
-            // 文件名做基础净化（去掉路径分隔符）
-            let safe_title: String = b
-                .title
-                .chars()
-                .map(|c| match c {
-                    '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
-                    other => other,
-                })
-                .collect();
-            (
-                format!("{idx:03}_{safe_title}.{}", b.format.ext()),
-                b.file_path.clone(),
-            )
-        })
-        .collect();
-
-    let (zip_path, _) = crate::utils::zip::write_temp_zip(move |zip| {
-        use std::io::Write as _;
-
-        let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated);
-        let zip_err = crate::utils::zip::zip_write_err;
-
-        zip.start_file("metadata.json", opts).map_err(zip_err)?;
-        zip.write_all(&metadata_bytes).map_err(AppError::Io)?;
-
-        // 把每本书的源文件加入 zip；文件名加序号前缀防止重名
-        for (entry, file_path) in &entries {
-            zip.start_file(entry.as_str(), opts).map_err(zip_err)?;
-            match std::fs::File::open(file_path) {
-                Ok(mut file) => {
-                    std::io::copy(&mut file, zip).map_err(AppError::Io)?;
-                },
-                Err(e) => {
-                    tracing::warn!(error = %e, file_path, "skip book file in export");
-                    // 写入一个 README 说明
-                    let note = format!("# 文件读取失败：{e}\n原路径：{file_path}\n");
-                    zip.write_all(note.as_bytes()).map_err(AppError::Io)?;
-                },
-            }
-        }
-        Ok(())
-    })
     .await?;
 
-    let timestamp = Utc::now().format("%Y%m%d_%H%M%S");
-    let filename = format!("{}_{timestamp}.zip", user.username);
     // RFC 5987 filename*：支持中文用户名，且避免控制字符导致的 header 注入
     let content_disposition = format!(
         "attachment; filename*=UTF-8''{}",
-        percent_encode_filename(&filename)
+        crate::user_data::percent_encode_filename(&filename)
     );
 
     crate::utils::zip::stream_temp_zip(zip_path, content_disposition).await

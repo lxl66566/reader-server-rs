@@ -3,10 +3,11 @@ use sqlx::FromRow;
 
 /// 用户账户状态枚举
 /// active=正常；banned=被管理员封禁
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, sqlx::Type, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, sqlx::Type, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 #[sqlx(type_name = "TEXT", rename_all = "lowercase")]
 pub enum UserStatus {
+    #[default]
     Active,
     Banned,
 }
@@ -430,6 +431,14 @@ pub struct AdminUserListItem {
     pub total_reading_time: i64,
     pub status: UserStatus,
     pub banned_at: Option<String>,
+}
+
+// 导入用户数据包响应
+#[derive(Debug, Serialize)]
+pub struct ImportUserResponse {
+    pub user_id: i64,
+    pub username: String,
+    pub book_count: i64,
 }
 
 // 重置用户密码请求
