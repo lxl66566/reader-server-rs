@@ -1,12 +1,50 @@
 # reader-server-rs
 
-WIP
-
 这是 [hectorqin/reader](https://github.com/hectorqin/reader) 的 Rust 精简版。由于我受不了原版启动时间长、没有阅读时长记录、移动端滑动体验较差等缺点，我决定自己写一个 Rust 版本的。出于我个人的习惯，reader-server-rs 砍掉了书源功能。
 
 reader-server-rs 是一个阅读服务器，用户可以向服务器上传 txt 书籍，并在任意设备的网页上进行阅读，用户所有的设置与阅读进度通过服务端同步。
 
-## 运行
+## 安装与使用
+
+从 [Releases](https://github.com/lxl66566/reader-server-rs/releases) 中下载 prebuilt binary 即可。
+
+然后需要在同目录创建一个 config.json:
+
+```json
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 3000
+  },
+  "db": {
+    "url": "sqlite://./data/reader.db",
+    "max_connections": 10
+  },
+  "storage": {
+    "book_dir": "books",
+    "max_file_size": 52428800
+  },
+  "jwt": {
+    "secret": "cbd68e0e-3b32-4607-8092-9a17a83a3b1a", // 必须，需要自己生成一个
+    "expiration": 2592000,
+    "admin_expiration": 604800
+  },
+  "log": {
+    "dir": "logs",
+    "rotation": "daily"
+  },
+  "rate_limit": {
+    "per_second": 100000,
+    "burst_size": 300000
+  }
+}
+```
+
+然后直接运行即可，默认运行在 localhost:3000。
+
+首次运行请前往 localhost:3000/admin 创建管理员帐号，并生成邀请码（或者关闭注册必须使用邀请码的限制）。
+
+NixOS 用户：请使用[我的 NUR](https://github.com/lxl66566/NUR)。
 
 ### 开发
 
@@ -14,10 +52,6 @@ reader-server-rs 是一个阅读服务器，用户可以向服务器上传 txt �
 
 ```bash
 pnpm dev                         # 同时启动前后端（后端 :3000，前端 :5173，访问 http://localhost:5173）
-
-# 或分开启动：
-cargo run                        # 后端 :3000（仅 API）
-cd frontend && pnpm dev          # 前端 :5173
 ```
 
 ### 发布
