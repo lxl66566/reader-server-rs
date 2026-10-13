@@ -10,6 +10,7 @@ import type {
   BookDetail,
   Bookmark,
   Chapter,
+  DailyReadingStats,
   InviteCodeItem,
   PublicBook,
   ReadingSettings,
@@ -169,6 +170,10 @@ export const markerApi = {
 };
 
 export const readingApi = {
+  dailyStats: (start: string, end: string) =>
+    api.get<DailyReadingStats>('/api/v1/reading/stats/daily', {
+      query: { end, start },
+    }),
   settings: () =>
     api.get<ReadingSettings>('/api/v1/reading/settings', { cache: true }),
   stats: () => api.get<ReadingStats>('/api/v1/reading/stats'),

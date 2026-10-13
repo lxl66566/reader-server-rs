@@ -1,11 +1,12 @@
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{Query, State},
     http::{HeaderMap, header},
     response::{IntoResponse, Response},
     routing::get,
 };
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
+use serde::Deserialize;
 use sqlx::{Pool, Sqlite};
 
 use crate::{
@@ -13,8 +14,8 @@ use crate::{
     auth::AuthUser,
     error::{ApiResponse, AppError},
     models::{
-        ChineseConversion, DailyReadingStat, PaginationMode, ReadingSettings, ReadingStatsResponse,
-        ReadingTheme, UpdateReadingSettingsRequest,
+        ChineseConversion, DailyBookReadingStat, DailyReadingStatsResponse, PaginationMode,
+        ReadingSettings, ReadingStatsResponse, ReadingTheme, UpdateReadingSettingsRequest,
     },
     utils::make_etag,
 };
@@ -103,6 +104,7 @@ pub fn routes() -> Router<crate::app::AppState> {
         // WebSocket 入口：替代旧的每秒轮询心跳接口
         .route("/ws", get(crate::ws::handler::ws_handler))
         .route("/stats", get(get_reading_stats))
+        .route("/stats/daily", get(get_daily_reading_stats))
 }
 
 // 获取阅读设置
@@ -533,12 +535,13 @@ pub async fn process_heartbeat_logic(
         .execute(&mut *tx)
         .await?;
 
-        // 同步累加当日阅读统计；INSERT ON CONFLICT 处理 upsert
+        // 同步累加当日阅读统计（按书归档）；INSERT ON CONFLICT 处理 upsert
         sqlx::query!(
-            "INSERT INTO daily_reading_stats (user_id, date, reading_seconds) VALUES (?, ?, ?) ON \
-             CONFLICT (user_id, date) DO UPDATE SET reading_seconds = reading_seconds + \
-             excluded.reading_seconds",
+            "INSERT INTO daily_reading_stats (user_id, book_id, date, reading_seconds) VALUES (?, \
+             ?, ?, ?) ON CONFLICT (user_id, book_id, date) DO UPDATE SET reading_seconds = \
+             reading_seconds + excluded.reading_seconds",
             user_id,
+            book_id,
             today,
             reading_time_increment,
         )
@@ -568,7 +571,7 @@ fn days_between(later: &str, earlier: &str) -> Option<i64> {
     Some((l - e).num_days())
 }
 
-// 阅读统计：总时长、连续天数、最近 30 天每日时长
+// 阅读统计汇总：总时长、连续天数
 async fn get_reading_stats(
     auth: AuthUser,
     State(pool): State<Pool<Sqlite>>,
@@ -580,22 +583,12 @@ async fn get_reading_stats(
             .fetch_one(&pool)
             .await?;
 
-    // 日期边界按用户本地时区归算（避免 UTC 与本地日期错位导致统计/连续天数错乱）
+    // 日期边界按用户本地时区归算（避免 UTC 与本地日期错位导致连续天数错乱）
     let local_now = user_local_now(&pool, auth.user_id).await;
     let today = local_now.format("%Y-%m-%d").to_string();
-    let thirty_days_ago = (local_now - chrono::Duration::days(29))
+    let yesterday = (local_now - chrono::Duration::days(1))
         .format("%Y-%m-%d")
         .to_string();
-
-    // 最近 30 天的每日时长（按日期升序）
-    let recent_days: Vec<DailyReadingStat> = sqlx::query_as::<_, DailyReadingStat>(
-        "SELECT date, reading_seconds FROM daily_reading_stats WHERE user_id = ? AND date >= ? \
-         ORDER BY date ASC",
-    )
-    .bind(auth.user_id)
-    .bind(&thirty_days_ago)
-    .fetch_all(&pool)
-    .await?;
 
     // 取所有日期用于计算连续天数
     let all_dates: Vec<String> = sqlx::query_scalar(
@@ -605,10 +598,6 @@ async fn get_reading_stats(
     .fetch_all(&pool)
     .await?;
 
-    let yesterday = (local_now - chrono::Duration::days(1))
-        .format("%Y-%m-%d")
-        .to_string();
-
     // 当前连续天数：从今天或昨天开始往前数
     // longest_streak：扫描整个日期序列找最长连续段
     let (current_streak, longest_streak) = compute_streaks(&all_dates, &today, &yesterday);
@@ -617,8 +606,51 @@ async fn get_reading_stats(
         total_reading_seconds: total,
         current_streak_days: current_streak,
         longest_streak_days: longest_streak,
-        recent_days,
     })))
+}
+
+// 区间明细查询参数
+#[derive(Debug, Deserialize)]
+struct DailyStatsQuery {
+    start: String,
+    end: String,
+}
+
+/// 区间上限：年视图需要完整 12 个月（366/371 天），放宽到 372 天
+const MAX_DAILY_RANGE_DAYS: i64 = 372;
+
+// 阅读时长区间明细：逐日、按书拆分（前端自行聚合为周/月/年分桶）
+async fn get_daily_reading_stats(
+    auth: AuthUser,
+    State(pool): State<Pool<Sqlite>>,
+    Query(q): Query<DailyStatsQuery>,
+) -> Result<Json<ApiResponse<DailyReadingStatsResponse>>, AppError> {
+    let start = parse_date(&q.start).ok_or(AppError::InvalidDateRange)?;
+    let end = parse_date(&q.end).ok_or(AppError::InvalidDateRange)?;
+    if start > end || (end - start).num_days() > MAX_DAILY_RANGE_DAYS {
+        return Err(AppError::InvalidDateRange);
+    }
+
+    // book 级联删除，JOIN 必命中
+    let days: Vec<DailyBookReadingStat> = sqlx::query_as::<_, DailyBookReadingStat>(
+        "SELECT s.date, s.book_id, b.title, s.reading_seconds FROM daily_reading_stats s JOIN \
+         books b ON b.id = s.book_id WHERE s.user_id = ? AND s.date >= ? AND s.date <= ? ORDER BY \
+         s.date ASC, s.reading_seconds DESC",
+    )
+    .bind(auth.user_id)
+    .bind(start.format("%Y-%m-%d").to_string())
+    .bind(end.format("%Y-%m-%d").to_string())
+    .fetch_all(&pool)
+    .await?;
+
+    Ok(Json(ApiResponse::success(DailyReadingStatsResponse {
+        days,
+    })))
+}
+
+/// 解析 YYYY-MM-DD 日期字符串（恰好 10 个字符的完整日期）
+fn parse_date(s: &str) -> Option<NaiveDate> {
+    NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()
 }
 
 /// 给定按日期降序排列的日期列表，计算 `current_streak（从今天/昨天起向前数`）

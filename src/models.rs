@@ -485,14 +485,7 @@ pub struct ListInviteCodesResponse {
 
 // ============ 阅读统计 ============
 
-// 单日阅读统计
-#[derive(Debug, Serialize, sqlx::FromRow)]
-pub struct DailyReadingStat {
-    pub date: String,
-    pub reading_seconds: i64,
-}
-
-// 阅读统计响应
+// 阅读统计汇总响应
 #[derive(Debug, Serialize)]
 pub struct ReadingStatsResponse {
     /// 总阅读时长（秒），与 `users.total_reading_time` 一致
@@ -501,8 +494,21 @@ pub struct ReadingStatsResponse {
     pub current_streak_days: i64,
     /// 历史最长连续阅读天数
     pub longest_streak_days: i64,
-    /// 最近 N 天（默认 30）的每日时长，按日期升序
-    pub recent_days: Vec<DailyReadingStat>,
+}
+
+// 区间内某日某书的阅读时长
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct DailyBookReadingStat {
+    pub date: String,
+    pub book_id: i64,
+    pub title: String,
+    pub reading_seconds: i64,
+}
+
+// 阅读时长区间明细响应：仅含有记录的日期，按日期升序、单日内按时长降序
+#[derive(Debug, Serialize)]
+pub struct DailyReadingStatsResponse {
+    pub days: Vec<DailyBookReadingStat>,
 }
 
 // 用户列表响应

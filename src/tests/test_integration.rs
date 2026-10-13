@@ -2432,10 +2432,12 @@ async fn test_admin_export_and_import_user() {
     .await
     .unwrap();
     sqlx::query!(
-        "INSERT INTO daily_reading_stats (user_id, date, reading_seconds) VALUES (?, \
-         '2024-01-01', 60), (?, '2024-01-02', 90)",
+        "INSERT INTO daily_reading_stats (user_id, book_id, date, reading_seconds) VALUES (?, ?, \
+         '2024-01-01', 60), (?, ?, '2024-01-02', 90)",
         alice_id,
-        alice_id
+        book_id,
+        alice_id,
+        book_id
     )
     .execute(&pool)
     .await
@@ -2619,6 +2621,41 @@ async fn test_admin_export_and_import_user() {
     .await;
     let json = response_json(resp).await;
     assert_eq!(json["data"]["total_reading_seconds"], 360);
+
+    // 每日统计按书归属正确（导出/导入经 book_id 重映射）
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/v1/reading/stats/daily?start=2024-01-01&end=2024-01-02",
+        Body::empty(),
+        Some(&bob_token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = response_json(resp).await;
+    let days = json["data"]["days"].as_array().unwrap();
+    assert_eq!(days.len(), 2);
+    assert_eq!(days[0]["date"], "2024-01-01");
+    assert_eq!(days[0]["book_id"], new_book_id);
+    assert_eq!(days[0]["title"], "测试书");
+    assert_eq!(days[0]["reading_seconds"], 60);
+
+    // 非法区间被拒绝：start 晚于 end / 跨度过大 / 日期格式错误
+    for query in [
+        "start=2024-01-02&end=2024-01-01",
+        "start=2020-01-01&end=2024-01-01",
+        "start=bad&end=2024-01-01",
+    ] {
+        let resp = make_request(
+            &app,
+            Method::GET,
+            &format!("/api/v1/reading/stats/daily?{query}"),
+            Body::empty(),
+            Some(&bob_token),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{query}");
+    }
 
     // 源用户未受影响
     let resp = make_request(

@@ -93,3 +93,11 @@ body {
 .rs-fade-in {
   animation: rs-fade-in 0.15s ease-out;
 }
+
+/* 隐藏滚动条但保留滚动能力（内部滚动区，如统计页分书籍列表） */
+.scrollbar-none {
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}

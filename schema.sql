@@ -208,16 +208,18 @@ CREATE TABLE
     UNIQUE (user_id, book_id)
   );
 
--- 每日阅读统计：用户每天的累计阅读时长（秒）
--- 由心跳累加生成；用于前端连续阅读天数、每日时长图等可视化
+-- 每日阅读统计：用户在某本书上每天的累计阅读时长（秒）
+-- 由心跳累加生成；用于连续阅读天数、每日时长堆叠图、分书籍时长等可视化
 CREATE TABLE
   IF NOT EXISTS daily_reading_stats (
     id INTEGER PRIMARY KEY,
     user_id INTEGER NOT NULL,
+    book_id INTEGER NOT NULL,
     date TEXT NOT NULL,
     reading_seconds INTEGER NOT NULL DEFAULT 0,
-    UNIQUE (user_id, date),
-    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+    UNIQUE (user_id, book_id, date),
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+    FOREIGN KEY (book_id) REFERENCES books (id) ON DELETE CASCADE
   );
 
 -- 阅读设置表
@@ -258,4 +260,5 @@ CREATE INDEX IF NOT EXISTS idx_reading_progress_user_book ON reading_progress (u
 CREATE INDEX IF NOT EXISTS idx_bookmarks_user_book ON bookmarks (user_id, book_id);
 CREATE INDEX IF NOT EXISTS idx_annotations_user_book ON annotations (user_id, book_id);
 CREATE INDEX IF NOT EXISTS idx_daily_reading_user_date ON daily_reading_stats (user_id, date);
+CREATE INDEX IF NOT EXISTS idx_daily_reading_book ON daily_reading_stats (book_id);
 CREATE INDEX IF NOT EXISTS idx_book_tags_tag_id ON book_tags (tag_id);

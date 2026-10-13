@@ -177,6 +177,12 @@ pub enum AppError {
     #[error("Setting '{0}' is out of the allowed range")]
     SettingOutOfRange(&'static str),
 
+    #[error(
+        "Invalid date range (start must be a valid YYYY-MM-DD not after end, spanning at most 366 \
+         days)"
+    )]
+    InvalidDateRange,
+
     #[error("Failed to parse form data: {0}")]
     FormParseError(String),
 
@@ -265,6 +271,7 @@ impl IntoResponse for AppError {
             | AppError::SearchQueryEmpty
             | AppError::InvalidSearchScope
             | AppError::InvalidPercent
+            | AppError::InvalidDateRange
             | AppError::EmptyLocator
             | AppError::ContentEndpointNotSupported
             | AppError::FormParseError(_)

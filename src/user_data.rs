@@ -173,6 +173,10 @@ pub(crate) struct ExportAnnotation {
 
 #[derive(Clone, Debug, Serialize, Deserialize, FromRow)]
 pub(crate) struct ExportDailyStat {
+    /// 历史格式（用户级日汇总，无按书拆分）无此字段，默认 0 表示无法归属，
+    /// 导入时跳过
+    #[serde(default)]
+    pub book_id: i64,
     pub date: String,
     pub reading_seconds: i64,
 }
@@ -263,7 +267,8 @@ pub(crate) async fn collect_user_export(
     .await?;
 
     let daily: Vec<ExportDailyStat> = sqlx::query_as::<_, ExportDailyStat>(
-        "SELECT date, reading_seconds FROM daily_reading_stats WHERE user_id = ? ORDER BY date",
+        "SELECT book_id, date, reading_seconds FROM daily_reading_stats WHERE user_id = ? ORDER \
+         BY date",
     )
     .bind(user_id)
     .fetch_all(pool)
@@ -362,6 +367,8 @@ pub(crate) async fn build_user_export_zip(
 
 /// 从导出包恢复用户。`zip_path` 指向已落盘的 zip（multipart 流式接收的临时文件），
 /// 本函数不负责删除它。`username_override` / `password` 为空串视为未提供
+// 线性的分表导入步骤序列，长度是固有复杂度；拆分会把 tx/id_map 传遍所有小函数
+#[allow(clippy::too_many_lines)]
 pub(crate) async fn restore_user_export(
     pool: &Pool<Sqlite>,
     config: &crate::config::Config,
@@ -625,9 +632,21 @@ pub(crate) async fn restore_user_export(
         }
 
         for d in &export.daily_reading_stats {
+            // book_id == 0：历史格式的用户级日汇总，无法归属到书，跳过
+            let Some(&new_book_id) = id_map.get(&d.book_id) else {
+                if d.book_id != 0 {
+                    tracing::warn!(
+                        book_id = d.book_id,
+                        "import: daily stat references unknown book, skipped"
+                    );
+                }
+                continue;
+            };
             sqlx::query!(
-                "INSERT INTO daily_reading_stats (user_id, date, reading_seconds) VALUES (?, ?, ?)",
+                "INSERT INTO daily_reading_stats (user_id, book_id, date, reading_seconds) VALUES \
+                 (?, ?, ?, ?)",
                 new_user_id,
+                new_book_id,
                 d.date,
                 d.reading_seconds,
             )

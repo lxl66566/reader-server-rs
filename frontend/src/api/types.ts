@@ -99,6 +99,18 @@ export interface Chapter {
 
 export type ChineseConversion = 'none' | 'simplified' | 'traditional';
 
+// 区间内某日某书的阅读时长（/stats/daily 行）
+export interface DailyBookReadingStat {
+  book_id: number;
+  date: string;
+  reading_seconds: number;
+  title: string;
+}
+
+export interface DailyReadingStats {
+  days: DailyBookReadingStat[];
+}
+
 export interface InviteCodeItem {
   created_at: string;
   description: null | string;
@@ -145,7 +157,6 @@ export interface ReadingSettings {
 export interface ReadingStats {
   current_streak_days: number;
   longest_streak_days: number;
-  recent_days: { date: string; reading_seconds: number }[];
   total_reading_seconds: number;
 }
 
