@@ -1,4 +1,6 @@
-use argon2::{Argon2, PasswordHasher as _, password_hash::SaltString};
+use argon2::{
+    Argon2, PasswordHasher as _, PasswordVerifier as _, password_hash::phc::PasswordHash,
+};
 use rand::RngExt;
 use uuid::Uuid;
 
@@ -55,32 +57,16 @@ pub fn generate_invite_code() -> String {
         .collect()
 }
 
-// 哈希密码
+// 哈希密码：随机 salt 由库内部生成，输出 PHC 格式字符串
 pub fn hash_password(password: &str) -> Result<String, AppError> {
-    let mut rng = rand::rng();
-    // 生成 16 字节的随机 salt（使用 thread-local ChaCha12 RNG）
-    let salt_bytes: [u8; 16] = rng.random();
-
-    // 将随机字节数组编码为 Base64 格式的 SaltString
-    let salt = SaltString::encode_b64(&salt_bytes)
-        .map_err(|e| AppError::Internal(format!("Salt encoding failed: {e}")))?;
-
-    // 执行 Argon2 哈希（默认使用推荐的 Argon2id 变体）
-    let argon2 = Argon2::default();
-
-    argon2
-        .hash_password(password.as_bytes(), &salt)
+    Argon2::default()
+        .hash_password(password.as_bytes())
         .map(|hash| hash.to_string())
         .map_err(|e| AppError::Internal(format!("Password hashing failed: {e}")))
 }
 
 // 验证密码
 pub fn verify_password(password: &str, hash: &str) -> Result<bool, AppError> {
-    use argon2::{
-        Argon2,
-        password_hash::{PasswordHash, PasswordVerifier},
-    };
-
     let parsed_hash = PasswordHash::new(hash)
         .map_err(|e| AppError::Internal(format!("Failed to parse hash: {e}")))?;
 

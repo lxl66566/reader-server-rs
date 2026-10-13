@@ -736,9 +736,12 @@ fn book_entry_name(
         return Ok(name.to_string());
     }
     let prefix = format!("{idx:03}_");
+    // zip 9 的 file_names() 按需做编码转换，返回 Result<Cow<str>>
     zip.file_names()
-        .find(|n| n.starts_with(&prefix))
-        .map(str::to_string)
+        .find_map(|n| match n {
+            Ok(name) if name.starts_with(&prefix) => Some(name.into_owned()),
+            _ => None,
+        })
         .ok_or_else(|| {
             AppError::ImportPackageInvalid(format!(
                 "book file entry with prefix '{prefix}' not found"

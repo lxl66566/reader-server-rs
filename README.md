@@ -13,8 +13,11 @@ reader-server-rs 是一个阅读服务器，用户可以向服务器上传 txt �
 前端由 vite dev server 单独提供，后端不内嵌：
 
 ```bash
+pnpm dev                         # 同时启动前后端（后端 :3000，前端 :5173，访问 http://localhost:5173）
+
+# 或分开启动：
 cargo run                        # 后端 :3000（仅 API）
-cd frontend && pnpm dev          # 前端 :5173，访问 http://localhost:5173
+cd frontend && pnpm dev          # 前端 :5173
 ```
 
 ### 发布

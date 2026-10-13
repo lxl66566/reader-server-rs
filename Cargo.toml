@@ -15,7 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow             = "1.0"
-argon2             = { version = "0.5" }
+argon2             = { version = "0.6" }
 axum               = { version = "0.8.3", features = ["multipart", "ws"] }
 axum-extra         = { version = "0.12.1", features = ["typed-header"] }
 bytes              = "1.12"
@@ -55,10 +55,10 @@ tracing            = "0.1"
 tracing-appender   = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid               = { version = "1.23", features = ["v4"] }
-zip                = { version = "8", default-features = false, features = ["deflate"] }
+zip                = { version = "9", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
-tokio-tungstenite = "0.29"
+tokio-tungstenite = "0.30"
 
 [build-dependencies]
 path-absolutize = "4"
@@ -80,7 +80,7 @@ unsafe_code           = "deny"
 unused_qualifications = "warn"
 
 [profile.release]
-opt-level = "s"
+opt-level = 3
 strip     = true
 lto       = true
 panic     = "abort"
