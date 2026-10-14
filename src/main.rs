@@ -16,6 +16,12 @@ mod ws;
 #[cfg(test)]
 mod tests;
 
+// Linux 下用 jemalloc：glibc malloc 为多线程各建 arena 且空闲页不归还 OS，
+// argon2 每次计算分配 ~19MB 会跨线程滞留；jemalloc 可将空闲页归还
+#[cfg(target_os = "linux")]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 use std::{
     net::SocketAddr,
     path::{Path, PathBuf},
