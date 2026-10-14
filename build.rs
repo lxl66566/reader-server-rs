@@ -54,56 +54,51 @@ async fn setup_schema_db() -> Result<(), Box<dyn std::error::Error>> {
     // For Windows, paths need careful handling, canonicalize helps later.
     let db_url_for_creation = format!("sqlite:{}?mode=rwc", db_path.display()); // mode=rwc (ReadWriteCreate)
 
-    // Only create and setup if the database file doesn't exist
-    if db_path.exists() {
-        println!(
-            "cargo:warning=Schema DB file {} already exists. Skipping creation.",
-            db_path.display()
-        );
-    } else {
-        println!(
-            "cargo:warning=Schema DB file {} not found. Creating and initializing from {}.",
-            db_path.display(),
-            schema_path.display()
-        );
-
-        // Connect using sqlx (this will create the file due to mode=rwc)
-        let mut conn = match SqliteConnection::connect(&db_url_for_creation).await {
-            Ok(c) => c,
-            Err(e) => {
-                panic!(
-                    "Failed to connect to (create) SQLite database at '{db_url_for_creation}': {e}" /* Use the creation URL in error msg */
-                );
-            },
-        };
-
-        // Execute the schema script (SCHEMA_SQL is &'static str from include_str!,
-        // satisfying sqlx's 'static bound)
-        match conn.execute(SCHEMA_SQL).await {
-            Ok(_) => {
-                println!(
-                    "cargo:warning=Successfully created and initialized schema DB: {}",
-                    db_path.display()
-                );
-            },
-            Err(e) => {
-                // Attempt to clean up the partially created file on error
-                println!(
-                    "cargo:warning=Failed to execute schema SQL. Attempting to remove partially \
-                     created DB file: {}",
-                    db_path.display()
-                );
-                let _ = fs::remove_file(&db_path); // Ignore error on removal
-                panic!(
-                    "Failed to execute schema SQL from {}: {}\nSQL:\n{}",
-                    schema_path.display(),
-                    e,
-                    SCHEMA_SQL
-                );
-            },
+    // 无条件重建：旧库残留会与最新 schema 不一致，导致 sqlx 编译期校验拿旧列误报；
+    // 重建代价可忽略。同时清理 WAL/SHM 残留文件，避免半新半旧
+    for stale in [db_filename, "sqlx_schema.db-wal", "sqlx_schema.db-shm"] {
+        let stale_path = target_dir.join(stale);
+        if stale_path.exists() {
+            fs::remove_file(&stale_path)?;
         }
-        // Connection is closed when `conn` goes out of scope
     }
+
+    // Connect using sqlx (this will create the file due to mode=rwc)
+    let mut conn = match SqliteConnection::connect(&db_url_for_creation).await {
+        Ok(c) => c,
+        Err(e) => {
+            panic!(
+                "Failed to connect to (create) SQLite database at '{db_url_for_creation}': {e}" /* Use the creation URL in error msg */
+            );
+        },
+    };
+
+    // Execute the schema script (SCHEMA_SQL is &'static str from include_str!,
+    // satisfying sqlx's 'static bound)
+    match conn.execute(SCHEMA_SQL).await {
+        Ok(_) => {
+            println!(
+                "cargo:warning=Successfully created and initialized schema DB: {}",
+                db_path.display()
+            );
+        },
+        Err(e) => {
+            // Attempt to clean up the partially created file on error
+            println!(
+                "cargo:warning=Failed to execute schema SQL. Attempting to remove partially \
+                 created DB file: {}",
+                db_path.display()
+            );
+            let _ = fs::remove_file(&db_path); // Ignore error on removal
+            panic!(
+                "Failed to execute schema SQL from {}: {}\nSQL:\n{}",
+                schema_path.display(),
+                e,
+                SCHEMA_SQL
+            );
+        },
+    }
+    // Connection is closed when `conn` goes out of scope
 
     // --- Set DATABASE_URL environment variable for sqlx macros ---
     // Now that the file is guaranteed to exist, get its canonical path.

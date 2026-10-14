@@ -108,6 +108,8 @@ CREATE TABLE
         '%Y-%m-%dT%H:%M:%S.' || substr (strftime ('%f'), 4, 6) || 'Z'
       )
     ),
+    -- 每本书独立的章节切分正则（仅 txt 有意义）；NULL/空 = 使用内置默认章节规则
+    chapter_pattern TEXT,
     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
   );
 

@@ -7,7 +7,7 @@ repository  = "https://github.com/lxl66566/reader-server-rs"
 license     = "BSD-3-Clause"
 keywords    = ["ebook", "epub", "reading", "server"]
 categories  = ["web-programming::http-server"]
-include     = ["/CHANGELOG.md", "/LICENSE-*", "/README.md", "/benches/**", "/src/**", "/tests/**"]
+include     = ["/CHANGELOG.md", "/LICENSE-*", "/README.md", "/benches/**", "/migrations/**", "/src/**", "/tests/**"]
 
 [[bin]]
 name = "reader-server"
