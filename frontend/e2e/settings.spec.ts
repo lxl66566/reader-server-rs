@@ -3,8 +3,8 @@ import { expect, test, type Locator } from '@playwright/test';
 
 import { createUser, seedSession, uploadBook } from './helpers';
 
-// UTF-8 测试书由 e2e/run.sh 从 GBK 的 2.txt 转换生成（服务端拒绝非 UTF-8 txt）
-const BOOK_PATH = '/tmp/reader-e2e-2.txt';
+// 测试书入库于 e2e/assets/（gen-assets.mjs 生成）
+const BOOK_PATH = new URL('./assets/novel.txt', import.meta.url).pathname;
 
 /** 读取步进器当前值 */
 async function stepperValue(row: Locator): Promise<number> {

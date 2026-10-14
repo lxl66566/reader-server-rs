@@ -9,13 +9,6 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# 准备 UTF-8 测试书：仓库里的 2.txt 是 GBK 编码（服务端按设计拒绝非
-# UTF-8 txt），转换副本放 /tmp，不入库。
-book="/tmp/reader-e2e-2.txt"
-if [ ! -f "$book" ] && [ -f ../2.txt ]; then
-  iconv -f GB18030 -t UTF-8 ../2.txt > "$book"
-fi
-
 if command -v nix-build >/dev/null 2>&1; then
   deps="/tmp/reader-e2e-chromium-deps"
   nix-build e2e/chromium-deps.nix -o "$deps" >/dev/null

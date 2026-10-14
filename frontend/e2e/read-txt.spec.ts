@@ -13,8 +13,9 @@ import {
   uploadBook,
 } from './helpers';
 
-// UTF-8 测试书由 e2e/run.sh 从 GBK 的 2.txt 转换生成（服务端拒绝非 UTF-8 txt）
-const BOOK_PATH = '/tmp/reader-e2e-2.txt';
+// 测试书入库于 e2e/assets/（gen-assets.mjs 生成）；超长单章样本体积较大，
+// 由下方用例运行时生成
+const BOOK_PATH = new URL('./assets/novel.txt', import.meta.url).pathname;
 const LOCATOR_TOLERANCE = 5000;
 
 /** 点击右缘遮罩层关闭 chrome（遮罩挡住内容区的滚轮/点击） */
@@ -72,7 +73,8 @@ test('上传 txt 并保留阅读进度', async ({ page }) => {
   await expect(page.getByText(title)).toBeVisible();
 
   // --- 详情页 → 阅读页（分页模式） ---
-  await page.getByText(title).click();
+  // 卡片整面被 absolute 的“阅读”按钮覆盖（直接进阅读页），进详情页走角标按钮
+  await page.getByRole('button', { name: '查看详情' }).first().click();
   await expect(page).toHaveURL(/\/book\/\d+/);
   await page.getByRole('button', { name: '开始阅读' }).click();
   await expect(page).toHaveURL(/\/read\/\d+/);
@@ -163,7 +165,8 @@ test('移动端滚动模式触摸 tap 可用', async ({ page }) => {
   const request = page.context().request;
   const book = await uploadBook(request, user.token, BOOK_PATH);
 
-  // 深链定位到首个长章内部：开头两章只有几行，tap 底部会触发切章而非滚动
+  // 深链定位到第一章中段（章前约 8000 字、章后仍余约 4000 字）：
+  // tap 底部在章内滚动，而非贴边触发切章
   await page.goto(`/read/${book.book_id}?locator=8000`);
   const scroller = page.locator('.overflow-y-auto');
   await expect(scroller).toBeVisible();
@@ -209,7 +212,7 @@ test('超长单章增量加载期间视口位置不回退', async ({ page }) => 
   // 体积需明显超过滚动窗口的 9 chunk 上限才会触发边加载边回收
   const paragraphs: string[] = [];
   // 内容均为 BMP 字符，码元数即码点数，与服务端偏移口径一致
-  for (let written = 0; written < 140_000; ) {
+  for (let written = 0; written < 140_000;) {
     const line = `这是没有任何章节标题结构的普通正文段落，编号${paragraphs.length + 1}，填充文字用于撑起超过滚动窗口上限的超长单章。`;
     paragraphs.push(line);
     written += line.length + 1;
