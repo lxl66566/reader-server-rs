@@ -15,11 +15,14 @@ use sqlx::Executor;
 // Import sqlx types needed
 use sqlx::{Connection, SqliteConnection}; /* Use Connection trait and specific
                                             * SqliteConnection */
-use tokio::runtime::Runtime;
+use tokio::runtime::Builder;
 
 fn main() {
-    // Run the async setup function using a tokio runtime
-    let rt = Runtime::new().expect("Failed to create Tokio runtime for build script");
+    // Run the async setup function using a tokio runtime（单线程即可，构建脚本无并发需求）
+    let rt = Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("Failed to create Tokio runtime for build script");
     if let Err(e) = rt.block_on(setup_schema_db()) {
         eprintln!("Error during build script database setup: {e}");
         process::exit(1); // Signal build failure

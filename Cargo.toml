@@ -47,7 +47,16 @@ sqlx               = { version = "0.9", features = [
   "uuid"
 ] }
 thiserror          = "2.0"
-tokio              = { version = "1", features = ["full"] }
+tokio              = { version = "1", features = [
+  "fs",
+  "io-util",
+  "macros",
+  "net",
+  "rt-multi-thread",
+  "signal",
+  "sync",
+  "time",
+] }
 tokio-util         = { version = "0.7", features = ["codec"] }
 tower              = "0.5.2"
 tower_governor     = "0.8"
@@ -64,7 +73,7 @@ tokio-tungstenite = "0.30"
 [build-dependencies]
 path-absolutize = "4"
 sqlx            = { version = "0.9", features = ["runtime-tokio", "sqlite"] }
-tokio           = { version = "1", features = ["full"] }
+tokio           = { version = "1", features = ["rt"] }
 
 [lints.clippy]
 all                     = { level = "warn", priority = -1 }
