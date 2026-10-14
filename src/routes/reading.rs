@@ -799,7 +799,7 @@ fn normalize_daily_entries(
 ///
 /// 设计要点：
 /// - 差值同步：`delta = sum(new) - sum(old)`，在同一事务内调整
-///   `reading_progress.reading_time`（建行/原子差值，与 [`set_reading_time`] 同 语义）与
+///   `reading_progress.reading_time`（建行/原子差值，与 [`set_reading_time`] 同语义）与
 ///   `users.total_reading_time`；两者结果均钳制 >= 0（进度行另钳制
 ///   到上限），因钳制导致的总量与每日之和不一致属预期
 /// - 总时长可能早于每日统计功能存在（useTime != sum(daily) 同语义），
