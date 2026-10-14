@@ -37,6 +37,9 @@ export const Button: ParentComponent<{
 
 export const Input: ParentComponent<{
   class?: string;
+  /** 数字输入的步进器上下限（手输值仍需调用方自行钳制） */
+  max?: number;
+  min?: number;
   onInput: (value: string) => void;
   onKeyDown?: (event: KeyboardEvent) => void;
   placeholder?: string;
@@ -46,6 +49,8 @@ export const Input: ParentComponent<{
 }> = props => (
   <input
     class={`border-edge bg-surface text-ink focus:border-accent w-full rounded border outline-none ${INPUT_SIZE_STYLES[props.size ?? 'md']} ${props.class ?? ''}`}
+    max={props.max}
+    min={props.min}
     onInput={event => {
       props.onInput(event.currentTarget.value);
     }}

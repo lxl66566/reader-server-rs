@@ -186,6 +186,7 @@ function BookView(props: {
         open={editOpen()}
       />
       <EditReadingTimeModal
+        bookId={props.book.book_id}
         onClose={() => setReadingTimeOpen(false)}
         onSave={props.onSetReadingTime}
         open={readingTimeOpen()}

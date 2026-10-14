@@ -6,7 +6,9 @@
 // 联动：
 // - 悬停行回调 `onHoverBook`，驱动堆叠图的 focus 模式；
 // - `highlightBookId`（堆叠图分段被悬停）保留该行、淡化其余行，并自动
-//   滚动到可见——列表滚动时也能立即看到联动行。
+//   滚动到可见——列表滚动时也能立即看到联动行；
+// - 行尾编辑按钮回调 `onEditBook`（可选），打开该书每日时长编辑弹窗。
+import { VsEdit } from 'solid-icons/vs';
 import { createEffect, createMemo, For, Show, type Component } from 'solid-js';
 
 import { useI18n } from '../../i18n';
@@ -23,6 +25,8 @@ interface BookPlaytimeBarsProps {
   class?: string;
   emptyText: string;
   highlightBookId: null | number;
+  /** 打开某书每日时长编辑弹窗；缺省时不渲染编辑按钮 */
+  onEditBook?: (id: number) => void;
   onHoverBook: (id: null | number) => void;
   rows: BookBarRow[];
 }
@@ -98,6 +102,19 @@ const BookPlaytimeBars: Component<BookPlaytimeBarsProps> = props => {
                     </span>
                   </div>
                 </div>
+                <Show when={props.onEditBook}>
+                  <button
+                    aria-label={t('statsEditDaily')}
+                    class="text-muted hover:bg-edge hover:text-ink shrink-0 cursor-pointer rounded p-1 transition-colors"
+                    onClick={() => {
+                      props.onEditBook?.(row.bookId);
+                    }}
+                    title={t('statsEditDaily')}
+                    type="button"
+                  >
+                    <VsEdit class="size-3.5" />
+                  </button>
+                </Show>
               </div>
             );
           }}

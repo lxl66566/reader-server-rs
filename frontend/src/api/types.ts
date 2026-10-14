@@ -113,6 +113,12 @@ export interface DailyReadingStats {
   days: DailyBookReadingStat[];
 }
 
+// 单本书每日阅读时长条目（/reading/stats/daily/:book_id 的 entries 元素）
+export interface DailyStatEntry {
+  date: string;
+  reading_seconds: number;
+}
+
 export interface InviteCodeItem {
   created_at: string;
   description: null | string;

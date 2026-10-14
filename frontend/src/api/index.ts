@@ -11,6 +11,7 @@ import type {
   Bookmark,
   Chapter,
   DailyReadingStats,
+  DailyStatEntry,
   InviteCodeItem,
   PublicBook,
   ReadingSettings,
@@ -176,6 +177,11 @@ export const markerApi = {
 };
 
 export const readingApi = {
+  // 单本书每日记录（编辑弹窗的快照与保存前 live 读取）
+  bookDailyStats: (bookId: number) =>
+    api.get<{ entries: DailyStatEntry[] }>(
+      `/api/v1/reading/stats/daily/${bookId}`,
+    ),
   dailyStats: (start: string, end: string) =>
     api.get<DailyReadingStats>('/api/v1/reading/stats/daily', {
       query: { end, start },
@@ -188,6 +194,12 @@ export const readingApi = {
   settings: () =>
     api.get<ReadingSettings>('/api/v1/reading/settings', { cache: true }),
   stats: () => api.get<ReadingStats>('/api/v1/reading/stats'),
+  // 全量替换单本书每日阅读时长（服务端按差值同步总量）
+  updateBookDailyStats: (bookId: number, entries: DailyStatEntry[]) =>
+    api.put<{ entries: DailyStatEntry[] }>(
+      `/api/v1/reading/stats/daily/${bookId}`,
+      { body: { entries } },
+    ),
   updateSettings: (patch: Partial<ReadingSettings>) =>
     api.put<Record<string, never>>('/api/v1/reading/settings', { body: patch }),
 };

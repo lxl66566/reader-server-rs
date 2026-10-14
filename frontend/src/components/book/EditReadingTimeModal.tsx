@@ -1,4 +1,7 @@
 // Edit modal for the accumulated reading time of a book (h / m / s inputs).
+// 手动编辑只改累计时长，不影响每日统计；提示并提供跳转统计页编辑每日
+// 时长的深链（?editBook=<id>，由统计页自动打开对应书的编辑弹窗）。
+import { useNavigate } from '@solidjs/router';
 import { Show, createEffect, createSignal, type Component } from 'solid-js';
 import toast from 'solid-toast';
 
@@ -9,12 +12,15 @@ import { Button, Input, Modal } from '../ui';
 const MAX_SECONDS = 3650 * 24 * 60 * 60;
 
 export const EditReadingTimeModal: Component<{
+  /** 用于跳转统计页编辑每日时长的深链 */
+  bookId: number;
   onClose: () => void;
   onSave: (seconds: number) => Promise<void>;
   open: boolean;
   seconds: number;
 }> = props => {
   const { t } = useI18n();
+  const navigate = useNavigate();
   const [hours, setHours] = createSignal('0');
   const [minutes, setMinutes] = createSignal('0');
   const [seconds, setSeconds] = createSignal('0');
@@ -58,6 +64,12 @@ export const EditReadingTimeModal: Component<{
     if (event.key === 'Enter') void save();
   };
 
+  // 跳统计页编辑每日时长（关闭本弹窗后导航）
+  const goToDailyEdit = () => {
+    props.onClose();
+    navigate(`/stats?editBook=${props.bookId}`);
+  };
+
   const field = (
     label: string,
     value: () => string,
@@ -86,6 +98,16 @@ export const EditReadingTimeModal: Component<{
           {field(t('durationMinutes'), minutes, setMinutes)}
           {field(t('durationSeconds'), seconds, setSeconds)}
         </div>
+        <p class="text-muted text-xs">
+          {t('editReadingTimeDailyHint')}
+          <button
+            class="text-accent ml-1 cursor-pointer underline underline-offset-2"
+            onClick={goToDailyEdit}
+            type="button"
+          >
+            {t('goToStatsEditDaily')}
+          </button>
+        </p>
         <Show when={totalSeconds() === null}>
           <p class="text-muted text-xs">{t('editReadingTimeInvalid')}</p>
         </Show>

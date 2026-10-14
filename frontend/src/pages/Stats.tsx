@@ -1,3 +1,4 @@
+import { useSearchParams } from '@solidjs/router';
 // 阅读统计页：汇总卡片 + 周/月/年堆叠柱状图，图表与分书籍时长列表
 // 双向联动（悬停列 → 列表过滤到当日；悬停行 → 图表聚焦该书）。
 // 图表结构移植自 GalgameManager 统计页，配色使用金色角色轮。
@@ -41,6 +42,7 @@ import { useSettings } from '../stores/settings';
 import { formatDuration } from '../utils/format';
 import BookPlaytimeBars, { type BookBarRow } from './stats/BookPlaytimeBars';
 import { goldenColor } from './stats/colors';
+import DailyEditModal from './stats/DailyEditModal';
 import StackedChart, {
   type ChartHover,
   type ChartSeriesItem,
@@ -102,6 +104,23 @@ const Stats: Component = () => {
   const [granularity, setGranularity] = createSignal<Granularity>('week');
   const [offset, setOffset] = createSignal(0);
   const [pickerOpen, setPickerOpen] = createSignal(false);
+
+  // ── 每日时长编辑弹窗 ──
+  // 由分书籍列表行尾按钮或 `?editBook=<id>` 深链（详情页“修改阅读时长”
+  // 弹窗的跳转链接）打开
+  const [editingBookId, setEditingBookId] = createSignal<null | number>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  createEffect(() => {
+    // 数组形态需收窄：同名参数可能重复出现
+    const raw = searchParams.editBook;
+    const value = Array.isArray(raw) ? raw[0] : raw;
+    if (!value) return;
+    const id = Number(value);
+    if (!Number.isInteger(id) || id <= 0) return;
+    // 清掉参数：关闭弹窗后刷新/回退不再重复打开
+    setSearchParams({ editBook: undefined }, { replace: true });
+    setEditingBookId(id);
+  });
 
   // 统计日期语义跟随设置中的时区（与服务端日报归算一致），默认本地时区
   const weekFirstDay = createMemo(() => localeFirstWeekday(locale()));
@@ -220,6 +239,16 @@ const Stats: Component = () => {
     const err: unknown = daily.error;
     if (!err) return null;
     return err instanceof ApiError ? err.message : t('errorLoadFailed');
+  });
+
+  // 书不存在或 id 非法时仍可打开弹窗（由弹窗内 GET 报错兜底）
+  const editingName = createMemo(() => {
+    const id = editingBookId();
+    if (id == null) return '';
+    // 从已加载的区间明细取书名；当前区间无记录（如深链直开）时回退 #id
+    const titles = new Map<number, string>();
+    for (const row of daily()?.days ?? []) titles.set(row.book_id, row.title);
+    return titles.get(id) ?? `#${id}`;
   });
 
   return (
@@ -354,6 +383,7 @@ const Stats: Component = () => {
           <BookPlaytimeBars
             emptyText={t('statsNoDataInScope')}
             highlightBookId={hover()?.bookId ?? null}
+            onEditBook={setEditingBookId}
             onHoverBook={setFocusBookId}
             rows={rows()}
           />
@@ -377,6 +407,25 @@ const Stats: Component = () => {
           value={dateKey(range().start)}
         />
       </Modal>
+
+      {/* keyed：把非空 id 以非空类型传给弹窗 */}
+      <Show keyed when={editingBookId()}>
+        {id => (
+          <DailyEditModal
+            bookId={id}
+            color={goldenColor(id)}
+            name={editingName()}
+            onClose={() => {
+              setEditingBookId(null);
+            }}
+            onSaved={() => {
+              // 服务端已按差值同步总量，两个统计资源都要刷新
+              void refetch();
+              void dailyActions.refetch();
+            }}
+          />
+        )}
+      </Show>
     </div>
   );
 };
