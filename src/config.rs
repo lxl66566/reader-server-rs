@@ -13,6 +13,8 @@ pub struct Config {
     pub server: ServerConfig,
     pub db: DbConfig,
     pub storage: StorageConfig,
+    /// serde(default)：旧 config 缺整个 jwt 段时按默认值起（load_config 会补写 secret）
+    #[serde(default)]
     pub jwt: JwtConfig,
     pub log: LogConfig,
     pub rate_limit: RateLimitConfig,
@@ -39,9 +41,30 @@ pub struct StorageConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JwtConfig {
+    #[serde(default)]
     pub secret: String,
+    #[serde(default = "default_jwt_expiration")]
     pub expiration: u64, // 过期时间，单位为秒
+    #[serde(default = "default_admin_expiration")]
     pub admin_expiration: u64,
+}
+
+impl Default for JwtConfig {
+    fn default() -> Self {
+        Self {
+            secret: String::new(),
+            expiration: default_jwt_expiration(),
+            admin_expiration: default_admin_expiration(),
+        }
+    }
+}
+
+fn default_jwt_expiration() -> u64 {
+    60 * 60 * 24 * 30 // 30天
+}
+
+fn default_admin_expiration() -> u64 {
+    60 * 60 * 24 * 7 // 7天
 }
 
 impl JwtConfig {
@@ -120,9 +143,9 @@ impl Default for Config {
                 max_file_size: 50 * 1024 * 1024,
             },
             jwt: JwtConfig {
-                secret: String::new(),              // load_config 首次运行时会生成随机值
-                expiration: 60 * 60 * 24 * 30,      // 30天
-                admin_expiration: 60 * 60 * 24 * 7, // 7天
+                secret: String::new(), // load_config 会生成随机值
+                expiration: default_jwt_expiration(),
+                admin_expiration: default_admin_expiration(),
             },
             log: LogConfig {
                 dir: PathBuf::from("logs"),
@@ -140,19 +163,20 @@ impl Default for Config {
 /// 旧版硬编码的默认 secret，用于检测未修改的配置
 const LEGACY_DEFAULT_SECRET: &str = "super_secret_key_change_me_in_production";
 
-/// 加载配置：文件存在则读取校验，否则按默认值生成（含随机 JWT secret）
-/// 并收紧为 0600 后写入；`path` 由命令行 -c/--config 指定，默认 config.json
+/// 加载配置：文件不存在则按默认值生成（含随机 JWT secret）并收紧为 0600 后写入；
+/// 文件存在但未提供有效 jwt secret 时自动生成并写回，已提供有效 secret 则不修改文件。
+/// `path` 由命令行 -c/--config 指定，默认 config.json
 pub async fn load_config(path: &Path) -> Result<Config> {
     if path.exists() {
         let config_str = fs::read_to_string(path).await?;
-        let config: Config = serde_json::from_str(&config_str)?;
+        let mut config: Config = serde_json::from_str(&config_str)?;
 
-        // 强制要求用户设置非空、非默认值的 JWT secret
+        // 缺 secret 或仍为旧版默认值时自动生成写回，省去部署后手改配置这一步
         if config.jwt.secret.is_empty() || config.jwt.secret == LEGACY_DEFAULT_SECRET {
-            anyhow::bail!(
-                "JWT secret in config.json must be a non-empty, non-default value. Please \
-                 generate a random secret and update config.json."
-            );
+            config.jwt.secret = Uuid::new_v4().to_string();
+            fs::write(path, serde_json::to_string_pretty(&config)?).await?;
+            restrict_config_permissions(path).await?;
+            tracing::info!(path = %path.display(), "generated a random JWT secret and wrote it back");
         }
 
         config.rate_limit.validate()?;
@@ -197,5 +221,42 @@ mod tests {
         let legacy = r#"{"per_second": 20, "burst_size": 70}"#;
         let config: RateLimitConfig = serde_json::from_str(legacy).unwrap();
         assert!(!config.trust_proxy_headers);
+    }
+
+    /// 缺 jwt 段的旧 config：起服务时自动补默认配置并生成 secret 写回，
+    /// 二次加载 secret 保持稳定（有效 secret 不再改写文件）
+    #[tokio::test]
+    async fn missing_jwt_autofilled_and_written_back() {
+        let path = std::env::temp_dir().join(format!("reader-cfg-test-{}.json", Uuid::new_v4()));
+        let body = r#"{"server":{"host":"127.0.0.1","port":3100},"db":{"url":"sqlite:t.db","max_connections":1},"storage":{"book_dir":"b","max_file_size":1},"log":{"dir":"l","rotation":"daily"},"rate_limit":{"per_second":1,"burst_size":1}}"#;
+        fs::write(&path, body).await.unwrap();
+
+        let config = load_config(&path).await.unwrap();
+        assert_ne!(config.jwt.secret, "");
+        assert_eq!(config.jwt.expiration, default_jwt_expiration());
+        assert_eq!(config.jwt.admin_expiration, default_admin_expiration());
+        // 其他字段原样保留
+        assert_eq!(config.server.port, 3100);
+
+        // 写回后的文件可再次加载，且 secret 不变
+        let reloaded = load_config(&path).await.unwrap();
+        assert_eq!(reloaded.jwt.secret, config.jwt.secret);
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// 已提供有效 jwt secret：加载后保持原值，文件不被改写
+    #[tokio::test]
+    async fn provided_jwt_secret_preserved() {
+        let path = std::env::temp_dir().join(format!("reader-cfg-test-{}.json", Uuid::new_v4()));
+        let body = r#"{"jwt":{"secret":"user-provided-secret","expiration":100,"admin_expiration":100},"server":{"host":"0.0.0.0","port":3000},"db":{"url":"sqlite:t.db","max_connections":1},"storage":{"book_dir":"b","max_file_size":1},"log":{"dir":"l","rotation":"daily"},"rate_limit":{"per_second":1,"burst_size":1}}"#;
+        fs::write(&path, body).await.unwrap();
+
+        let config = load_config(&path).await.unwrap();
+        assert_eq!(config.jwt.secret, "user-provided-secret");
+        assert_eq!(config.jwt.expiration, 100);
+        assert_eq!(body, fs::read_to_string(&path).await.unwrap());
+
+        std::fs::remove_file(&path).ok();
     }
 }
