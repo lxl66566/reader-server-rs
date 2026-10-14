@@ -29,6 +29,10 @@ const en: Dict = {
   cancel: 'Cancel',
   changePassword: 'Change password',
   changePasswordSuccess: 'Password changed',
+  chapterPatternInvalid: 'Invalid regular expression',
+  chapterPatternLabel: 'Chapter split regex (optional)',
+  chapterPatternPlaceholder:
+    'Leave empty for built-in rules (auto-detect chapter headings)',
   close: 'Close',
   confirm: 'Confirm',
   confirmAction: 'Are you sure?',

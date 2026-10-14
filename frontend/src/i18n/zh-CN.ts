@@ -29,6 +29,10 @@ const zhCN = {
   cancel: '取消',
   changePassword: '修改密码',
   changePasswordSuccess: '密码已修改',
+  chapterPatternInvalid: '正则表达式无效',
+  chapterPatternLabel: '章节切分正则（选填）',
+  chapterPatternPlaceholder:
+    '留空使用内置规则（自动识别“第X章 / 序章 / 楔子”等）',
   close: '关闭',
   confirm: '确认',
   confirmAction: '确定执行该操作吗？',

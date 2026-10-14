@@ -74,6 +74,8 @@ export interface Book {
 }
 
 export interface BookDetail extends Book {
+  /** per-book custom chapter split regex (txt only); null = built-in rules */
+  chapter_pattern: null | string;
   chapters: Chapter[];
   /** whether the current user owns this book */
   is_owner: boolean;

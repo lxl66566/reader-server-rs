@@ -104,7 +104,13 @@ export const bookApi = {
     api.get<{ tags: string[] }>(`/api/v1/books/${bookId}/tags`),
   update: (
     bookId: number,
-    patch: { author?: string; is_public?: boolean; title?: string },
+    patch: {
+      author?: string;
+      // null = 恢复内置默认切分规则
+      chapter_pattern?: null | string;
+      is_public?: boolean;
+      title?: string;
+    },
   ) =>
     api.put<Record<string, never>>(`/api/v1/books/${bookId}`, { body: patch }),
   upload: (form: FormData, signal?: AbortSignal) =>

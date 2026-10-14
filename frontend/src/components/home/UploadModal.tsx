@@ -1,11 +1,20 @@
 // Upload book form: file picker + title/author + public toggle.
 
-import { createEffect, createSignal, type ParentComponent } from 'solid-js';
+import {
+  createEffect,
+  createSignal,
+  Show,
+  type ParentComponent,
+} from 'solid-js';
 import toast from 'solid-toast';
 
 import { bookApi } from '../../api';
 import { useI18n } from '../../i18n';
 import { toastError } from '../../utils/toast';
+import {
+  ChapterPatternField,
+  isValidChapterPattern,
+} from '../ChapterPatternField';
 import { Button, Input, Modal, Toggle } from '../ui';
 
 export const UploadModal: ParentComponent<{
@@ -15,15 +24,20 @@ export const UploadModal: ParentComponent<{
 }> = props => {
   const { t } = useI18n();
   const [author, setAuthor] = createSignal('');
+  const [chapterPattern, setChapterPattern] = createSignal('');
   const [file, setFile] = createSignal<File | null>(null);
   const [isPublic, setIsPublic] = createSignal(false);
   const [title, setTitle] = createSignal('');
   const [uploading, setUploading] = createSignal(false);
 
+  // 章节 regex 仅对 txt 有意义；服务端按内容识别格式，这里用扩展名近似
+  const isTxt = () => file()?.name.toLowerCase().endsWith('.txt') ?? false;
+
   // Reset the form whenever the modal is reopened.
   createEffect(() => {
     if (props.open) {
       setAuthor('');
+      setChapterPattern('');
       setFile(null);
       setIsPublic(false);
       setTitle('');
@@ -58,6 +72,8 @@ export const UploadModal: ParentComponent<{
       form.append('file', f);
       form.append('title', title().trim());
       if (author().trim()) form.append('author', author().trim());
+      const pattern = chapterPattern().trim();
+      if (isTxt() && pattern) form.append('chapter_pattern', pattern);
       form.append('is_public', isPublic() ? 'true' : 'false');
       await bookApi.upload(form, uploadController.signal);
       toast.success(t('uploadSuccess'));
@@ -102,6 +118,12 @@ export const UploadModal: ParentComponent<{
           <span class="text-muted mb-1 block">{t('authorLabel')}</span>
           <Input onInput={setAuthor} value={author()} />
         </label>
+        <Show when={isTxt()}>
+          <ChapterPatternField
+            onInput={setChapterPattern}
+            value={chapterPattern()}
+          />
+        </Show>
         <div class="flex items-center justify-between">
           <span class="text-sm">{t('isPublicLabel')}</span>
           <Toggle checked={isPublic()} onChange={setIsPublic} />
@@ -120,7 +142,12 @@ export const UploadModal: ParentComponent<{
           </Button>
           <Button
             class="flex-1"
-            disabled={!file() || !title().trim() || uploading()}
+            disabled={
+              !file() ||
+              !title().trim() ||
+              uploading() ||
+              (isTxt() && !isValidChapterPattern(chapterPattern()))
+            }
             type="submit"
           >
             {uploading() ? t('uploading') : t('uploadSubmit')}
