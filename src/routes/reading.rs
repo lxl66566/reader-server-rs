@@ -690,11 +690,13 @@ async fn get_reading_stats(
         .format("%Y-%m-%d")
         .to_string();
 
-    // 取所有日期用于计算连续天数
+    // 取所有日期用于计算连续天数；未来日期不入序列（每日补录入口允许任意日期，
+    // 若混入会把 current_streak 的首日期判成中断）
     let all_dates: Vec<String> = sqlx::query_scalar(
-        "SELECT date FROM daily_reading_stats WHERE user_id = ? ORDER BY date DESC",
+        "SELECT date FROM daily_reading_stats WHERE user_id = ? AND date <= ? ORDER BY date DESC",
     )
     .bind(auth.user_id)
+    .bind(&today)
     .fetch_all(&pool)
     .await?;
 

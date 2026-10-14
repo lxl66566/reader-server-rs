@@ -3363,6 +3363,53 @@ async fn test_edit_daily_reading_stats() {
 }
 
 #[tokio::test]
+async fn test_daily_stats_future_date_does_not_break_streak() {
+    // 每日补录允许任意合法日期；未来日期不得参与连续天数计算，
+    // 否则首日期非今天/昨天会把 current_streak 判成 0
+
+    let (app, _pool) = setup_test_app().await.unwrap();
+    let token = register_and_login(&app, "streak_user", "password1").await;
+    let book = upload_test_book(&app, &token, "连续天数书", TEST_BOOK_CONTENT, false).await;
+    let book_id = book["book_id"].as_i64().unwrap();
+
+    // 用户默认时区 UTC；构造 今天/昨天/明天 三条记录
+    let today = chrono::Utc::now().date_naive();
+    let date = |d: i64| {
+        (today + chrono::Duration::days(d))
+            .format("%Y-%m-%d")
+            .to_string()
+    };
+    let entries = serde_json::json!([
+        { "date": date(1), "reading_seconds": 60 },   // 明天：混入的未来日期
+        { "date": date(0), "reading_seconds": 120 },
+        { "date": date(-1), "reading_seconds": 90 },
+    ]);
+    let resp = make_json_request(
+        &app,
+        Method::PUT,
+        &format!("/api/v1/reading/stats/daily/{book_id}"),
+        &serde_json::json!({ "entries": entries }),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/v1/reading/stats",
+        Body::empty(),
+        Some(&token),
+    )
+    .await;
+    let json = response_json(resp).await;
+    // 未来日期被忽略：今天 + 昨天连续 2 天（未过滤时首日期是明天 → 0）
+    assert_eq!(json["data"]["current_streak_days"], 2);
+
+    println!("\n===== Future-date streak guard test passed! =====");
+}
+
+#[tokio::test]
 async fn test_import_rejects_chapter_pattern_on_non_txt() {
     // 非 txt 书籍携带章节切分正则的导出包无效：与上传口约束一致
     let (app, _pool) = setup_test_app().await.unwrap();

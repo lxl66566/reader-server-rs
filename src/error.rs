@@ -190,7 +190,7 @@ pub enum AppError {
     SettingOutOfRange(&'static str),
 
     #[error(
-        "Invalid date range (start must be a valid YYYY-MM-DD not after end, spanning at most 366 \
+        "Invalid date range (start must be a valid YYYY-MM-DD not after end, spanning at most 372 \
          days)"
     )]
     InvalidDateRange,
