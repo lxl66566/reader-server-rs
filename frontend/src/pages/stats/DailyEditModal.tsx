@@ -160,7 +160,8 @@ const DailyEditModal: Component<DailyEditModalProps> = props => {
     }
   };
 
-  /** 行内的时/分输入（秒位由 setHourMinute 保留） */
+  /** 行内的时/分输入，单位后缀可见（仅 sr-only 时用户无法分辨时/分）；
+   *  秒位由 setHourMinute 保留 */
   const hmField = (
     date: string,
     key: 'h' | 'm',
@@ -168,9 +169,9 @@ const DailyEditModal: Component<DailyEditModalProps> = props => {
     max: number | undefined,
     label: string,
   ) => (
-    <label class="min-w-0 flex-1">
-      <span class="text-muted sr-only">{label}</span>
+    <label class="flex min-w-0 flex-1 items-center gap-1">
       <Input
+        class="min-w-0 flex-1"
         max={max}
         min={0}
         onInput={v => {
@@ -183,6 +184,7 @@ const DailyEditModal: Component<DailyEditModalProps> = props => {
         type="number"
         value={String(value())}
       />
+      <span class="text-muted shrink-0 text-xs">{label}</span>
     </label>
   );
 
