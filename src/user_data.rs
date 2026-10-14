@@ -827,8 +827,13 @@ fn validate_export(export: &UserExport) -> Result<(), AppError> {
                 "books[{i}].title is empty"
             )));
         }
-        // 章节 regex 与上传同一校验，坏包拦在写文件之前
+        // 章节 regex 与上传同一校验（仅 txt 可携带），坏包拦在写文件之前
         if let Some(pattern) = &b.chapter_pattern {
+            if b.format != BookFormat::Txt {
+                return Err(AppError::ImportPackageInvalid(format!(
+                    "books[{i}].chapter_pattern is only allowed for txt books"
+                )));
+            }
             crate::parser::validate_chapter_pattern(pattern)?;
         }
     }

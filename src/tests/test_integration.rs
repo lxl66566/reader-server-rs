@@ -3362,6 +3362,51 @@ async fn test_edit_daily_reading_stats() {
     println!("\n===== Edit daily reading stats tests passed! =====");
 }
 
+#[tokio::test]
+async fn test_import_rejects_chapter_pattern_on_non_txt() {
+    // 非 txt 书籍携带章节切分正则的导出包无效：与上传口约束一致
+    let (app, _pool) = setup_test_app().await.unwrap();
+    let (admin_token, _) = setup_admin(&app).await;
+
+    let metadata = serde_json::json!({
+        "user": {"id": 1, "username": "pattern_user", "created_at": "2024-01-01T00:00:00.000Z", "total_reading_time": 0},
+        "books": [{
+            "id": 7, "user_id": 1, "title": "epub 书", "author": null, "file_path": "/old/path",
+            "is_public": false, "cover_path": null, "total_chars": 100, "total_pages": 0,
+            "description": null, "format": "epub", "content_hash": "xx", "created_at": "2024-01-01T00:00:00.000Z",
+            "chapter_pattern": "^Chapter"
+        }],
+        "chapters": [],
+        "reading_progress": [],
+        "bookmarks": [],
+        "annotations": [],
+        "exported_at": "2024-01-02T00:00:00.000Z"
+    });
+
+    let mut buf = Vec::new();
+    {
+        use std::io::Write as _;
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+        let opts = zip::write::SimpleFileOptions::default();
+        w.start_file("metadata.json", opts).unwrap();
+        w.write_all(&serde_json::to_vec_pretty(&metadata).unwrap())
+            .unwrap();
+        w.finish().unwrap();
+    }
+
+    let resp = make_multipart_request(
+        &app,
+        "/api/v1/admin/users/import",
+        vec![("password", "pass1234")],
+        Some(("file", "bad-pattern.zip", &buf)),
+        Some(&admin_token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    println!("\n===== Import chapter-pattern format check test passed! =====");
+}
+
 // ----------------------------------------------------------------
 
 /// 获取书籍详情 JSON（断言 200）
