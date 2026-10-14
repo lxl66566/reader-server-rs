@@ -415,6 +415,7 @@ const Stats: Component = () => {
             bookId={id}
             color={goldenColor(id)}
             name={editingName()}
+            today={todayKey()}
             onClose={() => {
               setEditingBookId(null);
             }}

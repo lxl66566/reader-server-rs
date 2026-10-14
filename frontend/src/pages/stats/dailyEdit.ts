@@ -5,7 +5,8 @@
 // 期间的心跳累加（“今天”）不会丢。
 
 export type DailySecondsMap = Record<string, number>;
-
+// 与服务端 MAX_READING_TIME_SECS 一致：单日条目上限（3650 天）
+export const MAX_DAILY_SECONDS = 3650 * 24 * 60 * 60;
 /**
  * 保存时把用户草稿合并进服务端最新状态（live）。
  *

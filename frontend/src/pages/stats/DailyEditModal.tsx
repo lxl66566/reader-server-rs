@@ -22,6 +22,7 @@ import { Button, Input, Modal, Spinner } from '../../components/ui';
 import { useI18n } from '../../i18n';
 import { formatDuration } from '../../utils/format';
 import {
+  MAX_DAILY_SECONDS,
   mergeDailySeconds,
   setHourMinute,
   sumDaily,
@@ -36,6 +37,8 @@ interface DailyEditModalProps {
   color: string;
   /** 书名（当前区间无记录的深链场景下调用方回退为 #id） */
   name: string;
+  /** 今天（用户时区 YYYY-MM-DD）：新增日期选择器的上限 */
+  today: string;
   /** 关闭（不保存） */
   onClose: () => void;
   /** 保存成功后由父级刷新统计资源（stats 与 daily） */
@@ -81,6 +84,13 @@ const DailyEditModal: Component<DailyEditModalProps> = props => {
     if (delta === 0) return '';
     return `${delta > 0 ? '+' : '-'}${formatDuration(Math.abs(delta), t)}`;
   });
+
+  // 单日条目上限校验（与服务端 MAX_READING_TIME_SECS 对齐）：
+  // 时输入无 max、分手输可超 59，超限载荷会被服务端 400 且只回通用文案，
+  // 这里提前给出原因并禁用保存（与“修改阅读时长”弹窗同款体验）
+  const entriesValid = createMemo(() =>
+    Object.values(draft).every(secs => secs <= MAX_DAILY_SECONDS),
+  );
 
   const setHM = (date: string, h: number, m: number) => {
     setDraft(date, setHourMinute(draft[date] ?? 0, h, m));
@@ -270,6 +280,7 @@ const DailyEditModal: Component<DailyEditModalProps> = props => {
           <div class="border-edge mt-3 flex items-center gap-2 border-t pt-3">
             <input
               class="border-edge bg-surface text-ink focus:border-accent w-full rounded border px-2 py-1 text-sm tabular-nums outline-none"
+              max={props.today}
               onChange={e => {
                 setNewDate(e.currentTarget.value);
                 handleAddDate(e.currentTarget.value);
@@ -290,12 +301,20 @@ const DailyEditModal: Component<DailyEditModalProps> = props => {
                   {t('statsDailySaveAdjusts')} ({deltaText()})
                 </span>
               </Show>
+              <Show when={!entriesValid()}>
+                <span class="text-red-600 dark:text-red-400">
+                  {t('statsDailyInvalid')}
+                </span>
+              </Show>
             </div>
             <div class="flex shrink-0 gap-2">
               <Button disabled={busy()} onClick={props.onClose} variant="ghost">
                 {t('cancel')}
               </Button>
-              <Button disabled={busy()} onClick={() => void save()}>
+              <Button
+                disabled={busy() || !entriesValid()}
+                onClick={() => void save()}
+              >
                 {t('save')}
               </Button>
             </div>

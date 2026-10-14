@@ -211,6 +211,7 @@ const zhCN = {
   startReading: '开始阅读',
   statsBackToCurrent: '回到当前周期',
   statsCurrentStreak: '当前连续',
+  statsDailyInvalid: '单日阅读时长不能超过 3650 天',
   statsDailySaveAdjusts: '保存将同步调整总时长',
   statsDailySaved: '每日阅读时长已更新',
   statsDailyTotal: '每日合计',

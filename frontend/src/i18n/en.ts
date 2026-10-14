@@ -217,6 +217,7 @@ const en: Dict = {
   startReading: 'Start reading',
   statsBackToCurrent: 'Back to current period',
   statsCurrentStreak: 'Current streak',
+  statsDailyInvalid: 'Daily reading time cannot exceed 3650 days',
   statsDailySaveAdjusts: 'Saving adjusts the total by',
   statsDailySaved: 'Daily reading time updated',
   statsDailyTotal: 'Daily total',
