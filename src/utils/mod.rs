@@ -1,13 +1,12 @@
-use argon2::{
-    Argon2, PasswordHasher as _, PasswordVerifier as _, password_hash::phc::PasswordHash,
-};
 use rand::RngExt;
 use uuid::Uuid;
 
-use crate::error::AppError;
-
+pub mod argon2;
 pub mod utf8;
 pub mod zip;
+
+// 密码哈希固定在专用线程执行（见 argon2.rs），此处重导出保持调用点写法不变
+pub use argon2::{hash_password, verify_password};
 
 /// 简易 `ETag` 哈希：用 FNV-1a 64bit，足够短、足够快、无外部依赖
 /// 返回带双引号的 `ETag` 字符串（符合 RFC 7232）
@@ -55,22 +54,4 @@ pub fn generate_invite_code() -> String {
             CHARSET[idx] as char
         })
         .collect()
-}
-
-// 哈希密码：随机 salt 由库内部生成，输出 PHC 格式字符串
-pub fn hash_password(password: &str) -> Result<String, AppError> {
-    Argon2::default()
-        .hash_password(password.as_bytes())
-        .map(|hash| hash.to_string())
-        .map_err(|e| AppError::Internal(format!("Password hashing failed: {e}")))
-}
-
-// 验证密码
-pub fn verify_password(password: &str, hash: &str) -> Result<bool, AppError> {
-    let parsed_hash = PasswordHash::new(hash)
-        .map_err(|e| AppError::Internal(format!("Failed to parse hash: {e}")))?;
-
-    Ok(Argon2::default()
-        .verify_password(password.as_bytes(), &parsed_hash)
-        .is_ok())
 }

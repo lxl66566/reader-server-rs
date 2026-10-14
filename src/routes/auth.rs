@@ -82,7 +82,7 @@ async fn register(
     }
 
     // 哈希密码（耗时操作，在开启事务前完成）
-    let password_hash = hash_password(&req.password)?;
+    let password_hash = hash_password(&req.password).await?;
 
     // 注册的三步写入（核销邀请码 / 创建用户 / 默认阅读设置）放进同一事务，
     // 中途任一步失败整体回滚，不留部分状态
@@ -204,7 +204,7 @@ async fn login(
     }
 
     // 验证密码
-    if !verify_password(&req.password, &user.password_hash)? {
+    if !verify_password(&req.password, &user.password_hash).await? {
         // 失败计数与锁定判定合并为单条自增语句，消除并发错密登录的漏计窗口；
         // CASE 在达到阈值时写入新的锁定截止时间，否则清空
         let attempts: Option<i64> = sqlx::query_scalar!(
@@ -299,7 +299,7 @@ async fn change_password(
         .await?;
 
     // 验证旧密码
-    if !verify_password(&req.old_password, &user.password_hash)? {
+    if !verify_password(&req.old_password, &user.password_hash).await? {
         return Err(AppError::IncorrectOldPassword);
     }
 
@@ -307,7 +307,7 @@ async fn change_password(
     validate_password(&req.new_password)?;
 
     // 哈希新密码
-    let new_password_hash = hash_password(&req.new_password)?;
+    let new_password_hash = hash_password(&req.new_password).await?;
 
     // 更新密码并递增 token_version：使所有已签发的旧 JWT 立即失效
     sqlx::query!(
@@ -337,7 +337,7 @@ async fn delete_account(
         .fetch_one(&pool)
         .await?;
 
-    if !verify_password(&req.password, &user.password_hash)? {
+    if !verify_password(&req.password, &user.password_hash).await? {
         return Err(AppError::IncorrectOldPassword);
     }
 
@@ -405,7 +405,7 @@ async fn admin_setup(
     validate_password(&req.password)?;
 
     // 哈希密码（耗时操作，在写入前完成）
-    let password_hash = hash_password(&req.password)?;
+    let password_hash = hash_password(&req.password).await?;
 
     // 单条原子语句创建首个管理员：INSERT ... WHERE NOT EXISTS 消除
     // “先查后插”的 TOCTOU——并发 setup 只有一个能插入成功
@@ -490,7 +490,7 @@ async fn admin_login(
     }
 
     // 验证密码
-    if !verify_password(&req.password, &admin.password_hash)? {
+    if !verify_password(&req.password, &admin.password_hash).await? {
         // 失败计数与锁定判定合并为单条自增语句（与用户登录同一机制）
         let attempts: Option<i64> = sqlx::query_scalar!(
             "UPDATE admin SET failed_login_attempts = failed_login_attempts + 1, locked_until = \

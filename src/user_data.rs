@@ -406,7 +406,7 @@ pub(crate) async fn restore_user_export(
     let password_hash = match non_empty(password) {
         Some(p) => {
             crate::routes::auth::validate_password(&p)?;
-            crate::utils::hash_password(&p)?
+            crate::utils::hash_password(&p).await?
         },
         // 自助导出包不含哈希，必须显式提供密码
         None => export

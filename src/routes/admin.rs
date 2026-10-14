@@ -142,14 +142,14 @@ async fn change_password(
     .await?;
 
     // 验证旧密码
-    if !verify_password(&req.old_password, &row.password_hash)? {
+    if !verify_password(&req.old_password, &row.password_hash).await? {
         return Err(AppError::IncorrectOldPassword);
     }
 
     // 校验新密码非空
     validate_password(&req.new_password)?;
 
-    let new_password_hash = hash_password(&req.new_password)?;
+    let new_password_hash = hash_password(&req.new_password).await?;
 
     sqlx::query!(
         "UPDATE admin SET password_hash = ?, token_version = token_version + 1 WHERE id = ?",
@@ -479,7 +479,7 @@ async fn reset_password(
     // 校验新密码非空
     validate_password(&req.new_password)?;
 
-    let new_password_hash = hash_password(&req.new_password)?;
+    let new_password_hash = hash_password(&req.new_password).await?;
 
     // 重置密码同时解除锁定并递增 token_version，使旧 JWT 立即失效
     sqlx::query!(
@@ -666,7 +666,7 @@ async fn create_admin(
         return Err(AppError::AdminUsernameAlreadyExists);
     }
 
-    let password_hash = hash_password(&req.password)?;
+    let password_hash = hash_password(&req.password).await?;
 
     let new_admin_id = sqlx::query!(
         "INSERT INTO admin (username, password_hash) VALUES (?, ?)",
