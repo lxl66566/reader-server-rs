@@ -4,7 +4,7 @@
 
 | HTTP status | 触发场景（典型） |
 |---|---|
-| 400 | 参数校验失败（用户名格式、密码为空、邀请码、上传文件格式/大小/损坏（epub/pdf 解析失败）、空文件、章节数超上限、批注范围、locator 为空、percent 越界、无效时区、无效搜索 scope、对非 txt 书调用 `/content`、手动设置阅读时长越界（负数或超过 3650 天）、用户数据导入包无效（zip 损坏 / 缺 metadata.json / 缺书籍条目 / 版本不支持 / 字段非法）等） |
+| 400 | 参数校验失败（用户名格式、密码为空、邀请码、上传文件格式/大小/损坏（epub/pdf 解析失败）、空文件、章节数超上限、无效章节切分正则（无法编译）、对非 txt 书设置章节切分正则、批注范围、locator 为空、percent 越界、无效时区、无效搜索 scope、对非 txt 书调用 `/content`、手动设置阅读时长越界（负数或超过 3650 天）、用户数据导入包无效（zip 损坏 / 缺 metadata.json / 缺书籍条目 / 版本不支持 / 字段非法）等） |
 | 401 | 未登录 / token 过期 / 账户被锁定 / 账户被ban / 账户已注销 / token 角色不匹配 |
 | 403 | 无权限访问 / 修改 / 删除目标资源（如非 owner 操作他人书） |
 | 404 | 资源不存在（书 / 章节 / 用户 / 书签 / 批注 / 管理员 / 书籍原文件在磁盘上丢失） |
@@ -56,7 +56,8 @@ type Book = {
   total_pages: number;   // pdf 有效；txt/epub 为 0
   description: string | null
 }
-type BookDetail = Book & { is_owner: boolean; chapters: { chapter_id: number; title: string; position: number }[] }
+type BookDetail = Book & { is_owner: boolean; chapter_pattern: string | null; chapters: { chapter_id: number; title: string; position: number }[] }
+// chapter_pattern：本书自定义章节切分正则（仅 txt 有意义）；null = 使用内置默认规则
 // position 字段：txt = 全文字符偏移；epub = spine 索引（0-based，与 epub.js 对齐）；pdf 通常无章节
 type PublicBook = {
   book_id: number; title: string; author: string | null; owner_username: string;
@@ -104,7 +105,7 @@ type Annotation = {
 | GET | /api/v1/auth/user_info | Auth | - | { user_id: number; username: string; total_reading_time: number; book_count: number; status: 'active' \| 'banned' } |
 | POST | /api/v1/auth/change_password | Auth | Body: { old_password: string; new_password: string } | {} |
 | DELETE | /api/v1/auth/account | Auth | Body: { password: string } | {} |
-| GET | /api/v1/auth/export | Auth | - | application/zip 流，文件名 `<username>_<timestamp>.zip`，内含 metadata.json（书（含标签）/章节/进度/设置/书签/批注/每日统计，不含密码哈希）+ 所有原始书籍文件（保留原格式）；任何书籍文件读取失败会整体返回 500 而不是产出残缺包。包格式与管理员导出一致，可直接被 `/admin/users/import` 导入（需显式提供新密码） |
+| GET | /api/v1/auth/export | Auth | - | application/zip 流，文件名 `<username>_<timestamp>.zip`，内含 metadata.json（书（含标签、chapter_pattern）/章节/进度/设置/书签/批注/每日统计，不含密码哈希）+ 所有原始书籍文件（保留原格式）；任何书籍文件读取失败会整体返回 500 而不是产出残缺包。包格式与管理员导出一致，可直接被 `/admin/users/import` 导入（需显式提供新密码） |
 | POST | /api/v1/auth/admin/setup | - | Body: { username: string; password: string } | { admin_token: string }；仅允许一次，重复/并发调用只有首个成功（原子语句保证），其余返回 400 |
 | POST | /api/v1/auth/admin/login | - | Body: { username: string; password: string } | { admin_token: string } |
 
@@ -124,8 +125,8 @@ type Annotation = {
 | POST | /api/v1/admin/users/:user_id/revoke_tokens | Admin | - | {} |
 | POST | /api/v1/admin/users/:user_id/ban | Admin | - | {} |
 | POST | /api/v1/admin/users/:user_id/unban | Admin | - | {} |
-| GET | /api/v1/admin/users/:user_id/export | Admin | - | application/zip 流，文件名 `<username>_<timestamp>.zip`；迁移范围导出：metadata.json（账号（含密码哈希，导入后可凭原密码登录）/书籍（含标签）/章节/进度/设置/书签/批注/每日统计）+ 所有书籍原文件；任何文件缺失/读取失败会整体返回 500 |
-| POST | /api/v1/admin/users/import | Admin | FormData: file (zip，用户数据导出包), username?: string, password?: string | { user_id: number; username: string; book_count: number }；username/password 省略或留空时使用包内原值；包内无密码哈希（用户自助导出）时必须提供 password，否则 400；用户名冲突返回 400。请求体上限独立放宽为 4GB（可打包用户全部书籍），服务端流式落盘。同时兼容导入历史版本（无版本号）的用户自助导出包 |
+| GET | /api/v1/admin/users/:user_id/export | Admin | - | application/zip 流，文件名 `<username>_<timestamp>.zip`；迁移范围导出：metadata.json（账号（含密码哈希，导入后可凭原密码登录）/书籍（含标签、chapter_pattern）/章节/进度/设置/书签/批注/每日统计）+ 所有书籍原文件；任何文件缺失/读取失败会整体返回 500 |
+| POST | /api/v1/admin/users/import | Admin | FormData: file (zip，用户数据导出包), username?: string, password?: string | { user_id: number; username: string; book_count: number }；username/password 省略或留空时使用包内原值；包内无密码哈希（用户自助导出）时必须提供 password，否则 400；用户名冲突返回 400。请求体上限独立放宽为 4GB（可打包用户全部书籍），服务端流式落盘。同时兼容导入历史版本（无版本号）的用户自助导出包；txt 书籍按包内 chapter_pattern（缺省为内置规则）从原文件重提章节 |
 | GET | /api/v1/admin/admins | Admin | - | { admins: AdminItem[] } |
 | POST | /api/v1/admin/admins | Admin | Body: { username: string; password: string } | {} |
 | GET | /api/v1/admin/audit_logs?page=number&limit=number | Admin | - | { total: number; logs: AuditLogItem[] }；除管理操作外还记录登录事件（admin_setup / admin_login / admin_login_failed / user_login_failed），登录类事件的 admin_id/admin_username 可能为 null |
@@ -137,19 +138,20 @@ type Annotation = {
 > 上传时服务端基于内容签名（`%PDF-`、zip magic、UTF-8 解码）自动识别格式，不依赖客户端扩展名；内容损坏（epub/pdf 无法解析）返回 400 而非 500。
 > txt 仅支持 UTF-8 编码：非 UTF-8（常见为 GBK/GB18030）返回 400，请转换编码后重新上传。
 > 标题兜底链：用户输入（trim 非空）> epub/pdf 内嵌元数据 > 上传文件名（去扩展名）；全部为空返回 400。
+> 章节切分正则（chapter_pattern）：每本书可设置独立的 txt 章节切分规则，空/缺省 = 内置默认规则（自动识别“第X章/序章/楔子”等标题行）。仅 txt 有意义：epub/pdf 上传携带非空值返回 400，PUT 设置非空值同样返回 400。服务端用 fancy-regex 编译，无法编译返回 400。修改后服务端从磁盘原文件重新切分章节（原文件丢失返回 404，章节数超上限返回 400）；与现值相同的请求不会触发重切。
 > 单本书章节数上限 50_000（防御构造性文本），超出返回 400。
 > 分页接口（`/books`、`/books/public`、`/books/search`、`/admin/audit_logs`）：`page` 小于 1 按第一页处理；`limit` 有上限（书籍列表 50、审计日志 100），超限自动钳制。
 
 | 方法 | URL | 权限 | 请求参数 | 响应 data |
 |---|---|---|---|---|
-| POST | /api/v1/books/upload | Auth | FormData: file (txt/epub/pdf), title?: string, author?: string, is_public: boolean | { book_id: number; title: string; author: string \| null; format: BookFormat; total_chars: number; total_pages: number; chapters: { chapter_id: number; title: string; position: number }[] } |
+| POST | /api/v1/books/upload | Auth | FormData: file (txt/epub/pdf), title?: string, author?: string, is_public: boolean, chapter_pattern?: string（仅 txt 有效；自定义章节切分正则，空/缺省 = 内置默认规则） | { book_id: number; title: string; author: string \| null; format: BookFormat; total_chars: number; total_pages: number; chapters: { chapter_id: number; title: string; position: number }[] } |
 | GET | /api/v1/books?page=number&limit=number | Auth | - | { total: number; books: Book[] } |
 | GET | /api/v1/books/search?q=string&scope=mine\|public\|all&page=number&limit=number | Auth | - | { total: number; books: Book[] } |
 | GET | /api/v1/books/:book_id | Auth | - | BookDetail |
 | GET | /api/v1/books/:book_id/file | Auth | Header: If-None-Match? | 200 + ETag：原文件字节流（Content-Type 按 format：text/plain; application/epub+zip; application/pdf）；ETag 命中返回 304。epub/pdf 客户端渲染时使用，txt 也可用 |
 | GET | /api/v1/books/:book_id/content?position=number&length=number | Auth | Header: If-None-Match? | **仅 txt 格式可用**；epub/pdf 调用返回 400。200 + ETag：{ content: string; next_position: number }；ETag 命中返回 304 |
 | GET | /api/v1/books/:book_id/jump_to_chapter?chapter_id=number | Auth | - | { position: number }（txt=字符偏移；epub=spine 索引；pdf 通常无章节） |
-| PUT | /api/v1/books/:book_id | Auth | Body: { title?: string; author?: string; is_public?: boolean; cover_path?: string } | {} |
+| PUT | /api/v1/books/:book_id | Auth | Body: { title?: string; author?: string; is_public?: boolean; cover_path?: string; chapter_pattern?: string \| null }；chapter_pattern 仅 txt 可设置，null/空串 = 恢复内置默认规则，字段缺省 = 不修改，变更时从原文件重切本书全部章节 | {} |
 | DELETE | /api/v1/books/:book_id | Auth | - | {} |
 | GET | /api/v1/books/public?page=number&limit=number | Auth | - | { total: number; books: PublicBook[] } |
 | GET | /api/v1/books/:book_id/tags | Auth | - | { tags: string[] } |

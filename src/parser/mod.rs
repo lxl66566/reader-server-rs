@@ -4,7 +4,7 @@ pub mod epub;
 pub mod format;
 pub mod pdf;
 
-pub use chapter::extract_chapters;
+pub use chapter::{extract_chapters, validate_chapter_pattern};
 pub use epub::parse_epub;
 pub use format::detect_format;
 pub use pdf::parse_pdf;

@@ -235,6 +235,8 @@ pub struct Book {
     pub format: BookFormat,
     pub content_hash: String,
     pub created_at: String,
+    /// 本书自定义章节切分正则（仅 txt）；None = 内置默认规则
+    pub chapter_pattern: Option<String>,
 }
 
 /// 阅读主题预设
@@ -351,6 +353,8 @@ pub struct BookDetailResponse {
     pub description: Option<String>,
     /// 当前请求用户是否为书籍所有者（前端据此显示编辑/删除入口）
     pub is_owner: bool,
+    /// 本书自定义章节切分正则（仅 txt）；None = 内置默认规则
+    pub chapter_pattern: Option<String>,
     pub chapters: Vec<ChapterResponse>,
 }
 
@@ -379,6 +383,30 @@ pub struct BookContentResponse {
     pub next_position: i64,
 }
 
+// 更新请求中 chapter_pattern 字段的三态（serde 会把 Option 的 null 坍缩成 None，需手工还原）：
+// - Unchanged：字段缺省，不修改
+// - Reset：null / 纯空白串，恢复内置默认规则
+// - Set：非空值，设置为本书专用的切分正则（已 trim）
+#[derive(Debug, Default)]
+pub enum PatternUpdate {
+    #[default]
+    Unchanged,
+    Reset,
+    Set(String),
+}
+
+impl<'de> Deserialize<'de> for PatternUpdate {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Ok(match Option::<String>::deserialize(deserializer)? {
+            Some(v) if !v.trim().is_empty() => PatternUpdate::Set(v.trim().to_string()),
+            _ => PatternUpdate::Reset,
+        })
+    }
+}
+
 // 更新书籍请求
 #[derive(Debug, Deserialize)]
 pub struct UpdateBookRequest {
@@ -386,6 +414,8 @@ pub struct UpdateBookRequest {
     pub author: Option<String>,
     pub is_public: Option<bool>,
     pub cover_path: Option<String>,
+    #[serde(default)]
+    pub chapter_pattern: PatternUpdate,
 }
 
 // 设置书籍标签请求

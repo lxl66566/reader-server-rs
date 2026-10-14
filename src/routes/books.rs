@@ -20,11 +20,11 @@ use crate::{
     error::{ApiResponse, AppError},
     models::{
         Book, BookContentResponse, BookDetailResponse, BookFormat, BookListItem, BookListResponse,
-        BookTagsResponse, ChapterResponse, JumpToChapterResponse, PublicBookListItem,
-        PublicBookListResponse, RandomPublicBooksResponse, SetBookTagsRequest, UpdateBookRequest,
-        UploadBookResponse,
+        BookTagsResponse, ChapterResponse, JumpToChapterResponse, PatternUpdate,
+        PublicBookListItem, PublicBookListResponse, RandomPublicBooksResponse, SetBookTagsRequest,
+        UpdateBookRequest, UploadBookResponse,
     },
-    parser::{detect_format, extract_chapters, parse_epub, parse_pdf},
+    parser::{detect_format, extract_chapters, parse_epub, parse_pdf, validate_chapter_pattern},
     routes::reading::etag_matches,
     utils::{generate_uuid, make_etag, sha256_hex, utf8::Utf8Chunks},
 };
@@ -176,6 +176,8 @@ async fn upload_book(
     let mut file_content = None;
     // 上传文件名（用于标题兜底）
     let mut file_name: Option<String> = None;
+    // 自定义章节切分正则（仅 txt 有意义）
+    let mut chapter_pattern: Option<String> = None;
 
     while let Some(field) = multipart
         .next_field()
@@ -202,6 +204,11 @@ async fn upload_book(
                     AppError::FieldReadError("is_public".to_string(), e.to_string())
                 })?;
                 is_public = value == "true" || value == "1";
+            },
+            "chapter_pattern" => {
+                chapter_pattern = Some(field.text().await.map_err(|e| {
+                    AppError::FieldReadError("chapter_pattern".to_string(), e.to_string())
+                })?);
             },
             "file" => {
                 file_name = field.file_name().map(str::to_string);
@@ -230,6 +237,15 @@ async fn upload_book(
     // 检测格式（同时校验内容签名，拒绝未知/二进制格式）
     let format = detect_format(&file_content)?;
 
+    // 章节 regex 仅对 txt 有意义：归一化为 None（空 = 默认规则），非 txt 携带非空值拒绝
+    let chapter_pattern = chapter_pattern
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty());
+    if chapter_pattern.is_some() && format != BookFormat::Txt {
+        return Err(AppError::ChapterPatternNotSupported);
+    }
+    validate_chapter_pattern(chapter_pattern.as_deref().unwrap_or(""))?;
+
     // 根据格式派生元数据 + 提取章节
     let (total_chars, total_pages, chapters, final_title, final_author): (
         i64,
@@ -244,7 +260,7 @@ async fn upload_book(
                 .to_string();
             #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
             let tc = text.chars().count() as i64;
-            let chs = extract_chapters(&text)?;
+            let chs = extract_chapters(&text, chapter_pattern.as_deref())?;
             // txt 元数据全部来自用户输入
             (tc, 0i64, chs, title, author)
         },
@@ -324,7 +340,8 @@ async fn upload_book(
 
         let book_id = sqlx::query!(
             "INSERT INTO books (user_id, title, author, file_path, is_public, total_chars, \
-             total_pages, format, content_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             total_pages, format, content_hash, chapter_pattern) VALUES (?, ?, ?, ?, ?, ?, ?, ?, \
+             ?, ?)",
             auth.user_id,
             final_title,
             final_author,
@@ -334,6 +351,7 @@ async fn upload_book(
             total_pages,
             format,
             content_hash,
+            chapter_pattern,
         )
         .execute(&mut *tx)
         .await?
@@ -547,6 +565,7 @@ async fn get_book_detail(
         total_pages: book.total_pages,
         description: book.description,
         is_owner: book.user_id == auth.user_id,
+        chapter_pattern: book.chapter_pattern,
         chapters: chapter_responses,
     };
 
@@ -561,46 +580,117 @@ async fn update_book(
     Json(req): Json<UpdateBookRequest>,
 ) -> Result<Json<ApiResponse<()>>, AppError> {
     // 检查书籍是否存在并属于当前用户
-    let book = sqlx::query!("SELECT user_id FROM books WHERE id = ?", book_id)
-        .fetch_optional(&pool)
-        .await?
-        .ok_or_else(|| AppError::BookNotFound)?;
+    let book = sqlx::query!(
+        r#"SELECT user_id, format AS "format!: BookFormat", file_path, chapter_pattern FROM books WHERE id = ?"#,
+        book_id
+    )
+    .fetch_optional(&pool)
+    .await?
+    .ok_or_else(|| AppError::BookNotFound)?;
 
     // 验证权限
     if book.user_id != auth.user_id {
         return Err(AppError::BookModifyDenied);
     }
 
-    // 构建动态更新 SQL（使用 separated 自动处理逗号分隔）
-    let mut query_builder: sqlx::QueryBuilder<Sqlite> =
-        sqlx::QueryBuilder::new("UPDATE books SET ");
-    let mut sep = query_builder.separated(", ");
+    // 章节 regex 仅对 txt 有意义：非空值拒绝；null/空串（Reset）对非 txt 无意义，视为未提供
+    let pattern_update = match req.chapter_pattern {
+        PatternUpdate::Set(_) if book.format != BookFormat::Txt => {
+            return Err(AppError::ChapterPatternNotSupported);
+        },
+        PatternUpdate::Reset if book.format != BookFormat::Txt => PatternUpdate::Unchanged,
+        other => other,
+    };
 
-    let mut has_update = false;
-    if let Some(title) = &req.title {
-        sep.push("title = ").push_bind_unseparated(title.clone());
-        has_update = true;
-    }
-    if let Some(author) = &req.author {
-        sep.push("author = ").push_bind_unseparated(author.clone());
-        has_update = true;
-    }
-    if let Some(is_public) = req.is_public {
-        sep.push("is_public = ").push_bind_unseparated(is_public);
-        has_update = true;
-    }
-    if let Some(cover_path) = &req.cover_path {
-        sep.push("cover_path = ")
-            .push_bind_unseparated(cover_path.clone());
-        has_update = true;
-    }
+    // 与库中现值比较：只有实际变化才重切章节（避免无谓的全文件重提）
+    let stored_pattern = book
+        .chapter_pattern
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty());
+    let pattern_changed = match &pattern_update {
+        PatternUpdate::Set(p) => stored_pattern != Some(p.as_str()),
+        PatternUpdate::Reset => stored_pattern.is_some(),
+        PatternUpdate::Unchanged => false,
+    };
+
+    let has_update = req.title.is_some()
+        || req.author.is_some()
+        || req.is_public.is_some()
+        || req.cover_path.is_some()
+        || pattern_changed;
 
     if !has_update {
         return Ok(Json(ApiResponse::<()>::message("No updates")));
     }
 
+    // 变更时从磁盘原文件重提章节；文件可能被外部清理，沿用下载路径的 404 语义
+    let new_chapters: Option<Vec<(String, i64)>> = if pattern_changed {
+        let path = PathBuf::from(&book.file_path);
+        if !path.exists() {
+            tracing::error!(book_id, file_path = %book.file_path, "book file missing on disk");
+            return Err(AppError::BookNotFound);
+        }
+        let text = fs::read_to_string(&path).await?;
+        let pattern = match &pattern_update {
+            PatternUpdate::Set(p) => Some(p.as_str()),
+            _ => None,
+        };
+        Some(extract_chapters(&text, pattern)?)
+    } else {
+        None
+    };
+
+    // 元数据更新与章节重切放同一事务，避免出现“规则已更新但章节未变”的中间态
+    let mut tx = pool.begin().await?;
+
+    // 构建动态更新 SQL（使用 separated 自动处理逗号分隔）
+    let mut query_builder: sqlx::QueryBuilder<Sqlite> =
+        sqlx::QueryBuilder::new("UPDATE books SET ");
+    let mut sep = query_builder.separated(", ");
+
+    if let Some(title) = &req.title {
+        sep.push("title = ").push_bind_unseparated(title.clone());
+    }
+    if let Some(author) = &req.author {
+        sep.push("author = ").push_bind_unseparated(author.clone());
+    }
+    if let Some(is_public) = req.is_public {
+        sep.push("is_public = ").push_bind_unseparated(is_public);
+    }
+    if let Some(cover_path) = &req.cover_path {
+        sep.push("cover_path = ")
+            .push_bind_unseparated(cover_path.clone());
+    }
+    if pattern_changed {
+        // 恢复默认时写 NULL
+        let stored: Option<String> = match &pattern_update {
+            PatternUpdate::Set(p) => Some(p.clone()),
+            _ => None,
+        };
+        sep.push("chapter_pattern = ").push_bind_unseparated(stored);
+    }
+
     query_builder.push(" WHERE id = ").push_bind(book_id);
-    query_builder.build().execute(&pool).await?;
+    query_builder.build().execute(&mut *tx).await?;
+
+    if let Some(chapters) = new_chapters {
+        sqlx::query!("DELETE FROM chapters WHERE book_id = ?", book_id)
+            .execute(&mut *tx)
+            .await?;
+        if !chapters.is_empty() {
+            let mut chapter_qb =
+                sqlx::QueryBuilder::new("INSERT INTO chapters (book_id, title, position) ");
+            chapter_qb.push_values(chapters.iter(), |mut b, (title, position)| {
+                b.push_bind(book_id)
+                    .push_bind(title.clone())
+                    .push_bind(*position);
+            });
+            chapter_qb.build().execute(&mut *tx).await?;
+        }
+    }
+
+    tx.commit().await?;
 
     Ok(Json(ApiResponse::<()>::message("Update successful")))
 }

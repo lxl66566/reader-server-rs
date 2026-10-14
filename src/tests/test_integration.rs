@@ -3114,3 +3114,301 @@ async fn test_edit_reading_time() {
 
     println!("\n===== Edit reading time tests passed! =====");
 }
+
+// ----------------------------------------------------------------
+
+/// 获取书籍详情 JSON（断言 200）
+async fn fetch_book_detail(app: &Router, token: &str, book_id: i64) -> serde_json::Value {
+    let resp = make_request(
+        app,
+        Method::GET,
+        &format!("/api/v1/books/{book_id}"),
+        Body::empty(),
+        Some(token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    response_json(resp).await
+}
+
+/// 详情中的章节标题列表
+fn chapter_titles(detail: &serde_json::Value) -> Vec<&str> {
+    detail["data"]["chapters"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["title"].as_str().unwrap())
+        .collect()
+}
+
+/// 每本书自定义章节切分规则：上传携带、PUT 重切、恢复默认、非法值与非 txt 拒绝
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn test_custom_chapter_pattern() {
+    let (app, pool) = setup_test_app().await.unwrap();
+    let token = register_and_login(&app, "patternuser", "pass1234").await;
+
+    // 默认规则只切出首行；自定义 ^P\d 可切出三段
+    let content = "引子\nP1 分段一\nP2 分段二\n中间过渡文字\nP3 分段三\n";
+
+    // 1) 上传携带自定义 pattern：按自定义规则切分
+    let resp = make_multipart_request(
+        &app,
+        "/api/v1/books/upload",
+        vec![
+            ("title", "自定义切分"),
+            ("is_public", "false"),
+            ("chapter_pattern", r"^P\d"),
+        ],
+        Some(("file", "book.txt", content.as_bytes())),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK, "upload failed");
+    let json = response_json(resp).await;
+    assert_eq!(
+        chapter_titles(&json),
+        ["引子", "P1 分段一", "P2 分段二", "P3 分段三"],
+        "custom pattern must split the fixture"
+    );
+    let book_id = json["data"]["book_id"].as_i64().unwrap();
+
+    // 详情接口回显 pattern 与章节
+    let detail = fetch_book_detail(&app, &token, book_id).await;
+    assert_eq!(detail["data"]["chapter_pattern"], r"^P\d");
+    assert_eq!(chapter_titles(&detail).len(), 4);
+
+    // 2) PUT 修改 pattern：章节被重切，偏移仍指向原文（用 /content 校验）
+    let resp = make_json_request(
+        &app,
+        Method::PUT,
+        &format!("/api/v1/books/{book_id}"),
+        &serde_json::json!({"chapter_pattern": r"^P\d 分段二"}),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let detail = fetch_book_detail(&app, &token, book_id).await;
+    let titles = chapter_titles(&detail);
+    assert_eq!(titles, ["引子", "P2 分段二"], "chapters must be re-split");
+    let chapters = detail["data"]["chapters"].as_array().unwrap();
+    let p2_position = chapters[1]["position"].as_i64().unwrap();
+    let resp = make_request(
+        &app,
+        Method::GET,
+        &format!("/api/v1/books/{book_id}/content?position={p2_position}&length=6"),
+        Body::empty(),
+        Some(&token),
+    )
+    .await;
+    let json = response_json(resp).await;
+    // /content 的 length 有最小 100 钉制，只能断言前缀
+    assert!(
+        json["data"]["content"]
+            .as_str()
+            .unwrap()
+            .starts_with("P2 分段二"),
+        "offset must point at title"
+    );
+
+    // 3) 与现值相同的 pattern：无任何字段变化 → No updates，章节不动
+    let resp = make_json_request(
+        &app,
+        Method::PUT,
+        &format!("/api/v1/books/{book_id}"),
+        &serde_json::json!({"chapter_pattern": r"^P\d 分段二"}),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = response_json(resp).await;
+    assert_eq!(json["message"], "No updates");
+
+    // 4) PUT null：恢复默认规则，pattern 回到 null
+    let resp = make_json_request(
+        &app,
+        Method::PUT,
+        &format!("/api/v1/books/{book_id}"),
+        &serde_json::json!({"chapter_pattern": null}),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let detail = fetch_book_detail(&app, &token, book_id).await;
+    assert!(detail["data"]["chapter_pattern"].is_null());
+    assert_eq!(chapter_titles(&detail), ["引子"]);
+
+    // 5) 非法正则：上传与 PUT 均 400，且失败后原章节不被破坏
+    let resp = make_multipart_request(
+        &app,
+        "/api/v1/books/upload",
+        vec![
+            ("title", "坏正则"),
+            ("is_public", "false"),
+            ("chapter_pattern", "[unclosed"),
+        ],
+        Some(("file", "bad.txt", content.as_bytes())),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let resp = make_json_request(
+        &app,
+        Method::PUT,
+        &format!("/api/v1/books/{book_id}"),
+        &serde_json::json!({"chapter_pattern": "(?P<x>a)[unclosed"}),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let detail = fetch_book_detail(&app, &token, book_id).await;
+    assert_eq!(
+        chapter_titles(&detail),
+        ["引子"],
+        "failed update must not touch chapters"
+    );
+
+    // 6) 非 txt：上传携带非空 pattern 与 PUT 设置均 400
+    let pdf = minimal_pdf_bytes();
+    let resp = make_multipart_request(
+        &app,
+        "/api/v1/books/upload",
+        vec![
+            ("title", "PDF切分"),
+            ("is_public", "false"),
+            ("chapter_pattern", r"^P\d"),
+        ],
+        Some(("file", "book.pdf", &pdf)),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    let resp = make_multipart_request(
+        &app,
+        "/api/v1/books/upload",
+        vec![("title", "PDF书"), ("is_public", "false")],
+        Some(("file", "book.pdf", &pdf)),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK, "pdf upload failed");
+    let pdf_book_id = response_json(resp).await["data"]["book_id"]
+        .as_i64()
+        .unwrap();
+    let resp = make_json_request(
+        &app,
+        Method::PUT,
+        &format!("/api/v1/books/{pdf_book_id}"),
+        &serde_json::json!({"chapter_pattern": r"^P\d"}),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // 7) 导出 / 导入：包内携带 pattern，导入后章节按同一规则重提
+    let resp = make_multipart_request(
+        &app,
+        "/api/v1/books/upload",
+        vec![
+            ("title", "导出书"),
+            ("is_public", "false"),
+            ("chapter_pattern", r"^P\d"),
+        ],
+        Some(("file", "exported.txt", content.as_bytes())),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let export_book_id = response_json(resp).await["data"]["book_id"]
+        .as_i64()
+        .unwrap();
+
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/v1/auth/export",
+        Body::empty(),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let export_bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let metadata = read_export_metadata(&export_bytes);
+    let exported_book = metadata["books"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["book_id"] == export_book_id)
+        .unwrap();
+    assert_eq!(exported_book["chapter_pattern"], r"^P\d");
+
+    let (admin_token, _) = setup_admin(&app).await;
+    let resp = make_multipart_request(
+        &app,
+        "/api/v1/admin/users/import",
+        vec![("username", "imported_pat"), ("password", "pass5678")],
+        Some(("file", "export.zip", &export_bytes)),
+        Some(&admin_token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK, "import failed");
+    let json = response_json(resp).await;
+    // 导出是用户级的：包含此前上传的全部 3 本书
+    assert_eq!(json["data"]["book_count"], 3);
+    let resp = make_json_request(
+        &app,
+        Method::POST,
+        "/api/v1/auth/login",
+        &serde_json::json!({"username": "imported_pat", "password": "pass5678"}),
+        None,
+    )
+    .await;
+    let imported_token = response_json(resp).await["data"]["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let resp = make_request(
+        &app,
+        Method::GET,
+        "/api/v1/books",
+        Body::empty(),
+        Some(&imported_token),
+    )
+    .await;
+    let json = response_json(resp).await;
+    let imported_book_id = json["data"]["books"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["title"] == "导出书")
+        .unwrap()["book_id"]
+        .as_i64()
+        .unwrap();
+    let detail = fetch_book_detail(&app, &imported_token, imported_book_id).await;
+    assert_eq!(detail["data"]["chapter_pattern"], r"^P\d");
+    assert_eq!(
+        chapter_titles(&detail).len(),
+        4,
+        "import must re-split with the pattern"
+    );
+
+    // 8) 原文件丢失：重切沿用下载路径的 404 语义
+    let file_path: String =
+        sqlx::query_scalar!("SELECT file_path FROM books WHERE id = ?", book_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let _ = tokio::fs::remove_file(&file_path).await;
+    let resp = make_json_request(
+        &app,
+        Method::PUT,
+        &format!("/api/v1/books/{book_id}"),
+        &serde_json::json!({"chapter_pattern": r"^P\d"}),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    println!("\n===== Custom chapter pattern tests passed! =====");
+}

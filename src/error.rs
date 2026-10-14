@@ -149,6 +149,14 @@ pub enum AppError {
     #[error("Too many chapters detected; the file appears malformed")]
     TooManyChapters,
 
+    // 自定义章节切分正则无法编译（fancy-regex 语法错误）
+    #[error("Invalid chapter regex: {0}")]
+    InvalidChapterRegex(String),
+
+    // 章节切分正则仅对 txt 有意义
+    #[error("chapter_pattern is only supported for txt books")]
+    ChapterPatternNotSupported,
+
     #[error("Position exceeds content range")]
     PositionExceedsRange,
 
@@ -265,6 +273,8 @@ impl IntoResponse for AppError {
             | AppError::UnsupportedFileFormat
             | AppError::FileParseError(_)
             | AppError::TooManyChapters
+            | AppError::InvalidChapterRegex(_)
+            | AppError::ChapterPatternNotSupported
             | AppError::PositionExceedsRange
             | AppError::InvalidPosition
             | AppError::InvalidTimezone

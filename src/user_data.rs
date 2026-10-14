@@ -87,6 +87,9 @@ pub(crate) struct ExportBook {
     pub created_at: String,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// 本书自定义章节切分正则（仅 txt）；缺省 = 内置默认规则
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chapter_pattern: Option<String>,
     /// 书籍文件在 zip 内的条目名；历史格式无此字段，按下标前缀回退匹配
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
@@ -297,6 +300,7 @@ pub(crate) async fn collect_user_export(
                 description: b.description,
                 created_at: b.created_at,
                 tags: tags_map.remove(&b.id).unwrap_or_default(),
+                chapter_pattern: b.chapter_pattern,
                 file: Some(entry),
             }
         })
@@ -503,8 +507,8 @@ pub(crate) async fn restore_user_export(
         for (book, file) in export.books.iter().zip(files.iter()) {
             let new_book_id = sqlx::query!(
                 "INSERT INTO books (user_id, title, author, file_path, is_public, total_chars, \
-                 total_pages, description, format, content_hash, created_at) VALUES (?, ?, ?, ?, \
-                 ?, ?, ?, ?, ?, ?, ?)",
+                 total_pages, description, format, content_hash, created_at, chapter_pattern) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 new_user_id,
                 book.title,
                 book.author,
@@ -516,20 +520,30 @@ pub(crate) async fn restore_user_export(
                 book.format,
                 file.content_hash,
                 book.created_at,
+                book.chapter_pattern,
             )
             .execute(&mut *tx)
             .await?
             .last_insert_rowid();
             id_map.insert(book.book_id, new_book_id);
 
-            // 章节批量插入（单次 roundtrip）
-            if let Some(chapters) = chapters_by_book.get(&book.book_id) {
+            // 章节批量插入（单次 roundtrip）：txt 在提取阶段已按章节切分规则重提；
+            // 其它格式（epub spine）沿用包内章节
+            let chapters: Vec<(String, i64)> = if book.format == BookFormat::Txt {
+                file.chapters.clone()
+            } else {
+                chapters_by_book
+                    .get(&book.book_id)
+                    .map(|cs| cs.iter().map(|c| (c.title.clone(), c.position)).collect())
+                    .unwrap_or_default()
+            };
+            if !chapters.is_empty() {
                 let mut qb =
                     sqlx::QueryBuilder::new("INSERT INTO chapters (book_id, title, position) ");
-                qb.push_values(chapters.iter(), |mut b, c| {
+                qb.push_values(chapters.iter(), |mut b, (title, position)| {
                     b.push_bind(new_book_id)
-                        .push_bind(c.title.clone())
-                        .push_bind(c.position);
+                        .push_bind(title.clone())
+                        .push_bind(*position);
                 });
                 qb.build().execute(&mut *tx).await?;
             }
@@ -680,6 +694,8 @@ struct ExtractedBook {
     /// 已写入 book_dir 的文件路径
     path: PathBuf,
     content_hash: String,
+    /// txt：按（与上传一致的）章节切分规则从原文件提取的章节；其它格式为空
+    chapters: Vec<(String, i64)>,
 }
 
 /// 提取全部书籍文件到 book_dir（uuid 文件名）并计算内容哈希。
@@ -731,11 +747,23 @@ fn extract_one_book(
         )));
     }
 
+    // txt：用包内携带的章节切分规则重提章节（与上传同一逻辑），
+    // 保证导入后的章节与“重新上传同一文件”完全一致
+    let chapters = if book.format == BookFormat::Txt {
+        crate::parser::extract_chapters(
+            std::str::from_utf8(&bytes).map_err(|_| AppError::FileInvalidUtf8)?,
+            book.chapter_pattern.as_deref(),
+        )?
+    } else {
+        Vec::new()
+    };
+
     let path = book_dir.join(format!("{}.{}", generate_uuid(), book.format.ext()));
     std::fs::write(&path, &bytes).map_err(AppError::Io)?;
     Ok(ExtractedBook {
         path,
         content_hash: sha256_hex(&bytes),
+        chapters,
     })
 }
 
@@ -798,6 +826,10 @@ fn validate_export(export: &UserExport) -> Result<(), AppError> {
             return Err(AppError::ImportPackageInvalid(format!(
                 "books[{i}].title is empty"
             )));
+        }
+        // 章节 regex 与上传同一校验，坏包拦在写文件之前
+        if let Some(pattern) = &b.chapter_pattern {
+            crate::parser::validate_chapter_pattern(pattern)?;
         }
     }
     let percent_ok = |v: f64| (0.0..=1.0).contains(&v);
