@@ -1,6 +1,6 @@
 [package]
 name        = "reader-server-rs"
-version     = "0.1.0"
+version     = "0.1.1"
 edition     = "2024"
 description = "A self-hosted reading server for txt/epub books with multi-user progress sync"
 repository  = "https://github.com/lxl66566/reader-server-rs"
@@ -68,10 +68,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid               = { version = "1.23", features = ["v4"] }
 zip                = { version = "9", default-features = false, features = ["deflate"] }
 
-# Linux 下替换全局分配器：归还 argon2 大分配的空闲页，降低常驻 RSS
-[target.'cfg(target_os = "linux")'.dependencies]
-tikv-jemallocator = "0.7"
-
 [dev-dependencies]
 tokio-tungstenite = "0.30"
 
@@ -79,6 +75,10 @@ tokio-tungstenite = "0.30"
 path-absolutize = "4"
 sqlx            = { version = "0.9", features = ["runtime-tokio", "sqlite"] }
 tokio           = { version = "1", features = ["rt"] }
+
+# Linux 下替换全局分配器：归还 argon2 大分配的空闲页，降低常驻 RSS
+[target.'cfg(target_os = "linux")'.dependencies]
+tikv-jemallocator = "0.7"
 
 [lints.clippy]
 all                     = { level = "warn", priority = -1 }
