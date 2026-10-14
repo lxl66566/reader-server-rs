@@ -12,7 +12,14 @@ export const FLIP_THRESHOLD_PX = 60;
 export const PAGE_SCROLL_RATIO = 0.8;
 
 const SCROLL_CANCEL_EVENTS = ['wheel', 'touchstart'] as const;
-const runningScrolls = new WeakMap<HTMLElement, () => void>();
+
+/** 进行中的滚动动画：start 为动画坐标系下的滚动起点 */
+interface RunningScroll {
+  cancel: () => void;
+  start: number;
+}
+
+const runningScrolls = new WeakMap<HTMLElement, RunningScroll>();
 
 export interface StripFlipOptions {
   /** tap 区域划分的基准范围（容器在视口中的实际位置） */
@@ -64,12 +71,7 @@ export function animateScrollBy(
   delta: number,
   durationMs = 280,
 ): void {
-  runningScrolls.get(el)?.();
-  const start = el.scrollTop;
-  const distance =
-    Math.min(Math.max(start + delta, 0), el.scrollHeight - el.clientHeight) -
-    start;
-  if (distance === 0) return;
+  runningScrolls.get(el)?.cancel();
   const startTime = performance.now();
   let raf = 0;
   let cancelled = false;
@@ -82,18 +84,34 @@ export function animateScrollBy(
     }
     runningScrolls.delete(el);
   };
-  runningScrolls.set(el, stop);
+  const run: RunningScroll = { cancel: stop, start: el.scrollTop };
+  const distance =
+    Math.min(
+      Math.max(run.start + delta, 0),
+      el.scrollHeight - el.clientHeight,
+    ) - run.start;
+  if (distance === 0) return;
+  runningScrolls.set(el, run);
   for (const event of SCROLL_CANCEL_EVENTS) {
     el.addEventListener(event, stop, { passive: true });
   }
   const step = (now: number) => {
     if (cancelled) return;
     const t = Math.min(1, (now - startTime) / durationMs);
-    el.scrollTop = start + distance * (1 - (1 - t) ** 3);
+    el.scrollTop = run.start + distance * (1 - (1 - t) ** 3);
     if (t < 1) raf = requestAnimationFrame(step);
     else stop();
   };
   raf = requestAnimationFrame(step);
+}
+
+/**
+ * 内容增删导致 scrollTop 被程序化补偿平移后，同步平移进行中的滚动动画
+ * 坐标系：step 每帧按旧坐标绝对写回 scrollTop，不跟随平移会整体跳变。
+ */
+export function shiftRunningScroll(el: HTMLElement, shift: number): void {
+  const run = runningScrolls.get(el);
+  if (run) run.start += shift;
 }
 
 /** 贴边判定容差：距边界 2px 内视为贴边，吸收亚像素滚动取整误差 */

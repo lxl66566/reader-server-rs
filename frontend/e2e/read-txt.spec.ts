@@ -1,5 +1,7 @@
 // TXT 阅读冒烟：UI 上传 → 详情页进入阅读 → 分页翻页 → 切滚动模式 →
 // 滚动产生进度 → 刷新后进度保留（心跳落库 + 位置恢复）。
+import { writeFileSync } from 'node:fs';
+
 import { expect, test, type Page } from '@playwright/test';
 
 import {
@@ -193,6 +195,70 @@ function bookIdFromUrl(url: string): number {
   if (!match?.[1]) throw new Error(`no book id in url: ${url}`);
   return Number(match[1]);
 }
+
+test('超长单章增量加载期间视口位置不回退', async ({ page }) => {
+  // 回归：章节切分失败的超长单章在滚动模式增量加载时，曾因“先换窗后
+  // 取数 + 取数完成后按旧锚点绝对回写 scrollTop”，取数期间的用户滚动
+  // 被整体回滚，视口内容每次加载跳回约五分之一屏
+  const user = await createUser(page.context().request, 'onechap');
+  seedSession(page, user.token);
+  const request = page.context().request;
+  await updateSettings(request, user.token, { pagination_mode: 'scroll' });
+
+  // 无标题行且每行远超 30 字（不命中章节规则 → 切分失败成单章）；
+  // 体积需明显超过滚动窗口的 9 chunk 上限才会触发边加载边回收
+  const paragraphs: string[] = [];
+  // 内容均为 BMP 字符，码元数即码点数，与服务端偏移口径一致
+  for (let written = 0; written < 140_000; ) {
+    const line = `这是没有任何章节标题结构的普通正文段落，编号${paragraphs.length + 1}，填充文字用于撑起超过滚动窗口上限的超长单章。`;
+    paragraphs.push(line);
+    written += line.length + 1;
+  }
+  const bookPath = '/tmp/reader-e2e-one-chapter.txt';
+  writeFileSync(bookPath, paragraphs.join('\n'), 'utf8');
+  const book = await uploadBook(request, user.token, bookPath);
+
+  // 深链到中段：向下滚动先后经历窗口增长与到上限后的“边加载边回收”
+  await page.goto(`/read/${book.book_id}?locator=77000`);
+  const scroller = page.locator('.overflow-y-auto');
+  await expect(scroller).toBeVisible();
+  await expect.poll(() => topOffset(page), { timeout: 15_000 }).not.toBeNull();
+
+  // 内容接口加延迟：稳定制造“取数期间用户仍在滚动”的时序
+  await page.route(/\/api\/v1\/books\/\d+\/content/, async route => {
+    await new Promise(resolve => setTimeout(resolve, 300));
+    await route.continue();
+  });
+
+  const { vh, vw } = viewportSize(page);
+  await page.mouse.move(vw / 2, vh / 2);
+  const samples: number[] = [];
+  for (let i = 0; i < 32; i++) {
+    await page.mouse.wheel(0, 500);
+    await page.waitForTimeout(90);
+    const at = await topOffset(page);
+    if (at !== null) samples.push(at);
+  }
+  // 在途请求与窗口提交全部落定后再终测一次
+  await page.waitForTimeout(1200);
+  const settled = await topOffset(page);
+  expect(settled).not.toBeNull();
+
+  expect(samples.length).toBeGreaterThan(1);
+  let previous: number | undefined;
+  for (const current of samples) {
+    if (previous !== undefined) {
+      // 滚动补偿不得让已读位置回退（样本序列必须单调不减）
+      expect(
+        current,
+        `viewport offset regressed: ${samples.join(', ')}`,
+      ).toBeGreaterThanOrEqual(previous);
+    }
+    previous = current;
+  }
+  expect(settled ?? 0).toBeGreaterThanOrEqual(samples.at(-1) ?? 0);
+  expect(settled ?? 0).toBeGreaterThan(samples.at(0) ?? 0);
+});
 
 test('分页模式 tap 按容器分区而非屏幕分区', async ({ page }) => {
   // 回归：tap 分区曾按 clientX/容器宽 计算，PC 居中列布局下未减容器

@@ -27,6 +27,7 @@ import {
   bindScrollEdges,
   PAGE_SCROLL_RATIO,
   scrollEdges,
+  shiftRunningScroll,
   useStripFlip,
   useVerticalTapZones,
 } from './gestures';
@@ -53,6 +54,12 @@ const MEASURE_DEBOUNCE_MS = 200;
 interface Paragraph {
   offset: number;
   text: string;
+}
+
+/** 滚动锚点：视口顶部段落的字符位置与其相对段首的滚动偏移 */
+interface ScrollAnchor {
+  delta: number;
+  pos: number;
 }
 
 interface ViewProps {
@@ -769,8 +776,8 @@ const ScrollView = (
     });
   };
 
-  // 视口顶部段落作为锚点：窗口滑动后据此恢复滚动位置，避免内容跳动
-  function captureAnchor(): null | { delta: number; pos: number } {
+  // 视口顶部段落作为锚点：窗口滑动前捕获，滑动后据此恢复滚动位置
+  function captureAnchor(): null | ScrollAnchor {
     if (!container) return null;
     const el = findParagraphElAtTop(container.scrollTop);
     if (!el) return null;
@@ -780,7 +787,7 @@ const ScrollView = (
     };
   }
 
-  function restoreAnchor(anchor: null | { delta: number; pos: number }): void {
+  function restoreAnchor(anchor: null | ScrollAnchor): void {
     if (!container || !anchor) return;
     const el = findParagraphEl(anchor.pos);
     if (el) {
@@ -791,34 +798,47 @@ const ScrollView = (
     }
   }
 
+  // 窗口滑动的原子提交：换窗、锚点补偿与滚动动画坐标平移在同一同步块
+  // 内完成，中间无绘制帧，视口内文字保持不动
+  function slideWindow(next: ScrollWindow, anchor: null | ScrollAnchor): void {
+    if (!container) return;
+    const scrollTopBefore = container.scrollTop;
+    setWin(next);
+    restoreAnchor(anchor);
+    // 章内翻页动画每帧按旧坐标绝对写回 scrollTop，补偿平移后需跟随平移
+    shiftRunningScroll(container, container.scrollTop - scrollTopBefore);
+  }
+
   async function loadNext(): Promise<void> {
     if (loadingMore() || !container) return;
     const prev = win();
     // 窗口不越出当前章：到章尾 chunk 即停止扩展（硬切章由点击分区触发）
     const { maxEnd } = chapterChunkBounds();
     if (prev.end >= maxEnd) return;
-    // 视口已完全越过顶部 chunk 时才回收它，否则允许窗口暂时超限
-    const topEl = findParagraphElAtTop(container.scrollTop);
-    const canDropTop =
-      topEl !== undefined &&
-      Math.floor(Number(topEl.dataset.pos) / TXT_CHUNK_SIZE) > prev.start;
-    const anchor = captureAnchor();
     setLoadingMore(true);
-    setWin(extendWindowDown(prev, maxEnd, canDropTop));
     try {
-      await ensureWindow();
+      // 先取数后换窗：保证提交的原子性（见 slideWindow）；
+      // 失败时窗口未动，下一次滚动触发时会重试
+      await props.source.ensureRange(
+        prev.end * TXT_CHUNK_SIZE,
+        Math.min((prev.end + 1) * TXT_CHUNK_SIZE, props.book.total_chars),
+      );
     } catch (err) {
       console.error('Failed to load txt chunk', err);
-      // 回滚窗口，下一次滚动触发时会重试
-      setWin(prev);
       setLoadingMore(false);
       return;
     }
-    // 回收顶部 chunk 后内容上移，按锚点补偿滚动位置
-    requestAnimationFrame(() => {
-      restoreAnchor(anchor);
+    // 取数期间窗口被跳转重置：放弃本次滑动
+    if (win() !== prev) {
       setLoadingMore(false);
-    });
+      return;
+    }
+    // 视口已完全越过顶部 chunk 时才回收它，否则允许窗口暂时超限
+    const anchor = captureAnchor();
+    const canDropTop =
+      anchor !== null && Math.floor(anchor.pos / TXT_CHUNK_SIZE) > prev.start;
+    slideWindow(extendWindowDown(prev, maxEnd, canDropTop), anchor);
+    setLoadingMore(false);
   }
 
   async function loadPrev(): Promise<void> {
@@ -827,6 +847,21 @@ const ScrollView = (
     // 窗口不越出当前章：到章首 chunk 即停止扩展
     const { minStart } = chapterChunkBounds();
     if (prev.start <= minStart) return;
+    setLoadingMore(true);
+    try {
+      await props.source.ensureRange(
+        (prev.start - 1) * TXT_CHUNK_SIZE,
+        prev.start * TXT_CHUNK_SIZE,
+      );
+    } catch (err) {
+      console.error('Failed to load txt chunk', err);
+      setLoadingMore(false);
+      return;
+    }
+    if (win() !== prev) {
+      setLoadingMore(false);
+      return;
+    }
     // 视口底部未进入末尾 chunk 时才回收它，否则允许窗口暂时超限
     const bottomEl = findParagraphElAtTop(
       container.scrollTop + container.clientHeight,
@@ -834,23 +869,8 @@ const ScrollView = (
     const canDropBottom =
       bottomEl !== undefined &&
       Math.floor(Number(bottomEl.dataset.pos) / TXT_CHUNK_SIZE) < prev.end - 1;
-    const anchor = captureAnchor();
-    setLoadingMore(true);
-    setWin(extendWindowUp(prev, minStart, canDropBottom));
-    try {
-      await ensureWindow();
-    } catch (err) {
-      console.error('Failed to load txt chunk', err);
-      // 回滚窗口，下一次滚动触发时会重试
-      setWin(prev);
-      setLoadingMore(false);
-      return;
-    }
-    // 前置 chunk 把内容往下推，按锚点恢复滚动位置
-    requestAnimationFrame(() => {
-      restoreAnchor(anchor);
-      setLoadingMore(false);
-    });
+    slideWindow(extendWindowUp(prev, minStart, canDropBottom), captureAnchor());
+    setLoadingMore(false);
   }
 
   // --- 点击分区翻页：上/下 1/3 章内滚动 PAGE_SCROLL_RATIO 视口，
