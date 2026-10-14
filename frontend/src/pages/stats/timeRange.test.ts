@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   aggregate,
@@ -29,16 +29,22 @@ describe('dateKey / parseDateKey', () => {
 });
 
 describe('todayKeyIn', () => {
+  // todayKeyIn 取当前时刻，须固定系统时钟，否则用例随真实日期漂移而失败
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('resolves the calendar day of an IANA timezone', () => {
     // UTC+8 的 10 月 14 日 02:00，UTC 仍是 10 月 13 日
-    const instant = Date.UTC(2026, 9, 13, 18, 0);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(Date.UTC(2026, 9, 13, 18, 0)));
     const fmt = (tz: string): string => {
       const parts = new Intl.DateTimeFormat('en-US', {
         day: '2-digit',
         month: '2-digit',
         timeZone: tz,
         year: 'numeric',
-      }).format(new Date(instant));
+      }).format(new Date());
       // '10/14/2026' → 'YYYY-MM-DD'
       const [m, d, y] = parts.split('/');
       return `${y}-${m}-${d}`;

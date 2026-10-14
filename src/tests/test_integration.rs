@@ -3136,6 +3136,19 @@ async fn test_edit_daily_reading_stats() {
         .await
     }
 
+    // 读取累计时长与用户总时长，供差值断言
+    async fn progress_total(pool: &Pool<Sqlite>, user_id: i64, book_id: i64) -> (i64, i64) {
+        sqlx::query_as(
+            "SELECT (SELECT reading_time FROM reading_progress WHERE user_id = ?1 AND book_id = \
+             ?2), (SELECT total_reading_time FROM users WHERE id = ?1)",
+        )
+        .bind(user_id)
+        .bind(book_id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
     let (app, pool) = setup_test_app().await.unwrap();
     let token1 = register_and_login(&app, "ds_user1", "password1").await;
     let token2 = register_and_login(&app, "ds_user2", "password2").await;
@@ -3178,19 +3191,6 @@ async fn test_edit_daily_reading_stats() {
     .execute(&pool)
     .await
     .unwrap();
-
-    // 读取累计时长与用户总时长，供差值断言
-    async fn progress_total(pool: &Pool<Sqlite>, user_id: i64, book_id: i64) -> (i64, i64) {
-        sqlx::query_as(
-            "SELECT (SELECT reading_time FROM reading_progress WHERE user_id = ?1 AND book_id = \
-             ?2), (SELECT total_reading_time FROM users WHERE id = ?1)",
-        )
-        .bind(user_id)
-        .bind(book_id)
-        .fetch_one(pool)
-        .await
-        .unwrap()
-    }
 
     // GET：date 升序返回全部记录
     let resp = make_request(
