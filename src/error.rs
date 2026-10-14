@@ -195,6 +195,14 @@ pub enum AppError {
     )]
     InvalidDateRange,
 
+    // 每日阅读时长条目日期非法（非 YYYY-MM-DD）
+    #[error("Invalid daily stats entry date (expected YYYY-MM-DD)")]
+    InvalidDailyStatDate,
+
+    // 每日阅读时长条目日期重复（会撞 UNIQUE 约束，须在入库前拒绝）
+    #[error("Duplicate dates in daily stats entries")]
+    DuplicateDailyStatDate,
+
     #[error("Failed to parse form data: {0}")]
     FormParseError(String),
 
@@ -287,6 +295,8 @@ impl IntoResponse for AppError {
             | AppError::InvalidSearchScope
             | AppError::InvalidPercent
             | AppError::InvalidDateRange
+            | AppError::InvalidDailyStatDate
+            | AppError::DuplicateDailyStatDate
             | AppError::EmptyLocator
             | AppError::ContentEndpointNotSupported
             | AppError::FormParseError(_)

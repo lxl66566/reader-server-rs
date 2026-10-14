@@ -560,6 +560,26 @@ pub struct DailyReadingStatsResponse {
     pub days: Vec<DailyBookReadingStat>,
 }
 
+// 单本书每日阅读时长条目（编辑接口的请求与响应共用）
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct DailyStatEntry {
+    /// YYYY-MM-DD
+    pub date: String,
+    pub reading_seconds: i64,
+}
+
+// 单本书每日阅读时长响应：date 升序
+#[derive(Debug, Serialize)]
+pub struct DailyStatEntriesResponse {
+    pub entries: Vec<DailyStatEntry>,
+}
+
+// 全量替换单本书每日阅读时长请求
+#[derive(Debug, Deserialize)]
+pub struct UpdateDailyStatsRequest {
+    pub entries: Vec<DailyStatEntry>,
+}
+
 // 用户列表响应
 #[derive(Debug, Serialize)]
 pub struct ListUsersResponse {

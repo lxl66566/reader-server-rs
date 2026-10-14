@@ -14,9 +14,10 @@ use crate::{
     auth::AuthUser,
     error::{ApiResponse, AppError},
     models::{
-        ChineseConversion, DailyBookReadingStat, DailyReadingStatsResponse, PaginationMode,
-        ReadingSettings, ReadingStatsResponse, ReadingTheme, SetReadingTimeRequest,
-        SetReadingTimeResponse, UpdateReadingSettingsRequest,
+        ChineseConversion, DailyBookReadingStat, DailyReadingStatsResponse,
+        DailyStatEntriesResponse, DailyStatEntry, PaginationMode, ReadingSettings,
+        ReadingStatsResponse, ReadingTheme, SetReadingTimeRequest, SetReadingTimeResponse,
+        UpdateDailyStatsRequest, UpdateReadingSettingsRequest,
     },
     utils::make_etag,
 };
@@ -107,6 +108,10 @@ pub fn routes() -> Router<crate::app::AppState> {
         .route("/progress/{book_id}", put(set_book_reading_time))
         .route("/stats", get(get_reading_stats))
         .route("/stats/daily", get(get_daily_reading_stats))
+        .route(
+            "/stats/daily/{book_id}",
+            get(get_book_daily_stats).put(update_book_daily_stats),
+        )
 }
 
 // 获取阅读设置
@@ -740,6 +745,171 @@ async fn get_daily_reading_stats(
 
     Ok(Json(ApiResponse::success(DailyReadingStatsResponse {
         days,
+    })))
+}
+
+// 获取当前用户对某本书的全部每日阅读时长记录（date 升序）
+async fn get_book_daily_stats(
+    auth: AuthUser,
+    State(pool): State<Pool<Sqlite>>,
+    Path(book_id): Path<i64>,
+) -> Result<Json<ApiResponse<DailyStatEntriesResponse>>, AppError> {
+    // 书籍存在性与读权限（所有者或公开书），与其他阅读接口一致
+    check_book_access(&pool, auth.user_id, book_id).await?;
+
+    let entries = sqlx::query_as::<_, DailyStatEntry>(
+        "SELECT date, reading_seconds FROM daily_reading_stats WHERE user_id = ? AND book_id = ? \
+         ORDER BY date ASC",
+    )
+    .bind(auth.user_id)
+    .bind(book_id)
+    .fetch_all(&pool)
+    .await?;
+
+    Ok(Json(ApiResponse::success(DailyStatEntriesResponse {
+        entries,
+    })))
+}
+
+/// 校验并规范化每日条目：日期合法且不重复、秒数在 0..=MAX；
+/// 0 秒条目剔除（与“无记录”等价），结果按日期升序
+fn normalize_daily_entries(
+    entries: Vec<DailyStatEntry>,
+) -> Result<Vec<(NaiveDate, i64)>, AppError> {
+    let mut seen = std::collections::HashSet::with_capacity(entries.len());
+    let mut normalized = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let date = parse_date(&entry.date).ok_or(AppError::InvalidDailyStatDate)?;
+        // 重复日期入库会撞 UNIQUE(user_id, book_id, date)，须在此拒绝
+        if !seen.insert(date) {
+            return Err(AppError::DuplicateDailyStatDate);
+        }
+        if !(0..=MAX_READING_TIME_SECS).contains(&entry.reading_seconds) {
+            return Err(AppError::ReadingTimeOutOfRange);
+        }
+        if entry.reading_seconds > 0 {
+            normalized.push((date, entry.reading_seconds));
+        }
+    }
+    normalized.sort_by_key(|(date, _)| *date);
+    Ok(normalized)
+}
+
+/// 全量替换当前用户对某本书的每日阅读时长记录。
+///
+/// 设计要点：
+/// - 差值同步：`delta = sum(new) - sum(old)`，在同一事务内调整
+///   `reading_progress.reading_time`（建行/原子差值，与 [`set_reading_time`] 同 语义）与
+///   `users.total_reading_time`；两者结果均钳制 >= 0（进度行另钳制
+///   到上限），因钳制导致的总量与每日之和不一致属预期
+/// - 总时长可能早于每日统计功能存在（useTime != sum(daily) 同语义），
+///   因此只按差值同步而非改写为每日之和
+async fn update_book_daily_stats(
+    auth: AuthUser,
+    State(pool): State<Pool<Sqlite>>,
+    Path(book_id): Path<i64>,
+    Json(req): Json<UpdateDailyStatsRequest>,
+) -> Result<Json<ApiResponse<DailyStatEntriesResponse>>, AppError> {
+    // 书籍存在性与读权限（所有者或公开书），与其他阅读接口一致
+    check_book_access(&pool, auth.user_id, book_id).await?;
+
+    let new_entries = normalize_daily_entries(req.entries)?;
+
+    let mut tx = pool.begin().await?;
+
+    // 旧每日记录总和，供差值同步
+    let old_sum: i64 = sqlx::query_scalar!(
+        "SELECT COALESCE(SUM(reading_seconds), 0) FROM daily_reading_stats WHERE user_id = ? AND \
+         book_id = ?",
+        auth.user_id,
+        book_id
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+
+    // 全量替换
+    sqlx::query!(
+        "DELETE FROM daily_reading_stats WHERE user_id = ? AND book_id = ?",
+        auth.user_id,
+        book_id
+    )
+    .execute(&mut *tx)
+    .await?;
+    for (date, secs) in &new_entries {
+        sqlx::query!(
+            "INSERT INTO daily_reading_stats (user_id, book_id, date, reading_seconds) VALUES (?, \
+             ?, ?, ?)",
+            auth.user_id,
+            book_id,
+            date.format("%Y-%m-%d").to_string(),
+            secs
+        )
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    let delta: i64 = new_entries.iter().map(|&(_, secs)| secs).sum::<i64>() - old_sum;
+
+    // 差值同步累计时长（钳制到 [0, MAX]）；实际生效差值同步到用户总时长（钳制 >= 0）
+    let old_progress: Option<i64> = sqlx::query_scalar!(
+        "SELECT reading_time FROM reading_progress WHERE user_id = ? AND book_id = ?",
+        auth.user_id,
+        book_id
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    match old_progress {
+        Some(old) => {
+            let target = (old + delta).clamp(0, MAX_READING_TIME_SECS);
+            sqlx::query!(
+                "UPDATE reading_progress SET reading_time = ? WHERE user_id = ? AND book_id = ?",
+                target,
+                auth.user_id,
+                book_id
+            )
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query!(
+                "UPDATE users SET total_reading_time = MAX(0, total_reading_time + ?) WHERE id = ?",
+                target - old,
+                auth.user_id
+            )
+            .execute(&mut *tx)
+            .await?;
+        },
+        // 无进度行且目标值为 0：等价于现状，不建空进度行
+        None if delta <= 0 => {},
+        None => {
+            let target = delta.clamp(0, MAX_READING_TIME_SECS);
+            sqlx::query!(
+                "INSERT INTO reading_progress (user_id, book_id, reading_time) VALUES (?, ?, ?)",
+                auth.user_id,
+                book_id,
+                target
+            )
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query!(
+                "UPDATE users SET total_reading_time = MAX(0, total_reading_time + ?) WHERE id = ?",
+                target,
+                auth.user_id
+            )
+            .execute(&mut *tx)
+            .await?;
+        },
+    }
+
+    tx.commit().await?;
+
+    Ok(Json(ApiResponse::success(DailyStatEntriesResponse {
+        entries: new_entries
+            .into_iter()
+            .map(|(date, secs)| DailyStatEntry {
+                date: date.format("%Y-%m-%d").to_string(),
+                reading_seconds: secs,
+            })
+            .collect(),
     })))
 }
 

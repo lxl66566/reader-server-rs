@@ -189,6 +189,13 @@ type Annotation = {
 
 | GET | /api/v1/reading/stats | Auth | - | { total_reading_seconds: number; current_streak_days: number; longest_streak_days: number } |
 | GET | /api/v1/reading/stats/daily | Auth | Query: start=YYYY-MM-DD&end=YYYY-MM-DD（含端点，跨度 ≤ 372 天，非法返回 400） | { days: { date: string; book_id: number; title: string; reading_seconds: number }[] }；仅含有记录的日期，日期升序、单日内按时长降序 |
+| GET | /api/v1/reading/stats/daily/:book_id | Auth | - | { entries: { date: string; reading_seconds: number }[] }；当前用户该书全部每日记录，date 升序 |
+| PUT | /api/v1/reading/stats/daily/:book_id | Auth | Body: { entries: { date: YYYY-MM-DD; reading_seconds: number }[] } | { entries: … }；落库结果（0 秒条目剔除、date 升序），同上 |
+
+> 编辑某本书的每日阅读时长（PUT `/reading/stats/daily/:book_id`）：全量替换当前用户该书的每日记录，权限与 PUT `/reading/progress/:book_id` 一致（书不存在 404，非 owner 且非公开书 403）。`date` 用 chrono NaiveDate 校验（宽容单位数月/日，入库归一化为 YYYY-MM-DD，无法解析 400）；`reading_seconds` 必须为 0..=315360000 的整数（越界 400，非整数 422）；同一日期重复出现 400（会撞 UNIQUE 约束）；0 秒条目不落库（与无记录等价）。
+> 保存时按差值同步总量：`delta = sum(新每日之和) - sum(旧每日之和)`，在同一事务内累加到 `reading_progress.reading_time`（无进度行且目标值非 0 时建行）与 `users.total_reading_time`；两者结果均钳制 >= 0（进度行另钳制到 315360000 上限），无进度行且目标值为 0 时不建空行。
+> 因总时长可能早于每日统计功能存在（历史数据总量 ≠ 每日之和），故只按差值同步而非改写为每日之和；因钳制导致的总量与每日之和不一致属预期行为。
+> 两个方向的关系：手动编辑累计时长（PUT `/reading/progress/:book_id`）不影响每日统计；编辑每日时长则反向按差值同步累计时长与用户总时长。
 
 ### 推荐
 

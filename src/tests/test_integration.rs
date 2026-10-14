@@ -3115,6 +3115,253 @@ async fn test_edit_reading_time() {
     println!("\n===== Edit reading time tests passed! =====");
 }
 
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn test_edit_daily_reading_stats() {
+    // 每日阅读时长编辑：全量替换、0 秒不落库、差值同步累计与总时长（含钳制）、校验、权限
+
+    async fn put_entries(
+        app: &Router,
+        book_id: i64,
+        entries: serde_json::Value,
+        token: &str,
+    ) -> Response {
+        make_json_request(
+            app,
+            Method::PUT,
+            &format!("/api/v1/reading/stats/daily/{book_id}"),
+            &serde_json::json!({ "entries": entries }),
+            Some(token),
+        )
+        .await
+    }
+
+    let (app, pool) = setup_test_app().await.unwrap();
+    let token1 = register_and_login(&app, "ds_user1", "password1").await;
+    let token2 = register_and_login(&app, "ds_user2", "password2").await;
+
+    let book = upload_test_book(&app, &token1, "每日统计书", TEST_BOOK_CONTENT, false).await;
+    let book_id = book["book_id"].as_i64().unwrap();
+
+    let user1_id: i64 = sqlx::query_scalar!("SELECT id FROM users WHERE username = ?", "ds_user1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    // 预置：总时长 500、每日合计 300（不一致属合法历史状态，只按差值同步）
+
+    for (date, secs) in [("2024-01-01", 100), ("2024-01-02", 200)] {
+        sqlx::query!(
+            "INSERT INTO daily_reading_stats (user_id, book_id, date, reading_seconds) VALUES (?, \
+             ?, ?, ?)",
+            user1_id,
+            book_id,
+            date,
+            secs
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    sqlx::query!(
+        "UPDATE reading_progress SET reading_time = 500 WHERE user_id = ? AND book_id = ?",
+        user1_id,
+        book_id
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query!(
+        "UPDATE users SET total_reading_time = 500 WHERE id = ?",
+        user1_id
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // 读取累计时长与用户总时长，供差值断言
+    async fn progress_total(pool: &Pool<Sqlite>, user_id: i64, book_id: i64) -> (i64, i64) {
+        sqlx::query_as(
+            "SELECT (SELECT reading_time FROM reading_progress WHERE user_id = ?1 AND book_id = \
+             ?2), (SELECT total_reading_time FROM users WHERE id = ?1)",
+        )
+        .bind(user_id)
+        .bind(book_id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    // GET：date 升序返回全部记录
+    let resp = make_request(
+        &app,
+        Method::GET,
+        &format!("/api/v1/reading/stats/daily/{book_id}"),
+        Body::empty(),
+        Some(&token1),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = response_json(resp).await;
+    let entries = json["data"]["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["date"], "2024-01-01");
+    assert_eq!(entries[0]["reading_seconds"], 100);
+    assert_eq!(entries[1]["date"], "2024-01-02");
+
+    // PUT 全量替换：乱序入参被排序、0 秒条目剔除；差值 +50 同步累计与总时长
+    let resp = put_entries(
+        &app,
+        book_id,
+        serde_json::json!([
+            { "date": "2024-01-03", "reading_seconds": 0 },
+            { "date": "2024-01-02", "reading_seconds": 300 },
+            { "date": "2024-01-01", "reading_seconds": 50 }
+        ]),
+        &token1,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = response_json(resp).await;
+    let entries = json["data"]["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["date"], "2024-01-01");
+    assert_eq!(entries[0]["reading_seconds"], 50);
+    assert_eq!(entries[1]["reading_seconds"], 300);
+    assert_eq!(progress_total(&pool, user1_id, book_id).await, (550, 550));
+
+    let daily_zero: i64 = sqlx::query_scalar!(
+        "SELECT COUNT(*) FROM daily_reading_stats WHERE user_id = ? AND book_id = ? AND \
+         reading_seconds = 0",
+        user1_id,
+        book_id
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(daily_zero, 0);
+
+    // 差值为负且低于现值：累计与总时长均钳制到 0，每日记录清空
+    sqlx::query!(
+        "UPDATE reading_progress SET reading_time = 100 WHERE user_id = ? AND book_id = ?",
+        user1_id,
+        book_id
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query!(
+        "UPDATE users SET total_reading_time = 100 WHERE id = ?",
+        user1_id
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let resp = put_entries(&app, book_id, serde_json::json!([]), &token1).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(progress_total(&pool, user1_id, book_id).await, (0, 0));
+    let daily_left: i64 = sqlx::query_scalar!(
+        "SELECT COUNT(*) FROM daily_reading_stats WHERE user_id = ? AND book_id = ?",
+        user1_id,
+        book_id
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(daily_left, 0);
+
+    // 校验：非法日期 / 越界秒数 / 重复日期 → 400，且不改动数据
+    // （与区间接口的 parse_date 一致，chrono 对单位数月/日宽容并归一化）
+    for bad in [
+        serde_json::json!([{ "date": "2024-13-01", "reading_seconds": 10 }]),
+        serde_json::json!([{ "date": "yesterday", "reading_seconds": 10 }]),
+        serde_json::json!([{ "date": "2024-01-01", "reading_seconds": -1 }]),
+        serde_json::json!([{ "date": "2024-01-01", "reading_seconds": 3650 * 24 * 60 * 60 + 1 }]),
+        serde_json::json!([
+            { "date": "2024-01-01", "reading_seconds": 10 },
+            { "date": "2024-01-01", "reading_seconds": 20 }
+        ]),
+    ] {
+        let resp = put_entries(&app, book_id, bad, &token1).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+    assert_eq!(progress_total(&pool, user1_id, book_id).await, (0, 0));
+
+    // 无进度行：空列表不建行；非零和建行并同步总时长
+    // （上传会建进度行，先删掉以构造无行场景）
+    let own2 = upload_test_book(&app, &token2, "无进度书", TEST_BOOK_CONTENT, false).await;
+    let own2_id = own2["book_id"].as_i64().unwrap();
+    let user2_id: i64 = sqlx::query_scalar!("SELECT id FROM users WHERE username = ?", "ds_user2")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    sqlx::query!(
+        "DELETE FROM reading_progress WHERE user_id = ? AND book_id = ?",
+        user2_id,
+        own2_id
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let resp = put_entries(&app, own2_id, serde_json::json!([]), &token2).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let rows: i64 = sqlx::query_scalar!(
+        "SELECT COUNT(*) FROM reading_progress WHERE user_id = ?",
+        user2_id
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(rows, 0);
+
+    let resp = put_entries(
+        &app,
+        own2_id,
+        serde_json::json!([{ "date": "2024-05-05", "reading_seconds": 120 }]),
+        &token2,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let created: (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT reading_time FROM reading_progress WHERE book_id = ?1), (SELECT \
+         total_reading_time FROM users WHERE id = ?2)",
+    )
+    .bind(own2_id)
+    .bind(user2_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(created, (120, 120));
+
+    // 权限：他人私有书 → 403；不存在的书 → 404
+    for method in [Method::GET, Method::PUT] {
+        let resp = if method == Method::GET {
+            make_request(
+                &app,
+                method.clone(),
+                &format!("/api/v1/reading/stats/daily/{book_id}"),
+                Body::empty(),
+                Some(&token2),
+            )
+            .await
+        } else {
+            put_entries(&app, book_id, serde_json::json!([]), &token2).await
+        };
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        let path = "/api/v1/reading/stats/daily/999999".to_string();
+        let resp = if method == Method::GET {
+            make_request(&app, method, &path, Body::empty(), Some(&token1)).await
+        } else {
+            put_entries(&app, 999_999, serde_json::json!([]), &token1).await
+        };
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    println!("\n===== Edit daily reading stats tests passed! =====");
+}
+
 // ----------------------------------------------------------------
 
 /// 获取书籍详情 JSON（断言 200）
