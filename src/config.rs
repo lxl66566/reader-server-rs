@@ -1,4 +1,7 @@
-use std::{num::NonZeroU32, path::PathBuf};
+use std::{
+    num::NonZeroU32,
+    path::{Path, PathBuf},
+};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -137,11 +140,11 @@ impl Default for Config {
 /// 旧版硬编码的默认 secret，用于检测未修改的配置
 const LEGACY_DEFAULT_SECRET: &str = "super_secret_key_change_me_in_production";
 
-pub async fn load_config() -> Result<Config> {
-    let config_path = PathBuf::from("config.json");
-
-    if config_path.exists() {
-        let config_str = fs::read_to_string(&config_path).await?;
+/// 加载配置：文件存在则读取校验，否则按默认值生成（含随机 JWT secret）
+/// 并收紧为 0600 后写入；`path` 由命令行 -c/--config 指定，默认 config.json
+pub async fn load_config(path: &Path) -> Result<Config> {
+    if path.exists() {
+        let config_str = fs::read_to_string(path).await?;
         let config: Config = serde_json::from_str(&config_str)?;
 
         // 强制要求用户设置非空、非默认值的 JWT secret
@@ -162,17 +165,17 @@ pub async fn load_config() -> Result<Config> {
         config.jwt.secret = Uuid::new_v4().to_string();
 
         let config_str = serde_json::to_string_pretty(&config)?;
-        fs::write(&config_path, config_str).await?;
+        fs::write(path, config_str).await?;
         // 文件含 JWT secret：立即收紧权限为仅属主可读写
-        restrict_config_permissions(&config_path).await?;
+        restrict_config_permissions(path).await?;
 
-        tracing::info!("Generated config.json with a random JWT secret");
+        tracing::info!(path = %path.display(), "Generated config file with a random JWT secret");
         Ok(config)
     }
 }
 
 /// 把 config.json 权限收紧为 0600（仅 Unix；其他平台为空操作）
-async fn restrict_config_permissions(path: &std::path::Path) -> Result<()> {
+async fn restrict_config_permissions(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

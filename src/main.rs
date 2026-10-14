@@ -16,19 +16,33 @@ mod ws;
 #[cfg(test)]
 mod tests;
 
-use std::{net::SocketAddr, path::Path};
+use std::{
+    net::SocketAddr,
+    path::{Path, PathBuf},
+};
 
 use anyhow::Result;
+use clap::Parser;
 use tokio::{fs, net::TcpListener, signal};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+// 命令行参数：--version/-V 与 -h/--help 由 clap 自动生成，about 取 Cargo.toml description
+#[derive(Debug, Parser)]
+#[command(version, about = env!("CARGO_PKG_DESCRIPTION"))]
+struct Args {
+    /// Path to the config file
+    #[arg(short, long, default_value = "config.json")]
+    config: PathBuf,
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
     // 初始化错误处理
     color_eyre::install().map_err(|e| anyhow::anyhow!("Failed to install color_eyre: {e}"))?;
 
-    // 加载配置（先于日志初始化，因为日志路径来自配置）
-    let config = config::load_config().await?;
+    // 解析命令行参数，加载配置（先于日志初始化，因为日志路径来自配置）
+    let args = Args::parse();
+    let config = config::load_config(&args.config).await?;
 
     // 初始化日志：同时输出到滚动文件与 stderr
     // _guard 必须存活到程序结束，否则后台 flush 任务会被 drop，丢日志
