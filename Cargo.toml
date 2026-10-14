@@ -30,6 +30,7 @@ http-body-util     = "0.1.5"
 infer              = "0.22"
 jsonwebtoken       = { version = "11", features = ["rust_crypto"] }
 lopdf              = { version = "0.45", default-features = false, features = ["rayon"] }
+percent-encoding   = "2"
 rand               = "0.10"
 rust-embed         = { version = "8.12.0", features = ["compression", "mime-guess"] }
 scraper            = "0.27"

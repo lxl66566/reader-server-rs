@@ -11,6 +11,7 @@ import toast from 'solid-toast';
 
 import { adminApi } from '../../api';
 import { useI18n } from '../../i18n';
+import { saveResponseFile } from '../../utils/download';
 import { toastError } from '../../utils/toast';
 import { Button, SectionCard, Spinner, Toggle } from '../ui';
 import { isUnauthorized } from './utils';
@@ -51,15 +52,7 @@ export const SettingsTab: Component<{ onUnauthorized: () => void }> = props => {
     setBackingUp(true);
     try {
       const res = await adminApi.backup();
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'backup.zip';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      await saveResponseFile(res, 'backup.zip');
       toast.success(t('downloadBackup'));
     } catch (err) {
       if (isUnauthorized(err)) props.onUnauthorized();

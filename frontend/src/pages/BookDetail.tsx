@@ -1,6 +1,6 @@
 // Book detail page: parallel metadata, owner management and content tabs.
 import { useNavigate, useParams } from '@solidjs/router';
-import { VsEdit, VsTrash } from 'solid-icons/vs';
+import { VsDownload, VsEdit, VsTrash } from 'solid-icons/vs';
 import { createResource, createSignal, Show, type Component } from 'solid-js';
 
 import { bookApi, markerApi, readingApi } from '../api';
@@ -17,6 +17,8 @@ import { TagEditor } from '../components/book/TagEditor';
 import { LoadErrorPanel } from '../components/LoadErrorPanel';
 import { IconButton, Spinner } from '../components/ui';
 import { useI18n } from '../i18n';
+import { saveResponseFile } from '../utils/download';
+import { toastError } from '../utils/toast';
 
 const BookDetailPage: Component = () => {
   const params = useParams();
@@ -132,30 +134,60 @@ function BookView(props: {
   const [editOpen, setEditOpen] = createSignal(false);
   const [deleteOpen, setDeleteOpen] = createSignal(false);
   const [readingTimeOpen, setReadingTimeOpen] = createSignal(false);
+  const [downloading, setDownloading] = createSignal(false);
+
+  const downloadBook = async () => {
+    setDownloading(true);
+    try {
+      const res = await bookApi.downloadFile(props.book.book_id);
+      // 服务端给出「书名 - 作者.ext」；此 fallback 仅在响应头缺失时使用
+      const stem = props.book.author
+        ? `${props.book.title} - ${props.book.author}`
+        : props.book.title;
+      await saveResponseFile(res, `${stem}.${props.book.format}`);
+    } catch (err) {
+      toastError(err, t);
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   return (
     <div class="space-y-6">
       <BookMeta
         actions={
-          <Show when={props.book.is_owner}>
+          <>
             <IconButton
-              aria-label={t('editBook')}
+              aria-label={t('downloadBook')}
+              disabled={downloading()}
               onClick={() => {
-                setEditOpen(true);
+                void downloadBook();
               }}
             >
-              <VsEdit class="size-4" />
+              <Show fallback={<Spinner class="size-4" />} when={!downloading()}>
+                <VsDownload class="size-4" />
+              </Show>
             </IconButton>
-            <IconButton
-              aria-label={t('delete')}
-              onClick={() => {
-                setDeleteOpen(true);
-              }}
-              variant="danger"
-            >
-              <VsTrash class="size-4" />
-            </IconButton>
-          </Show>
+            <Show when={props.book.is_owner}>
+              <IconButton
+                aria-label={t('editBook')}
+                onClick={() => {
+                  setEditOpen(true);
+                }}
+              >
+                <VsEdit class="size-4" />
+              </IconButton>
+              <IconButton
+                aria-label={t('delete')}
+                onClick={() => {
+                  setDeleteOpen(true);
+                }}
+                variant="danger"
+              >
+                <VsTrash class="size-4" />
+              </IconButton>
+            </Show>
+          </>
         }
         book={props.book}
         onEditReadingTime={() => {

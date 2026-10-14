@@ -148,7 +148,7 @@ type Annotation = {
 | GET | /api/v1/books?page=number&limit=number | Auth | - | { total: number; books: Book[] } |
 | GET | /api/v1/books/search?q=string&scope=mine\|public\|all&page=number&limit=number | Auth | - | { total: number; books: Book[] } |
 | GET | /api/v1/books/:book_id | Auth | - | BookDetail |
-| GET | /api/v1/books/:book_id/file | Auth | Header: If-None-Match? | 200 + ETag：原文件字节流（Content-Type 按 format：text/plain; application/epub+zip; application/pdf）；ETag 命中返回 304。epub/pdf 客户端渲染时使用，txt 也可用 |
+| GET | /api/v1/books/:book_id/file?download=boolean | Auth | Header: If-None-Match? | 200 + ETag：原文件字节流（Content-Type 按 format：text/plain; application/epub+zip; application/pdf）；ETag 命中返回 304。缺省 `Content-Disposition: inline`（pdf 内联预览），epub/pdf 客户端渲染时使用，txt 也可用；`download=true` 时为 `attachment`，文件名为「书名 - 作者」（作者缺省/空白时仅书名；RFC 5987 `filename*=UTF-8''…`，非 ASCII 的旧客户端回退 `book_{id}.{ext}`），用于保存到本地 |
 | GET | /api/v1/books/:book_id/content?position=number&length=number | Auth | Header: If-None-Match? | **仅 txt 格式可用**；epub/pdf 调用返回 400。200 + ETag：{ content: string; next_position: number }；ETag 命中返回 304 |
 | GET | /api/v1/books/:book_id/jump_to_chapter?chapter_id=number | Auth | - | { position: number }（txt=字符偏移；epub=spine 索引；pdf 通常无章节） |
 | PUT | /api/v1/books/:book_id | Auth | Body: { title?: string; author?: string; is_public?: boolean; cover_path?: string; chapter_pattern?: string \| null }；chapter_pattern 仅 txt 可设置，null/空串 = 恢复内置默认规则，字段缺省 = 不修改，变更时从原文件重切本书全部章节 | {} |

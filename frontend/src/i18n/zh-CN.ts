@@ -59,6 +59,7 @@ const zhCN = {
 
   downloadBackup: '下载全局备份',
   downloadBackupDesc: '打包数据库与全部书籍文件',
+  downloadBook: '下载书籍',
   durationHours: '时',
   durationMinutes: '分',
   durationSeconds: '秒',

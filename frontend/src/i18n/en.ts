@@ -60,6 +60,7 @@ const en: Dict = {
 
   downloadBackup: 'Download full backup',
   downloadBackupDesc: 'Archive of the database and all book files',
+  downloadBook: 'Download book',
   durationHours: 'Hours',
   durationMinutes: 'Min',
   durationSeconds: 'Sec',

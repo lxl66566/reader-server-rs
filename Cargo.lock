@@ -2677,6 +2677,7 @@ dependencies = [
  "jsonwebtoken",
  "lopdf",
  "path-absolutize",
+ "percent-encoding",
  "rand 0.10.3",
  "rust-embed",
  "scraper",

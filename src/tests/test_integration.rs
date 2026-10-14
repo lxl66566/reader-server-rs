@@ -1812,6 +1812,100 @@ async fn test_txt_download_endpoint() {
         .to_string();
     assert!(content_type.starts_with("text/plain"));
 
+    // 缺省 inline：渲染用，不触发浏览器保存
+    let disposition = resp
+        .headers()
+        .get("content-disposition")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(disposition.starts_with("inline"), "got: {disposition}");
+
+    // download=true：attachment + 书名（RFC 5987 编码），中文书名回退 book_{id}
+    let resp = make_request(
+        &app,
+        Method::GET,
+        &format!("/api/v1/books/{book_id}/file?download=true"),
+        Body::empty(),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let disposition = resp
+        .headers()
+        .get("content-disposition")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        disposition,
+        format!(
+            "attachment; filename=\"book_{book_id}.txt\"; \
+             filename*=UTF-8''%E4%B8%8B%E8%BD%BD%E6%B5%8B%E8%AF%95.txt"
+        ),
+        "got: {disposition}"
+    );
+
+    // download=false 与缺省等价（inline）
+    let resp = make_request(
+        &app,
+        Method::GET,
+        &format!("/api/v1/books/{book_id}/file?download=false"),
+        Body::empty(),
+        Some(&token),
+    )
+    .await;
+    let disposition = resp
+        .headers()
+        .get("content-disposition")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(disposition.starts_with("inline"), "got: {disposition}");
+
+    // 带作者的书：文件名为「书名 - 作者」
+    let resp = make_multipart_request(
+        &app,
+        "/api/v1/books/upload",
+        vec![
+            ("title", "下载测试"),
+            ("author", "作者"),
+            ("is_public", "false"),
+        ],
+        Some(("file", "test.txt", TEST_BOOK_CONTENT.as_bytes())),
+        Some(&token),
+    )
+    .await;
+    let json = response_json(resp).await;
+    let book_id = json["data"]["book_id"].as_i64().unwrap();
+    let resp = make_request(
+        &app,
+        Method::GET,
+        &format!("/api/v1/books/{book_id}/file?download=true"),
+        Body::empty(),
+        Some(&token),
+    )
+    .await;
+    let disposition = resp
+        .headers()
+        .get("content-disposition")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    // 纯中文 stem 无 ASCII 回退 → book_{id}；filename* = "下载测试 - 作者.txt"
+    assert_eq!(
+        disposition,
+        format!(
+            "attachment; filename=\"book_{book_id}.txt\"; \
+             filename*=UTF-8''%E4%B8%8B%E8%BD%BD%E6%B5%8B%E8%AF%95%20-%20%E4%BD%9C%E8%80%85.txt"
+        ),
+        "got: {disposition}"
+    );
+
     println!("\n===== TXT download endpoint tests passed! =====");
 }
 

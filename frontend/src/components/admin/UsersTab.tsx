@@ -12,6 +12,7 @@ import toast from 'solid-toast';
 import { adminApi } from '../../api';
 import type { AdminUserItem } from '../../api/types';
 import { useI18n } from '../../i18n';
+import { saveResponseFile } from '../../utils/download';
 import { formatDateTime, formatDuration } from '../../utils/format';
 import { toastError } from '../../utils/toast';
 import { Button, EmptyState, Input, Modal, SectionCard, Spinner } from '../ui';
@@ -68,15 +69,7 @@ export const UsersTab: Component<{ onUnauthorized: () => void }> = props => {
     setExportingId(user.user_id);
     try {
       const res = await adminApi.exportUser(user.user_id);
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${user.username}.zip`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      await saveResponseFile(res, `${user.username}.zip`);
     } catch (err) {
       if (isUnauthorized(err)) props.onUnauthorized();
       toastError(err, t);

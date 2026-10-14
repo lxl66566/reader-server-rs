@@ -60,6 +60,14 @@ pub struct JumpToChapterParams {
     pub chapter_id: i64,
 }
 
+// 原文件下载查询参数
+#[derive(Debug, Deserialize)]
+pub struct FileParams {
+    // true 时以 attachment 返回（浏览器保存为文件，文件名取书名）；
+    // 缺省 inline（pdf 内联预览，epub.js/pdf.js fetch 渲染不受影响）
+    pub download: Option<bool>,
+}
+
 // 随机公开书籍查询参数
 #[derive(Debug, Deserialize)]
 pub struct RandomPublicParams {
@@ -736,11 +744,12 @@ async fn delete_book(
 /// 下载书籍原始文件
 ///
 /// 用途：
-/// - epub / pdf：前端 fetch 后用 epub.js / pdf.js 客户端渲染
+/// - epub / pdf：前端 fetch 后用 epub.js / pdf.js 客户端渲染（缺省 inline）
+/// - 下载到本地：`?download=true` 时以 attachment 返回，文件名取书名
 /// - txt：可选，前端通常走 /content 分页拉取
 ///
 /// 响应：
-/// - 200 + 文件字节流（带 Content-Type、Content-Disposition: inline、ETag）
+/// - 200 + 文件字节流（带 Content-Type、Content-Disposition、ETag）
 /// - 客户端可带 If-None-Match 命中 304
 ///
 /// 不实现 HTTP Range：浏览器/CDN 自动处理缓冲；如需 Range 后续可加。
@@ -748,10 +757,11 @@ async fn download_book_file(
     auth: AuthUser,
     State(pool): State<Pool<Sqlite>>,
     Path(book_id): Path<i64>,
+    Query(params): Query<FileParams>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
     let book = sqlx::query!(
-        r#"SELECT user_id, file_path, is_public, content_hash, format AS "format!: BookFormat" FROM books WHERE id = ?"#,
+        r#"SELECT user_id, title, author, file_path, is_public, content_hash, format AS "format!: BookFormat" FROM books WHERE id = ?"#,
         book_id
     )
     .fetch_optional(&pool)
@@ -780,9 +790,13 @@ async fn download_book_file(
     }
 
     let format = book.format;
-
-    // inline 让浏览器内联展示（pdf 可直接预览，epub 会被下载）
-    let disposition = format!("inline; filename=\"book_{book_id}.{}\"", format.ext());
+    let disposition = build_content_disposition(
+        params.download.unwrap_or(false),
+        &book.title,
+        book.author.as_deref(),
+        book_id,
+        format,
+    );
 
     // 流式发送，避免大文件整本读入内存
     let file = fs::File::open(&path).await.map_err(AppError::Io)?;
@@ -797,6 +811,52 @@ async fn download_book_file(
         .header(header::CACHE_CONTROL, "private, no-cache")
         .body(Body::from_stream(stream))
         .map_err(|e| AppError::Internal(format!("failed to build download response: {e}")))
+}
+
+/// filename* 按 RFC 5987 编码时保留的安全字符（字母数字之外）
+const FILENAME_STAR_SAFE: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'.')
+    .remove(b'_')
+    .remove(b'~');
+
+/// 构造 Content-Disposition。
+/// inline：浏览器内联展示（pdf 可直接预览）；
+/// attachment：保存为文件，文件名为「书名 - 作者」（作者缺省/空白时仅书名）——
+/// filename* 用 RFC 5987 百分号编码（支持任意 Unicode），filename 回退值仅保留
+/// ASCII 安全字符，纯中文会退化为 book_{id}.{ext}。
+fn build_content_disposition(
+    attachment: bool,
+    title: &str,
+    author: Option<&str>,
+    book_id: i64,
+    format: BookFormat,
+) -> String {
+    let kind = if attachment {
+        "attachment"
+    } else {
+        "inline"
+    };
+    let ext = format.ext();
+    let stem = match author.map(str::trim).filter(|a| !a.is_empty()) {
+        Some(a) => format!("{title} - {a}"),
+        None => title.to_string(),
+    };
+    // quoted-string 内不允许 " 与 \，控制字符也不可行；空格等其余 ASCII 均合法。
+    // 纯非 ASCII 的 stem（如中文书名）过滤后只剩 " - " 之类的分隔残片，无意义，
+    // 要求至少含一个字母/数字，否则回退 book_{id}
+    let fallback_stem: String = stem
+        .chars()
+        .filter(|c| c.is_ascii() && !c.is_ascii_control() && *c != '"' && *c != '\\')
+        .collect();
+    let fallback = if fallback_stem.chars().any(|c| c.is_ascii_alphanumeric()) {
+        format!("{fallback_stem}.{ext}")
+    } else {
+        format!("book_{book_id}.{ext}")
+    };
+    let full_name = format!("{stem}.{ext}");
+    let encoded = percent_encoding::percent_encode(full_name.as_bytes(), FILENAME_STAR_SAFE);
+    format!("{kind}; filename=\"{fallback}\"; filename*=UTF-8''{encoded}")
 }
 
 // 获取书籍内容（仅 txt 格式）
@@ -1279,8 +1339,24 @@ async fn set_book_tags(
 
 #[cfg(test)]
 mod tests {
-    use super::read_char_slice;
-    use crate::utils::utf8::UTF8_CHUNK_SIZE;
+    use super::{build_content_disposition, read_char_slice};
+    use crate::{models::BookFormat, utils::utf8::UTF8_CHUNK_SIZE};
+
+    #[test]
+    fn content_disposition_ascii_fallback_keeps_printable() {
+        let d = build_content_disposition(true, "My Book", Some("Jane Doe"), 7, BookFormat::Epub);
+        assert_eq!(
+            d,
+            "attachment; filename=\"My Book - Jane Doe.epub\"; \
+             filename*=UTF-8''My%20Book%20-%20Jane%20Doe.epub"
+        );
+        // 空白作者视作缺省：仅书名
+        let d = build_content_disposition(true, "My Book", Some("  "), 7, BookFormat::Epub);
+        assert_eq!(
+            d,
+            "attachment; filename=\"My Book.epub\"; filename*=UTF-8''My%20Book.epub"
+        );
+    }
 
     #[tokio::test]
     async fn read_char_slice_handles_multibyte_boundary() {

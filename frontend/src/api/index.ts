@@ -69,6 +69,12 @@ export const bookApi = {
       { cache: true, query: { length, position } },
     ),
   detail: (bookId: number) => api.get<BookDetail>(`/api/v1/books/${bookId}`),
+  // 下载原文件到本地：服务端返回 attachment + 书名文件名（Content-Disposition）
+  downloadFile: (bookId: number) =>
+    api.get<Response>(`/api/v1/books/${bookId}/file`, {
+      query: { download: true },
+      raw: true,
+    }),
   fetchFile: (bookId: number) =>
     api.get<ArrayBuffer>(`/api/v1/books/${bookId}/file`, {
       // 服务端对文件按内容 hash 返回 ETag：304 时复用缓存，

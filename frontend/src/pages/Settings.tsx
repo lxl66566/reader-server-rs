@@ -22,6 +22,7 @@ import { LOCALES, useI18n } from '../i18n';
 import type { DictKey } from '../i18n/zh-CN';
 import { useAuth, useRequireAuth } from '../stores/auth';
 import { useSettings } from '../stores/settings';
+import { saveResponseFile } from '../utils/download';
 import { formatDuration } from '../utils/format';
 
 const Settings = () => {
@@ -75,19 +76,7 @@ const Settings = () => {
     setExporting(true);
     try {
       const res = await authApi.exportData();
-      const blob = await res.blob();
-      const filename =
-        filenameFromContentDisposition(
-          res.headers.get('Content-Disposition'),
-        ) ?? 'export.zip';
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
+      await saveResponseFile(res, 'export.zip');
     } catch (error) {
       showError(error, 'errorGeneric');
     } finally {
@@ -319,20 +308,5 @@ const InfoRow: ParentComponent<{ label: string; value: string }> = props => (
     <span>{props.value}</span>
   </div>
 );
-
-// Extracts a download filename from a Content-Disposition header; supports the
-// filename*=UTF-8'' form. Returns null when absent/malformed.
-function filenameFromContentDisposition(value: null | string): null | string {
-  if (!value) return null;
-  const match = /filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i.exec(value);
-  if (!match) return null;
-  const raw = match[1] ?? match[2];
-  if (!raw) return null;
-  try {
-    return decodeURIComponent(raw);
-  } catch {
-    return raw;
-  }
-}
 
 export default Settings;
