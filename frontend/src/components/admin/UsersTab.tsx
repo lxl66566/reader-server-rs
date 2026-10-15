@@ -268,7 +268,7 @@ export const UsersTab: Component<{ onUnauthorized: () => void }> = props => {
         <p class="text-muted mb-3 text-sm">{t('importUserDesc')}</p>
         <label class="border-edge bg-page text-muted hover:bg-surface mb-3 block cursor-pointer rounded border px-3 py-2 text-sm">
           <span class="block truncate">
-            {importFile() ? importFile()!.name : t('importSelectFile')}
+            {importFile()?.name ?? t('importSelectFile')}
           </span>
           <input
             accept=".zip"

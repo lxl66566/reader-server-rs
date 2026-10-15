@@ -100,9 +100,7 @@ export const UploadModal: ParentComponent<{
     >
       <form class="flex flex-col gap-3" onSubmit={submit}>
         <label class="border-edge bg-page text-muted hover:bg-surface block cursor-pointer rounded border px-3 py-2 text-sm">
-          <span class="block truncate">
-            {file() ? file()!.name : t('uploadFile')}
-          </span>
+          <span class="block truncate">{file()?.name ?? t('uploadFile')}</span>
           <input
             accept=".txt,.epub,.pdf"
             class="hidden"

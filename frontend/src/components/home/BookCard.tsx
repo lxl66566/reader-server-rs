@@ -61,9 +61,11 @@ export const BookCard: ParentComponent<{
           {props.author ?? t('unknownAuthor')}
         </span>
         <Show when={props.owner}>
-          <span class="min-w-0 shrink truncate">
-            {t('ownerBy', { username: props.owner! })}
-          </span>
+          {owner => (
+            <span class="min-w-0 shrink truncate">
+              {t('ownerBy', { username: owner() })}
+            </span>
+          )}
         </Show>
         <span class="flex shrink-0 items-center gap-1">
           <Show when={props.isPublic}>
@@ -80,15 +82,18 @@ export const BookCard: ParentComponent<{
         <span class="bg-edge mt-2 block h-1.5 w-full overflow-hidden rounded-full">
           <span
             class="bg-accent block h-full rounded-full"
-            style={{ width: `${props.percent! * 100}%` }}
+            // percent 可为 0（未开始阅读），不能以真值作 Show 条件
+            style={{ width: `${(props.percent ?? 0) * 100}%` }}
           />
         </span>
         <span class="text-muted mt-1 flex items-center justify-between text-xs">
           <span>
-            {t('progressPercent', { percent: formatPercent(props.percent!) })}
+            {t('progressPercent', {
+              percent: formatPercent(props.percent ?? 0),
+            })}
           </span>
           <Show when={props.readingTime !== undefined}>
-            <span>{formatDuration(props.readingTime!, t)}</span>
+            <span>{formatDuration(props.readingTime ?? 0, t)}</span>
           </Show>
         </span>
       </Show>

@@ -166,34 +166,37 @@ const PdfReader = (props: FormatReaderProps) => {
             </div>
           </Show>
         }
-        when={ready() && doc()}
+        // 以 doc 本身作条件：函数子组件拿到收窄后的 accessor，免去非空断言
+        when={ready() ? doc() : null}
       >
-        <div
-          class="flex h-full"
-          classList={{
-            'transition-transform duration-200 ease-out':
-              gestures.transitioning(),
-          }}
-          onTransitionEnd={gestures.onTransitionEnd}
-          style={{ transform: gestures.stripTransform(), width: '300%' }}
-        >
-          <Index each={stripPages()}>
-            {pageNumber => (
-              <div class="flex h-full w-1/3 items-start justify-center overflow-hidden">
-                <Show when={pageNumber() >= 0 && pageNumber() < totalPages()}>
-                  <PdfPageCanvas
-                    doc={doc()!}
-                    pageNumber={pageNumber()}
-                    width={pageWidth()}
-                  />
-                </Show>
-              </div>
-            )}
-          </Index>
-        </div>
-        <div class="absolute bottom-1 left-0 w-full text-center text-xs opacity-50">
-          {t('readerPageOf', { page: page() + 1, total: totalPages() })}
-        </div>
+        {doc => (
+          <div
+            class="flex h-full"
+            classList={{
+              'transition-transform duration-200 ease-out':
+                gestures.transitioning(),
+            }}
+            onTransitionEnd={gestures.onTransitionEnd}
+            style={{ transform: gestures.stripTransform(), width: '300%' }}
+          >
+            <Index each={stripPages()}>
+              {pageNumber => (
+                <div class="flex h-full w-1/3 items-start justify-center overflow-hidden">
+                  <Show when={pageNumber() >= 0 && pageNumber() < totalPages()}>
+                    <PdfPageCanvas
+                      doc={doc()}
+                      pageNumber={pageNumber()}
+                      width={pageWidth()}
+                    />
+                  </Show>
+                </div>
+              )}
+            </Index>
+            <div class="absolute bottom-1 left-0 w-full text-center text-xs opacity-50">
+              {t('readerPageOf', { page: page() + 1, total: totalPages() })}
+            </div>
+          </div>
+        )}
       </Show>
     </div>
   );

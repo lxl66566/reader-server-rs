@@ -1,5 +1,5 @@
 // 主动缓存下载：txt 分块并发抓取 + epub/pdf 整本文件落盘。
-// 断网回退读取不在此处（见 net.ts 的 staleOnError 与各读取端包装）。
+// 断网回退读取不在此处（见 offline/api.ts 的各读取端包装）。
 
 import { bookApi } from '../api';
 import type { BookDetail } from '../api/types';

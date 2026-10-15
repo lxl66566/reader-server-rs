@@ -131,14 +131,6 @@ export async function fileBytes(bookId: number): Promise<null | number> {
 
 // --- 书籍详情 ---
 
-export async function fileExists(bookId: number): Promise<boolean> {
-  try {
-    return (await (await db()).count('files', cacheKey('f', bookId))) > 0;
-  } catch {
-    return false;
-  }
-}
-
 export async function fileGet(bookId: number): Promise<ArrayBuffer | null> {
   try {
     const cached = await (await db()).get('files', cacheKey('f', bookId));
