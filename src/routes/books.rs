@@ -171,6 +171,11 @@ pub(crate) fn clean_tags(tags: impl IntoIterator<Item = String>) -> Vec<String> 
         .collect()
 }
 
+/// 单本书标签数量上限（与 [`clean_tags`] 的单标签 32 字符限制同值）。
+/// 对齐 WS 协议侧的输入上限防滥用策略；WS 侧（`src/ws/protocol.rs`）当前
+/// 未单独限制 tags 数量，若后续补充对应常量，两处应保持一致
+pub(crate) const TAGS_MAX_COUNT: usize = 32;
+
 /// 上传解析的 CPU 密集产物：格式、统计、章节、元数据与内容哈希
 struct ParsedUpload {
     format: BookFormat,
@@ -1375,6 +1380,11 @@ async fn set_book_tags(
     Json(req): Json<SetBookTagsRequest>,
 ) -> Result<Json<ApiResponse<BookTagsResponse>>, AppError> {
     require_book_owner(&pool, &auth, book_id).await?;
+
+    // 数量上限：超限直接拒绝（400），不做静默截断
+    if req.tags.len() > TAGS_MAX_COUNT {
+        return Err(AppError::SettingOutOfRange("tags"));
+    }
 
     let tags = clean_tags(req.tags);
 

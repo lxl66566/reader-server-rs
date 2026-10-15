@@ -206,6 +206,14 @@ pub enum AppError {
     #[error("Failed to parse form data: {0}")]
     FormParseError(String),
 
+    // 请求字段超过共享长度上限（具体数值见 crate::limits）
+    #[error("Field '{0}' exceeds the allowed length limit")]
+    FieldTooLarge(&'static str),
+
+    // 每日统计条目数量超上限（crate::limits::DAILY_STATS_MAX_ENTRIES）
+    #[error("Too many daily stats entries")]
+    TooManyDailyStatsEntries,
+
     // 用户数据导入包无效：zip 损坏 / 缺 metadata.json / 条目缺失 / 版本不支持 / 字段非法
     #[error("Invalid user data package: {0}")]
     ImportPackageInvalid(String),
@@ -300,6 +308,8 @@ impl IntoResponse for AppError {
             | AppError::EmptyLocator
             | AppError::ContentEndpointNotSupported
             | AppError::FormParseError(_)
+            | AppError::FieldTooLarge(_)
+            | AppError::TooManyDailyStatsEntries
             | AppError::FieldReadError(..)
             | AppError::ImportPackageInvalid(_) => StatusCode::BAD_REQUEST,
 

@@ -13,6 +13,7 @@ use crate::{
     access::check_book_access,
     auth::AuthUser,
     error::{ApiResponse, AppError},
+    limits::DAILY_STATS_MAX_ENTRIES,
     models::{
         ChineseConversion, DailyBookReadingStat, DailyReadingStatsResponse,
         DailyStatEntriesResponse, DailyStatEntry, PaginationMode, ReadingSettings,
@@ -815,6 +816,11 @@ async fn update_book_daily_stats(
     // 书籍存在性与读权限（所有者或公开书），与其他阅读接口一致
     check_book_access(&pool, auth.user_id, book_id).await?;
 
+    // 条目数量上限（见 crate::limits）：防构造性大请求放大事务与批量 INSERT
+    if req.entries.len() > DAILY_STATS_MAX_ENTRIES {
+        return Err(AppError::TooManyDailyStatsEntries);
+    }
+
     let new_entries = normalize_daily_entries(req.entries)?;
 
     let mut tx = pool.begin().await?;
@@ -837,17 +843,19 @@ async fn update_book_daily_stats(
     )
     .execute(&mut *tx)
     .await?;
-    for (date, secs) in &new_entries {
-        sqlx::query!(
-            "INSERT INTO daily_reading_stats (user_id, book_id, date, reading_seconds) VALUES (?, \
-             ?, ?, ?)",
-            auth.user_id,
-            book_id,
-            date.format("%Y-%m-%d").to_string(),
-            secs
-        )
-        .execute(&mut *tx)
-        .await?;
+    if !new_entries.is_empty() {
+        // 批量插入：条目数受 DAILY_STATS_MAX_ENTRIES 钳制，
+        // 绑定参数总量远低于 SQLite 变量上限
+        let mut qb = sqlx::QueryBuilder::new(
+            "INSERT INTO daily_reading_stats (user_id, book_id, date, reading_seconds) ",
+        );
+        qb.push_values(new_entries.iter(), |mut b, (date, secs)| {
+            b.push_bind(auth.user_id)
+                .push_bind(book_id)
+                .push_bind(date.format("%Y-%m-%d").to_string())
+                .push_bind(secs);
+        });
+        qb.build().execute(&mut *tx).await?;
     }
 
     let delta: i64 = new_entries.iter().map(|&(_, secs)| secs).sum::<i64>() - old_sum;

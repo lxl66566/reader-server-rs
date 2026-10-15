@@ -1,12 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-/// 输入长度/字符集限制（协议层统一校验，防止超长输入撑大注册表与 DB）
-pub mod limits {
-    /// `device_id` 最大长度（字符数，字符集限定 ASCII 故等于字节数）
-    pub const DEVICE_ID_MAX_CHARS: usize = 64;
-    /// `locator` 最大长度（字节数，4KB 足够覆盖 EpubCFI 等最长格式）
-    pub const LOCATOR_MAX_BYTES: usize = 4 * 1024;
-}
+// 长度上限统一定义在 crate::limits（与 HTTP 写接口共享，防两处漂移）
+use crate::limits;
 
 /// 客户端 → 服务端消息
 ///
@@ -38,11 +33,13 @@ pub enum ClientMessage {
 impl ClientMessage {
     /// 协议层输入校验；失败返回用于 error 帧的描述
     pub fn validate(&self) -> Result<(), String> {
-        use limits::*;
         match self {
             Self::Subscribe { device_id, .. } => {
-                if device_id.is_empty() || device_id.len() > DEVICE_ID_MAX_CHARS {
-                    return Err(format!("device_id must be 1-{DEVICE_ID_MAX_CHARS} chars"));
+                if device_id.is_empty() || device_id.len() > limits::DEVICE_ID_MAX_CHARS {
+                    return Err(format!(
+                        "device_id must be 1-{} chars",
+                        limits::DEVICE_ID_MAX_CHARS
+                    ));
                 }
                 if !device_id
                     .bytes()
@@ -55,8 +52,11 @@ impl ClientMessage {
                 if locator.is_empty() {
                     return Err("locator must not be empty".to_string());
                 }
-                if locator.len() > LOCATOR_MAX_BYTES {
-                    return Err(format!("locator exceeds {LOCATOR_MAX_BYTES} bytes"));
+                if locator.len() > limits::LOCATOR_MAX_BYTES {
+                    return Err(format!(
+                        "locator exceeds {} bytes",
+                        limits::LOCATOR_MAX_BYTES
+                    ));
                 }
             },
             Self::Unsubscribe { .. } => {},

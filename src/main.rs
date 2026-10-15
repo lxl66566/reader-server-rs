@@ -5,6 +5,7 @@ mod config;
 mod db;
 mod error;
 mod frontend;
+mod limits;
 mod models;
 mod parser;
 mod routes;

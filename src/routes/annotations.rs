@@ -12,6 +12,7 @@ use crate::{
     access::check_book_access,
     auth::AuthUser,
     error::{ApiResponse, AppError},
+    limits::{ANNOTATION_TEXT_MAX_BYTES, BOOKMARK_LABEL_MAX_BYTES, LOCATOR_MAX_BYTES},
     models::{
         Annotation, AnnotationKind, Bookmark, CreateAnnotationRequest, CreateBookmarkRequest,
         ListAnnotationsResponse, ListBookmarksResponse, UpdateAnnotationRequest,
@@ -29,6 +30,31 @@ fn device_id_from_headers(headers: &HeaderMap) -> Option<&str> {
 fn validate_percent(p: f64) -> Result<(), AppError> {
     if !(0.0..=1.0).contains(&p) {
         return Err(AppError::InvalidPercent);
+    }
+    Ok(())
+}
+
+/// 校验 locator：非空且不超过共享上限（与 WS 心跳侧一致，见 crate::limits）
+fn validate_locator(locator: &str) -> Result<(), AppError> {
+    if locator.trim().is_empty() {
+        return Err(AppError::EmptyLocator);
+    }
+    if locator.len() > LOCATOR_MAX_BYTES {
+        return Err(AppError::FieldTooLarge("locator"));
+    }
+    Ok(())
+}
+
+/// 可选文本字段（label / excerpt / content）长度校验，None 直接放行
+fn validate_optional_text(
+    field: &'static str,
+    max_bytes: usize,
+    value: Option<&str>,
+) -> Result<(), AppError> {
+    if let Some(text) = value
+        && text.len() > max_bytes
+    {
+        return Err(AppError::FieldTooLarge(field));
     }
     Ok(())
 }
@@ -108,9 +134,8 @@ pub async fn create_bookmark(
     headers: HeaderMap,
     Json(req): Json<CreateBookmarkRequest>,
 ) -> Result<Json<ApiResponse<Bookmark>>, AppError> {
-    if req.locator.trim().is_empty() {
-        return Err(AppError::EmptyLocator);
-    }
+    validate_locator(&req.locator)?;
+    validate_optional_text("label", BOOKMARK_LABEL_MAX_BYTES, req.label.as_deref())?;
     validate_percent(req.percent)?;
     check_book_access(&pool, auth.user_id, book_id).await?;
 
@@ -212,9 +237,10 @@ pub async fn create_annotation(
     headers: HeaderMap,
     Json(req): Json<CreateAnnotationRequest>,
 ) -> Result<Json<ApiResponse<Annotation>>, AppError> {
-    if req.start_locator.trim().is_empty() {
-        return Err(AppError::EmptyLocator);
-    }
+    validate_locator(&req.start_locator)?;
+    validate_optional_text("end_locator", LOCATOR_MAX_BYTES, req.end_locator.as_deref())?;
+    validate_optional_text("excerpt", ANNOTATION_TEXT_MAX_BYTES, req.excerpt.as_deref())?;
+    validate_optional_text("content", ANNOTATION_TEXT_MAX_BYTES, req.content.as_deref())?;
     validate_percent(req.start_percent)?;
 
     // 高亮必须有 end_locator 与 end_percent，且 end > start
@@ -286,6 +312,8 @@ pub async fn update_annotation(
     if req.excerpt.is_none() && req.content.is_none() {
         return Ok(Json(ApiResponse::<()>::message("No updates")));
     }
+    validate_optional_text("excerpt", ANNOTATION_TEXT_MAX_BYTES, req.excerpt.as_deref())?;
+    validate_optional_text("content", ANNOTATION_TEXT_MAX_BYTES, req.content.as_deref())?;
 
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
 

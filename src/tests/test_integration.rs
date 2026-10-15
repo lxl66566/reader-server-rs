@@ -3911,3 +3911,138 @@ async fn test_create_admin_duplicate_username() {
             .contains("Admin username already exists")
     );
 }
+
+#[tokio::test]
+async fn test_set_book_tags_count_limit() {
+    let (app, _pool) = setup_test_app().await.unwrap();
+    let token = register_and_login(&app, "taglimit", "password1").await;
+    let book = upload_test_book(&app, &token, "标签上限书", TEST_BOOK_CONTENT, false).await;
+    let book_id = book["book_id"].as_i64().unwrap();
+
+    // 超过数量上限：400，不做静默截断
+    let too_many: Vec<String> = (0..33).map(|i| format!("tag{i}")).collect();
+    let resp = make_json_request(
+        &app,
+        Method::PUT,
+        &format!("/api/v1/books/{book_id}/tags"),
+        &serde_json::json!({ "tags": too_many }),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "tags over limit");
+
+    // 恰好在上限处：设置成功
+    let at_limit: Vec<String> = (0..32).map(|i| format!("tag{i}")).collect();
+    let resp = make_json_request(
+        &app,
+        Method::PUT,
+        &format!("/api/v1/books/{book_id}/tags"),
+        &serde_json::json!({ "tags": at_limit }),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK, "tags at limit must pass");
+    let json = response_json(resp).await;
+    assert_eq!(json["data"]["tags"].as_array().unwrap().len(), 32);
+}
+
+/// HTTP 写接口字段上限（与 WS 侧共享 crate::limits）：超限 400，边界值放行
+#[tokio::test]
+async fn test_http_write_field_limits() {
+    let (app, _pool) = setup_test_app().await.unwrap();
+    let token = register_and_login(&app, "limits_user", "password1").await;
+    let book = upload_test_book(&app, &token, "限制书", TEST_BOOK_CONTENT, false).await;
+    let book_id = book["book_id"].as_i64().unwrap();
+
+    // 书签 locator > 4KB 拒绝（与 WS 心跳同一上限），恰好 4KB 放行
+    for (locator, expected) in [
+        ("x".repeat(4 * 1024 + 1), StatusCode::BAD_REQUEST),
+        ("x".repeat(4 * 1024), StatusCode::OK),
+    ] {
+        let resp = make_json_request(
+            &app,
+            Method::POST,
+            &format!("/api/v1/books/{book_id}/bookmarks"),
+            &serde_json::json!({"locator": locator, "percent": 0.5}),
+            Some(&token),
+        )
+        .await;
+        assert_eq!(resp.status(), expected, "bookmark locator limit");
+    }
+
+    // 书签 label > 256 字节拒绝
+    let resp = make_json_request(
+        &app,
+        Method::POST,
+        &format!("/api/v1/books/{book_id}/bookmarks"),
+        &serde_json::json!({"locator": "100", "percent": 0.5, "label": "x".repeat(257)}),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::BAD_REQUEST,
+        "bookmark label limit"
+    );
+
+    // 批注 start_locator 与 excerpt/content 超限拒绝
+    let resp = make_json_request(
+        &app,
+        Method::POST,
+        &format!("/api/v1/books/{book_id}/annotations"),
+        &serde_json::json!({"kind": "note", "start_locator": "x".repeat(4 * 1024 + 1), "start_percent": 0.1}),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::BAD_REQUEST,
+        "annotation locator limit"
+    );
+
+    let resp = make_json_request(
+        &app,
+        Method::POST,
+        &format!("/api/v1/books/{book_id}/annotations"),
+        &serde_json::json!({"kind": "note", "start_locator": "1", "start_percent": 0.1, "excerpt": "x".repeat(8 * 1024 + 1)}),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "excerpt limit");
+
+    // 每日统计 entries 超过 1000 条拒绝；1000 条（去重后任意条数 ≤ 上限）放行
+    let today = chrono::Utc::now().date_naive();
+    let entries = |count: i64| {
+        (0..count)
+            .map(|i| {
+                serde_json::json!({
+                    "date": (today + chrono::Duration::days(i)).format("%Y-%m-%d").to_string(),
+                    "reading_seconds": 1
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+    let resp = make_json_request(
+        &app,
+        Method::PUT,
+        &format!("/api/v1/reading/stats/daily/{book_id}"),
+        &serde_json::json!({"entries": entries(1001)}),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::BAD_REQUEST,
+        "entries count limit"
+    );
+
+    let resp = make_json_request(
+        &app,
+        Method::PUT,
+        &format!("/api/v1/reading/stats/daily/{book_id}"),
+        &serde_json::json!({"entries": entries(1000)}),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK, "entries at limit must pass");
+}
