@@ -3845,3 +3845,69 @@ async fn test_custom_chapter_pattern() {
 
     println!("\n===== Custom chapter pattern tests passed! =====");
 }
+
+/// 同名管理员的并发/重复创建：INSERT 依赖唯一约束兜底，
+/// 冲突方返回 400 AdminUsernameAlreadyExists（此前“先查后插”并发下会变 500）
+#[tokio::test]
+async fn test_create_admin_duplicate_username() {
+    let (app, _pool) = setup_test_app().await.unwrap();
+    let (admin_token, _) = setup_admin(&app).await;
+
+    let body = serde_json::json!({"username": "dup_admin", "password": "pass1234"});
+
+    // 并发创建同名管理员：恰好一个成功，其余撞唯一约束返回 400
+    let (r1, r2, r3) = tokio::join!(
+        make_json_request(
+            &app,
+            Method::POST,
+            "/api/v1/admin/admins",
+            &body,
+            Some(&admin_token)
+        ),
+        make_json_request(
+            &app,
+            Method::POST,
+            "/api/v1/admin/admins",
+            &body,
+            Some(&admin_token)
+        ),
+        make_json_request(
+            &app,
+            Method::POST,
+            "/api/v1/admin/admins",
+            &body,
+            Some(&admin_token)
+        ),
+    );
+    let statuses = [r1.status(), r2.status(), r3.status()];
+    let ok_count = statuses.iter().filter(|&&s| s == StatusCode::OK).count();
+    let all_known = statuses
+        .iter()
+        .all(|&s| matches!(s, StatusCode::OK | StatusCode::BAD_REQUEST));
+    assert_eq!(
+        ok_count, 1,
+        "exactly one concurrent create must succeed: {statuses:?}"
+    );
+    assert!(
+        all_known,
+        "conflicts must map to 400, not 500: {statuses:?}"
+    );
+
+    // 顺序重复创建同样 400，且文案为用户名已存在
+    let resp = make_json_request(
+        &app,
+        Method::POST,
+        "/api/v1/admin/admins",
+        &body,
+        Some(&admin_token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let json = response_json(resp).await;
+    assert!(
+        json["message"]
+            .as_str()
+            .unwrap()
+            .contains("Admin username already exists")
+    );
+}

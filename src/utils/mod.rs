@@ -6,7 +6,7 @@ pub mod utf8;
 pub mod zip;
 
 // 密码哈希固定在专用线程执行（见 argon2.rs），此处重导出保持调用点写法不变
-pub use argon2::{hash_password, verify_password};
+pub use argon2::{hash_password, timing_guard_verify, verify_password};
 
 /// 简易 `ETag` 哈希：用 FNV-1a 64bit，足够短、足够快、无外部依赖
 /// 返回带双引号的 `ETag` 字符串（符合 RFC 7232）

@@ -17,7 +17,7 @@ use crate::{
         UserInfoResponse,
     },
     routes::admin::log_audit_event,
-    utils::{hash_password, verify_password},
+    utils::{hash_password, timing_guard_verify, verify_password},
 };
 
 // 认证路由
@@ -176,6 +176,9 @@ async fn login(
         .fetch_optional(&pool)
         .await?;
     let Some(user) = user else {
+        // 用户不存在也执行一次等价 argon2 计算，抹平响应时序差，
+        // 防止借“跳过验证”的快路径枚举用户名
+        timing_guard_verify(&req.password).await;
         // 审计：用户登录失败（用户名不存在）
         log_audit_event(
             &pool,
@@ -467,6 +470,8 @@ async fn admin_login(
         .fetch_optional(&pool)
         .await?;
     let Some(admin) = admin else {
+        // 与用户登录同理：占位验证抹平时序差，防枚举管理员用户名
+        timing_guard_verify(&req.password).await;
         // 审计：管理员登录失败（用户名不存在）
         log_audit_event(
             &pool,

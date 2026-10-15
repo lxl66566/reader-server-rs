@@ -656,26 +656,24 @@ async fn create_admin(
     // 验证密码非空
     validate_password(&req.password)?;
 
-    // 检查用户名唯一
-    let exists =
-        sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM admin WHERE username = ?)")
-            .bind(&req.username)
-            .fetch_one(&pool)
-            .await?;
-    if exists {
-        return Err(AppError::AdminUsernameAlreadyExists);
-    }
-
     let password_hash = hash_password(&req.password).await?;
 
-    let new_admin_id = sqlx::query!(
+    // 直接 INSERT，依赖 UNIQUE 约束兜底同名冲突，消除“先查后插”的 TOCTOU；
+    // 并发下败者映射为既有的用户名已存在错误（400）而不是 500
+    let new_admin_id = match sqlx::query!(
         "INSERT INTO admin (username, password_hash) VALUES (?, ?)",
         req.username,
         password_hash
     )
     .execute(&pool)
-    .await?
-    .last_insert_rowid();
+    .await
+    {
+        Ok(result) => result.last_insert_rowid(),
+        Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
+            return Err(AppError::AdminUsernameAlreadyExists);
+        },
+        Err(e) => return Err(e.into()),
+    };
 
     log_audit(
         &pool,
