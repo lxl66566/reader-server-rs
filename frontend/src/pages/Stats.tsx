@@ -39,6 +39,7 @@ import { useI18n } from '../i18n';
 import type { DictKey } from '../i18n/zh-CN';
 import { useRequireAuth } from '../stores/auth';
 import { useSettings } from '../stores/settings';
+import { resolvedTheme } from '../theme';
 import { formatDuration } from '../utils/format';
 import BookPlaytimeBars, { type BookBarRow } from './stats/BookPlaytimeBars';
 import { goldenColor } from './stats/colors';
@@ -150,17 +151,18 @@ const Stats: Component = () => {
   );
 
   // 有阅读记录的书按总时长降序 → 堆叠与配色顺序；颜色按 book_id 经
-  // 金色角色轮分配，同一本书在任意区间/排序下颜色稳定
+  // 金色角色轮分配，同一本书在任意区间/排序下颜色稳定；随主题重算明彩度
   const series = createMemo<ChartSeriesItem[]>(() => {
     const titles = new Map<number, string>();
     for (const row of daily()?.days ?? []) titles.set(row.book_id, row.title);
+    const theme = resolvedTheme();
     const totals = perBookTotals(bucketData());
     return [...totals]
       .filter(([, secs]) => secs > 0)
       .toSorted((a, b) => b[1] - a[1])
       .map(([id]) => ({
         bookId: id,
-        color: goldenColor(id),
+        color: goldenColor(id, theme),
         name: titles.get(id) ?? `#${id}`,
       }));
   });
@@ -186,6 +188,7 @@ const Stats: Component = () => {
   const rows = createMemo<BookBarRow[]>(() => {
     const titles = new Map<number, string>();
     for (const row of daily()?.days ?? []) titles.set(row.book_id, row.title);
+    const theme = resolvedTheme();
     const scope = listScope();
     const source =
       scope === 'all'
@@ -197,7 +200,7 @@ const Stats: Component = () => {
       .toSorted((a, b) => b[1] - a[1])
       .map(([id, secs]) => ({
         bookId: id,
-        color: goldenColor(id),
+        color: goldenColor(id, theme),
         name: titles.get(id) ?? `#${id}`,
         secs,
       }));
@@ -413,7 +416,7 @@ const Stats: Component = () => {
         {id => (
           <DailyEditModal
             bookId={id}
-            color={goldenColor(id)}
+            color={goldenColor(id, resolvedTheme())}
             name={editingName()}
             onClose={() => {
               setEditingBookId(null);

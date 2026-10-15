@@ -20,8 +20,8 @@ function loadStoredTheme(): ThemeMode {
     : 'system';
 }
 
-const [themeMode, setThemeModeSignal] =
-  createSignal<ThemeMode>(loadStoredTheme());
+const initialMode = loadStoredTheme();
+const [themeMode, setThemeModeSignal] = createSignal<ThemeMode>(initialMode);
 
 export { themeMode };
 
@@ -30,11 +30,17 @@ export function initTheme(): void {
   createEffect(apply);
 }
 
-export function resolvedTheme(): Exclude<ThemeMode, 'system'> {
-  const mode = themeMode();
+function computeResolved(mode: ThemeMode): Exclude<ThemeMode, 'system'> {
   if (mode !== 'system') return mode;
   return media.matches ? 'dark' : 'light';
 }
+
+// 响应式：themeMode 变化与 system 模式下媒体查询翻转都会更新
+const [resolved, setResolved] = createSignal<Exclude<ThemeMode, 'system'>>(
+  computeResolved(initialMode),
+);
+
+export const resolvedTheme = resolved;
 
 export function setThemeMode(mode: ThemeMode): void {
   setThemeModeSignal(mode);
@@ -42,5 +48,7 @@ export function setThemeMode(mode: ThemeMode): void {
 }
 
 function apply(): void {
-  document.documentElement.dataset.theme = resolvedTheme();
+  const r = computeResolved(themeMode());
+  document.documentElement.dataset.theme = r;
+  setResolved(r);
 }
