@@ -88,10 +88,10 @@ export async function getSettings(
 
 /**
  * 经 WS 心跳把服务端进度播种到指定位置（进度只能经 ws 心跳写入，无 HTTP
- * 端点）。直连后端而非前端 origin：vite dev 代理的 ws 转发在页面连接
- * 快速更替时偶发失败；目标与 vite 的 /api 代理一致（E2E_PROXY 可覆盖）。
- * 播种 device_id 与页面连接不同会先触发设备让位（首跳不落库），收到
- * updated=true 的 ack 为止。
+ * 端点）。目标取 E2E_PROXY（直连后端，绕开 vite dev 的 ws 代理偶发掐断），
+ * 未设时回退 E2E_BASE_URL——与页面同源，经 vite 的 ws 代理转发；两者都
+ * 未设才是默认 :3000。播种 device_id 与页面连接不同会先触发设备让位
+ * （首跳不落库），收到 updated=true 的 ack 为止。
  */
 export async function seedReadingProgress(
   token: string,
@@ -99,10 +99,13 @@ export async function seedReadingProgress(
   locator: number,
   percent: number,
 ): Promise<void> {
-  const origin = (process.env.E2E_PROXY ?? 'http://127.0.0.1:3000').replace(
-    /^http/,
-    'ws',
-  );
+  const origin = (
+    process.env.E2E_PROXY ??
+    process.env.E2E_BASE_URL ??
+    'http://127.0.0.1:3000'
+  )
+    .replace(/\/+$/, '')
+    .replace(/^http/, 'ws');
   let lastErr: unknown;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
@@ -112,6 +115,9 @@ export async function seedReadingProgress(
       return;
     } catch (err) {
       lastErr = err;
+      // 间隔重试，避免连发撞上服务端尚未释放的旧连接
+      // oxlint-disable-next-line no-await-in-loop
+      await new Promise(resolve => setTimeout(resolve, 300));
     }
   }
   throw lastErr instanceof Error

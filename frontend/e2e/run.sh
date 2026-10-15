@@ -9,9 +9,19 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# 目标可达性预检：实例未起时快速报错，而不是留下一堆连接失败
+target="${E2E_BASE_URL:-http://127.0.0.1:3000}"
+if command -v curl >/dev/null 2>&1; then
+  if ! curl -fsS "$target/health" >/dev/null 2>&1; then
+    echo "e2e 目标 $target 不可达：请先启动实例（release 构建默认 :3000，或用 E2E_BASE_URL 指向 vite dev）" >&2
+    exit 1
+  fi
+fi
+
 if command -v nix-build >/dev/null 2>&1; then
   deps="/tmp/reader-e2e-chromium-deps"
   nix-build e2e/chromium-deps.nix -o "$deps" >/dev/null
   export NIX_LD_LIBRARY_PATH="$deps/lib${NIX_LD_LIBRARY_PATH:+:$NIX_LD_LIBRARY_PATH}"
 fi
+
 exec npx playwright test "$@"

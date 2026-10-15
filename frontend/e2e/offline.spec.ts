@@ -8,6 +8,18 @@ import { createUser, seedSession, uploadBook } from './helpers';
 const NOVEL_TXT = new URL('./assets/novel.txt', import.meta.url).pathname;
 const SAMPLE_EPUB = new URL('./assets/sample.epub', import.meta.url).pathname;
 
+test.beforeEach(async ({ request }) => {
+  // 依赖构建产物实例的 Service Worker：vite dev 没有 /sw.js（或被 SPA
+  // fallback 回了 html），此时明确跳过，而不是等 serviceWorker.ready 超时
+  const res = await request.get('/sw.js');
+  const hasSw =
+    res.ok() && (res.headers()['content-type'] ?? '').includes('javascript');
+  test.skip(
+    !hasSw,
+    '目标实例无 Service Worker（离线用例需构建产物实例，vite dev 不支持）',
+  );
+});
+
 /** 打开离线缓存面板并缓存全本，等待状态回到已缓存 */
 async function cacheWholeBook(
   page: Page,

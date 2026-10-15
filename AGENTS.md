@@ -30,7 +30,8 @@ reader-server-rs 是一个读书服务端软件，用户可以向服务器上传
 
 ## E2E 测试（Playwright）
 
-- 前端 `frontend/` 下 `pnpm e2e` 运行，默认打 `http://127.0.0.1:3000` 的运行中服务；用 `E2E_BASE_URL` 可指向其他实例（如前端改动未构建时指向 `pnpm dev` 的 5173）。
+- 前端 `frontend/` 下 `pnpm e2e` 运行，默认打 `http://127.0.0.1:3000` 的运行中服务；用 `E2E_BASE_URL` 可指向其他实例（如前端改动未构建时指向 `pnpm dev` 的 5173）。`run.sh` 预检目标 `/health`，实例未启动会直接报错。
+- 离线用例（`offline.spec.ts`）依赖构建产物实例的 Service Worker，对 vite dev 自动跳过；进度播种的 WS 目标按 `E2E_PROXY ?? E2E_BASE_URL` 推导（默认 :3000），打两种栈都不需要额外环境变量。
 - `@playwright/test` 版本必须匹配本机 `~/.cache/ms-playwright` 的 chromium 构建（1.63 ↔ 1243），升级前先查 `playwright-core/browsers.json`；NixOS 启动环境由 `e2e/run.sh` + `e2e/chromium-deps.nix` 封装（nix-ld）。
 - 测试书入库于 `frontend/e2e/assets/`（`node e2e/assets/gen-assets.mjs` 重新生成）：`novel.txt`（多章 txt）、`sample.epub`（多章节 epub）；超长单章样本由 `read-txt.spec.ts` 运行时生成，不入库。
 - release 构建通过 rust-embed 内嵌 `frontend/dist`：前端改动要在 3000 端口生效，需 `pnpm build && cargo build --release` 并重启服务；日常验证用 vite dev server + `E2E_BASE_URL`。
