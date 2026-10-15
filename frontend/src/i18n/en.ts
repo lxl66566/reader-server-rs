@@ -29,6 +29,10 @@ const en: Dict = {
   cancel: 'Cancel',
   changePassword: 'Change password',
   changePasswordSuccess: 'Password changed',
+  chapterPatternDemoCount: '{n} chapters in total',
+  chapterPatternDemoHint:
+    'A matching line starts a new chapter; the other lines join the previous one. The first non-empty line is always the first chapter.',
+  chapterPatternDemoSummary: 'Demo: how chapters are split',
   chapterPatternInvalid: 'Invalid regular expression',
   chapterPatternLabel: 'Chapter split regex (optional)',
   chapterPatternPlaceholder:

@@ -29,6 +29,10 @@ const zhCN = {
   cancel: '取消',
   changePassword: '修改密码',
   changePasswordSuccess: '密码已修改',
+  chapterPatternDemoCount: '共切出 {n} 章',
+  chapterPatternDemoHint:
+    '匹配的行开启新章节，其余行归入上一章；第一行非空时总是第一章。',
+  chapterPatternDemoSummary: '演示：如何切分章节',
   chapterPatternInvalid: '正则表达式无效',
   chapterPatternLabel: '章节切分正则（选填）',
   chapterPatternPlaceholder:
