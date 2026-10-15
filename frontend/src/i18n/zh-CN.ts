@@ -55,6 +55,9 @@ const zhCN = {
   deleteAccountConfirm: '请输入密码确认注销，此操作不可恢复。',
   deleteAccountDesc: '删除账户及全部书籍与数据，不可恢复',
   deleteBookConfirm: '确定删除这本书吗？该操作不可恢复。',
+  deleteUserConfirm:
+    '删除用户 {username}？其全部书籍、阅读进度、批注与统计数据将一并删除，不可恢复。',
+  deleteUserSuccess: '用户已删除',
   descriptionLabel: '备注（选填）',
   detailAnnotations: '批注',
   detailBookmarks: '书签',

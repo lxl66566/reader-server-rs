@@ -122,6 +122,7 @@ type Annotation = {
 | GET | /api/v1/admin/settings | Admin | - | { id: number; invite_code_required: boolean }（settings 行缺失时返回缺省 invite_code_required=false，与注册侧行为一致） |
 | PUT | /api/v1/admin/settings | Admin | Body: { invite_code_required: boolean } | {} |
 | GET | /api/v1/admin/users | Admin | - | { users: UserItem[] } |
+| DELETE | /api/v1/admin/users/:user_id | Admin | - | {}；删除用户并级联清理其全部数据：书籍（磁盘文件 + 章节 + 标签关联 + 书签 + 批注 + 阅读进度 + 每日统计）与阅读设置，不可恢复；防呆约束：`users` 与 `admin` 为两张独立表、仅能按用户名对应——目标用户名与当前管理员相同时返回 400（不能删自己），与其他管理员账号同名时返回 400（管理员账号受保护）；用户不存在 404；审计日志（action=delete_user，detail 为被删用户名）。书籍文件在 DB 事务提交后删除，删除失败仅记日志不影响响应 |
 | POST | /api/v1/admin/users/:user_id/reset_password | Admin | Body: { new_password: string } | {} |
 | PUT | /api/v1/admin/users/:user_id/reading_time | Admin | Body: { book_id: number; reading_time: number } | {}；管理员修正任意用户在某本书上的累计阅读时长，语义同用户侧 `PUT /reading/progress/:book_id`（含每日统计不动的约定），并记录审计日志（action=set_reading_time，detail 含 book_id 与新值）；用户不存在 404、书不存在 404、时长越界 400 |
 | POST | /api/v1/admin/users/:user_id/revoke_tokens | Admin | - | {} |

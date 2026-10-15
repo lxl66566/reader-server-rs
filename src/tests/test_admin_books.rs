@@ -9,8 +9,8 @@ use axum::{
 use sqlx::{Pool, Sqlite};
 
 use crate::tests::{
-    make_json_request, make_multipart_request, make_request, register_and_login, response_json,
-    setup_admin, setup_test_app, upload_test_book,
+    disable_invite_code, make_json_request, make_multipart_request, make_request,
+    register_and_login, response_json, setup_admin, setup_test_app, upload_test_book,
 };
 
 // 上传带作者的书（upload_test_book 不支持 author 字段）
@@ -346,17 +346,4 @@ async fn test_admin_delete_book_cascade() -> Result<()> {
         .any(|l| l["action"] == "delete_book" && l["target_id"] == book_id);
     assert!(has_delete, "delete_book audit log missing: {logs:?}");
     Ok(())
-}
-
-/// admin setup 会初始化 settings 为强制邀请码，注册用户前先关闭
-async fn disable_invite_code(app: &Router, admin_token: &str) {
-    let resp = make_json_request(
-        app,
-        Method::PUT,
-        "/api/v1/admin/settings",
-        &serde_json::json!({"invite_code_required": false}),
-        Some(admin_token),
-    )
-    .await;
-    assert_eq!(resp.status(), StatusCode::OK);
 }

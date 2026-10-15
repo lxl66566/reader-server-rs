@@ -1,4 +1,4 @@
-// User management: ban/unban, force sign-out and password reset.
+// User management: delete, ban/unban, force sign-out and password reset.
 
 import {
   createResource,
@@ -21,6 +21,7 @@ import { isUnauthorized } from './utils';
 
 type PendingAction =
   | { kind: 'ban'; user: AdminUserItem }
+  | { kind: 'delete'; user: AdminUserItem }
   | { kind: 'reset'; user: AdminUserItem }
   | { kind: 'revoke'; user: AdminUserItem }
   | { kind: 'unban'; user: AdminUserItem };
@@ -46,6 +47,29 @@ export const UsersTab: Component<{ onUnauthorized: () => void }> = props => {
     }
   });
   const list = () => users() ?? [];
+
+  // Admin accounts are a separate namespace; a user row sharing an admin's
+  // username is protected server-side (delete returns 400), so its delete
+  // button is disabled here. Fetch failure just disables nothing — the
+  // server still refuses.
+  const [admins] = createResource(async () => {
+    try {
+      const res = await adminApi.admins();
+      return res.admins;
+    } catch {
+      return [];
+    }
+  });
+  const protectedNames = () =>
+    new Set((admins() ?? []).map(admin => admin.username));
+
+  // 删除确认文案：列出级联后果；其余操作沿用通用确认文案
+  const confirmMessage = () => {
+    const current = pending();
+    return current?.kind === 'delete'
+      ? t('deleteUserConfirm', { username: current.user.username })
+      : t('confirmAction');
+  };
 
   // ============ 修正阅读时长（按 书籍 ID + 秒数 直接设定） ============
 
@@ -158,6 +182,10 @@ export const UsersTab: Component<{ onUnauthorized: () => void }> = props => {
           await adminApi.ban(current.user.user_id);
           toast.success(t('banUser'));
           break;
+        case 'delete':
+          await adminApi.deleteUser(current.user.user_id);
+          toast.success(t('deleteUserSuccess'));
+          break;
         case 'reset':
           await adminApi.resetPassword(current.user.user_id, newPassword());
           toast.success(t('resetPassword'));
@@ -187,6 +215,8 @@ export const UsersTab: Component<{ onUnauthorized: () => void }> = props => {
     switch (current.kind) {
       case 'ban':
         return t('banUser');
+      case 'delete':
+        return t('delete');
       case 'reset':
         return t('resetPassword');
       case 'revoke':
@@ -278,6 +308,13 @@ export const UsersTab: Component<{ onUnauthorized: () => void }> = props => {
                             }
                           />
                         </Show>
+                        <ActionButton
+                          disabled={protectedNames().has(item.username)}
+                          label={t('delete')}
+                          onClick={() =>
+                            setPending({ kind: 'delete', user: item })
+                          }
+                        />
                       </div>
                     </td>
                   </tr>
@@ -403,7 +440,7 @@ export const UsersTab: Component<{ onUnauthorized: () => void }> = props => {
       </Modal>
 
       <ConfirmDialog
-        message={t('confirmAction')}
+        message={confirmMessage()}
         onClose={closePending}
         onConfirm={() => void runAction()}
         open={pending() !== null && pending()?.kind !== 'reset'}

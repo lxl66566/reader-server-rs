@@ -56,6 +56,9 @@ const en: Dict = {
     'Enter your password to confirm. This cannot be undone.',
   deleteAccountDesc: 'Delete the account with all books and data',
   deleteBookConfirm: 'Delete this book? This cannot be undone.',
+  deleteUserConfirm:
+    'Delete user {username}? All their books, reading progress, annotations and stats will be permanently removed.',
+  deleteUserSuccess: 'User deleted',
   descriptionLabel: 'Description (optional)',
   detailAnnotations: 'Annotations',
   detailBookmarks: 'Bookmarks',

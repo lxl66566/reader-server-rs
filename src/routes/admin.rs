@@ -2,7 +2,7 @@ use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Path, Query, State, multipart::Multipart},
     response::Response,
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
 };
 use chrono::{SecondsFormat, Utc};
 use serde::Deserialize;
@@ -46,6 +46,7 @@ pub fn routes() -> Router<crate::app::AppState> {
             "/users/import",
             post(import_user).layer(DefaultBodyLimit::max(IMPORT_BODY_LIMIT)),
         )
+        .route("/users/{user_id}", delete(delete_user))
         .route("/users/{user_id}/reset_password", post(reset_password))
         .route("/users/{user_id}/reading_time", put(admin_set_reading_time))
         .route("/users/{user_id}/revoke_tokens", post(revoke_user_tokens))
@@ -318,6 +319,76 @@ async fn list_users(
     .await?;
 
     Ok(Json(ApiResponse::success(ListUsersResponse { users })))
+}
+
+// 删除用户并级联清理其全部数据：
+// - DB 删除在单事务内完成；书籍逐本复用 [`delete_book_cascade`]（章节/标签关联
+//   随书级联），其余用户自有数据（书签/批注/阅读进度/每日统计/阅读设置）由 users 行外键级联清理
+// - 防呆：users 与 admin 是两张独立表，只能按用户名对应——目标用户名与当前 管理员同名 →
+//   删自己（400）；与其他管理员同名 → 删管理员账号（400）
+// - 书籍磁盘文件在事务提交后删除，失败仅记日志（孤儿文件比丢 DB 记录安全）
+async fn delete_user(
+    admin: AuthAdmin,
+    State(pool): State<Pool<Sqlite>>,
+    Path(user_id): Path<i64>,
+) -> Result<Json<ApiResponse<()>>, AppError> {
+    let mut tx = pool.begin().await?;
+
+    let target = sqlx::query!("SELECT username FROM users WHERE id = ?", user_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(AppError::UserNotFound)?;
+
+    if target.username == admin.username {
+        return Err(AppError::CannotDeleteSelf);
+    }
+    let is_admin_name =
+        sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM admin WHERE username = ?)")
+            .bind(&target.username)
+            .fetch_one(&mut *tx)
+            .await?;
+    if is_admin_name {
+        return Err(AppError::CannotDeleteAdmin);
+    }
+
+    // 逐书删除并收集磁盘文件路径；书若刚被 owner 并发删掉，该路径已同步清理
+    // 过文件，跳过即可（其余 DB 错误照常回滚）
+    let book_ids = sqlx::query_scalar::<_, i64>("SELECT id FROM books WHERE user_id = ?")
+        .bind(user_id)
+        .fetch_all(&mut *tx)
+        .await?;
+    let mut file_paths = Vec::with_capacity(book_ids.len());
+    for book_id in book_ids {
+        match delete_book_cascade(&mut tx, book_id).await {
+            Ok((_, file_path)) => file_paths.push(file_path),
+            Err(AppError::BookNotFound) => {},
+            Err(e) => return Err(e),
+        }
+    }
+
+    sqlx::query!("DELETE FROM users WHERE id = ?", user_id)
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+
+    for file_path in &file_paths {
+        remove_book_file(file_path).await;
+    }
+
+    log_audit(
+        &pool,
+        &admin,
+        "delete_user",
+        Some("user"),
+        Some(user_id),
+        Some(&target.username),
+    )
+    .await;
+
+    Ok(Json(ApiResponse::<()>::message(
+        "User deleted successfully",
+    )))
 }
 
 // 管理员书籍列表查询参数（q 非空时按 标题/作者/所有者用户名 模糊匹配）

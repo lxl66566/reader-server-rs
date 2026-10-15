@@ -274,6 +274,12 @@ export const adminApi = {
     api.delete<Record<string, never>>(`/api/v1/admin/books/${bookId}`, {
       tokenKind: 'admin',
     }),
+  // 删除用户并级联清理其全部书籍 / 进度 / 批注 / 统计（不可恢复）；
+  // 目标用户名与管理员账号相同时后端拒绝（400）
+  deleteUser: (userId: number) =>
+    api.delete<Record<string, never>>(`/api/v1/admin/users/${userId}`, {
+      tokenKind: 'admin',
+    }),
   exportUser: (userId: number) =>
     api.get<Response>(`/api/v1/admin/users/${userId}/export`, {
       raw: true,

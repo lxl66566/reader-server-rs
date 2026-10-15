@@ -66,6 +66,14 @@ pub enum AppError {
     #[error("User not found")]
     UserNotFound,
 
+    // 目标用户名与当前管理员账号同名：不能删除自己的账号
+    #[error("Cannot delete your own account")]
+    CannotDeleteSelf,
+
+    // 目标用户名与其他管理员账号同名：管理员账号受保护，任何管理员都不可删
+    #[error("Cannot delete an admin account")]
+    CannotDeleteAdmin,
+
     #[error("Chapter not found")]
     ChapterNotFound,
 
@@ -321,6 +329,8 @@ impl IntoResponse for AppError {
             | AppError::TooManyDailyStatsEntries
             | AppError::FieldReadError(..)
             | AppError::ImportPackageInvalid(_)
+            | AppError::CannotDeleteSelf
+            | AppError::CannotDeleteAdmin
             | AppError::InvalidBookSort
             | AppError::InvalidSortOrder
             | AppError::InvalidFormatFilter => StatusCode::BAD_REQUEST,

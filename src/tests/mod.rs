@@ -1,4 +1,5 @@
 pub mod test_admin_books;
+pub mod test_admin_users;
 pub mod test_books;
 pub mod test_integration;
 pub mod test_quality;
@@ -275,4 +276,17 @@ pub async fn upload_test_book(
     let json = response_json(resp).await;
     assert_eq!(json["code"], 0, "upload error: {json:?}");
     json["data"].clone()
+}
+
+/// admin setup 会初始化 settings 为强制邀请码，注册用户前先关闭
+pub async fn disable_invite_code(app: &Router, admin_token: &str) {
+    let resp = make_json_request(
+        app,
+        Method::PUT,
+        "/api/v1/admin/settings",
+        &serde_json::json!({"invite_code_required": false}),
+        Some(admin_token),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
 }
