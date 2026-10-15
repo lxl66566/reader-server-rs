@@ -55,6 +55,10 @@ const PdfReader = (props: FormatReaderProps) => {
   // 主加载链路：失败进入错误态（可重试），而不是永远停在加载态
   const load = async () => {
     setError(false);
+    // 重试会覆盖 loadingTask：旧 task 先销毁，防 pdf worker 泄漏
+    // （仅在卸载时 destroy 覆盖不到加载失败的残留 task）
+    void loadingTask?.destroy().catch(() => undefined);
+    loadingTask = null;
     try {
       // 断网时回退显式缓存的整本文件
       const data = await fetchBookFile(props.book.book_id);

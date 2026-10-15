@@ -664,8 +664,12 @@ const ScrollView = (
     return false;
   };
 
-  const enqueueJump = (at: number): Promise<boolean> => {
-    const run = (): Promise<boolean> => jumpTo(at).then(() => true, settle);
+  const enqueueJump = (
+    at: number,
+    land: 'bottom' | 'top' = 'top',
+  ): Promise<boolean> => {
+    const run = (): Promise<boolean> =>
+      jumpTo(at, land).then(() => true, settle);
     // 链上前序失败不影响本次执行
     const job = jumpChain.then(run, run);
     jumpChain = job;
@@ -908,7 +912,8 @@ const ScrollView = (
     animateScrollBy(container, dir * clientHeight * PAGE_SCROLL_RATIO);
   }
 
-  // 下一章从头显示，上一章落到章末衔接阅读顺序；首末章越界时保持原章
+  // 下一章从头显示，上一章落到章末衔接阅读顺序；首末章越界时保持原章。
+  // 经串行跳转链执行：失败进错误态，且不会留下未捕获的 rejection
   function switchChapter(dir: -1 | 1): void {
     const next = chapterIdx() + dir;
     if (next < 0 || next >= props.book.chapters.length) return;
@@ -917,7 +922,7 @@ const ScrollView = (
       next,
       props.book.total_chars,
     );
-    void jumpTo(
+    void enqueueJump(
       dir > 0 ? range.start : range.end - 1,
       dir > 0 ? 'top' : 'bottom',
     );

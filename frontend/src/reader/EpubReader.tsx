@@ -436,10 +436,16 @@ const EpubReader = (props: FormatReaderProps) => {
     return idx !== null && idx > 0;
   };
 
+  // rendition.next/prev 在章节渲染出错时会 reject：就地捕获记日志，
+  // 停留当前页；手势与键盘路径共用，均不留未捕获的 rejection
   async function flip(dir: -1 | 1): Promise<void> {
     if (!rendition) return;
-    if (dir > 0) await rendition.next();
-    else await rendition.prev();
+    try {
+      if (dir > 0) await rendition.next();
+      else await rendition.prev();
+    } catch (err) {
+      console.error('epub flip failed', err);
+    }
   }
 
   // switching paginate/scroll needs a fresh rendition (flow is a creation option)

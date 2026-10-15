@@ -217,9 +217,11 @@ const ReaderBody = (props: ReaderBodyProps) => {
     },
     onBookmarkChanged: () => void refetchBookmarks(),
     onGaveUp: () => setWsGaveUp(true),
-    onHeartbeatAck: synced => {
-      if (!synced) return;
-      // 本地进度已落库：解除回跳抑制；缓存标记为已推送
+    onHeartbeatAck: (_synced, updated) => {
+      // 仅 updated=true 表示本次上报真正写入服务端：解除回跳抑制并标记已
+      // 推送。竞争失败（updated=false）时保留本地 unpushed 进度，下一次
+      // 心跳重推；让位（synced=false）的回跳由 onSyncRequired 处理
+      if (!updated) return;
       suppressSync = false;
       if (progressDirty) {
         progressDirty = false;

@@ -215,6 +215,8 @@ export type WsServerMessage =
       reading_time: number;
       synced: boolean;
       type: 'heartbeat_ack';
+      /** 本次心跳是否真正写入服务端进度；false 时其余字段为服务端现值 */
+      updated: boolean;
     }
   | { book_id: number; type: 'subscribed' }
   | { book_id: number; type: 'unsubscribed' }

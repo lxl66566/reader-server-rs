@@ -11,7 +11,7 @@ import {
   VsNote,
   VsSettingsGear,
 } from 'solid-icons/vs';
-import { createSignal, For, Show } from 'solid-js';
+import { createSignal, For, Show, type Resource } from 'solid-js';
 import toast from 'solid-toast';
 
 import { markerApi } from '../api';
@@ -26,9 +26,9 @@ import OfflinePanel from './OfflinePanel';
 import type { ReaderNavigator } from './types';
 
 export interface ChromeProps {
-  annotations: () => Annotation[] | undefined;
+  annotations: Resource<Annotation[]>;
   book: BookDetail;
-  bookmarks: () => Bookmark[] | undefined;
+  bookmarks: Resource<Bookmark[]>;
   currentPosition: () => null | { locator: string; percent: number };
   navigator: () => null | ReaderNavigator;
   onRetryReconnect: () => void;
@@ -205,6 +205,36 @@ const bookmarkTitle = (
     ? bookmark.label
     : t('progressPercent', { percent: formatPercent(bookmark.percent) });
 
+// 书签/批注列表加载失败（断网且无缓存）：重试入口，避免 Spinner 永挂
+const ListError = (errorProps: { onRetry: () => void }) => {
+  const { t } = useI18n();
+  return (
+    <div class="flex flex-col items-center gap-3 py-6">
+      <p class="text-muted text-sm">{t('errorLoadFailed')}</p>
+      <Button onClick={errorProps.onRetry} variant="ghost">
+        {t('retry')}
+      </Button>
+    </div>
+  );
+};
+
+// resource 未就绪时的占位：出错给重试，否则转圈
+const ListPending = (pendingProps: {
+  errored: () => boolean;
+  onRetry: () => void;
+}) => (
+  <Show
+    fallback={
+      <div class="flex justify-center py-6">
+        <Spinner />
+      </div>
+    }
+    when={!pendingProps.errored()}
+  >
+    <ListError onRetry={pendingProps.onRetry} />
+  </Show>
+);
+
 const BarButton = (buttonProps: {
   icon: import('solid-js').JSX.Element;
   label: string;
@@ -271,7 +301,7 @@ const TocPanel = (panelProps: {
 
 const BookmarksPanel = (panelProps: {
   book: BookDetail;
-  bookmarks: () => Bookmark[] | undefined;
+  bookmarks: Resource<Bookmark[]>;
   currentPosition: ChromeProps['currentPosition'];
   onClose: () => void;
   onJump: (locator: string) => void;
@@ -331,9 +361,10 @@ const BookmarksPanel = (panelProps: {
       </div>
       <Show
         fallback={
-          <div class="flex justify-center py-6">
-            <Spinner />
-          </div>
+          <ListPending
+            errored={() => panelProps.bookmarks.error !== undefined}
+            onRetry={panelProps.refetch}
+          />
         }
         when={panelProps.bookmarks()}
       >
@@ -357,7 +388,7 @@ const BookmarksPanel = (panelProps: {
                     </button>
                     <button
                       aria-label={t('delete')}
-                      class="text-muted cursor-pointer rounded px-2 py-1 text-xs hover:text-red-700"
+                      class="text-muted cursor-pointer rounded px-2 py-1 text-xs hover:text-red-700 dark:hover:text-red-400"
                       onClick={() => void remove(bookmark.id)}
                       type="button"
                     >
@@ -379,7 +410,7 @@ const BookmarksPanel = (panelProps: {
 // ---------------------------------------------------------------------------
 
 const AnnotationsPanel = (panelProps: {
-  annotations: () => Annotation[] | undefined;
+  annotations: Resource<Annotation[]>;
   book: BookDetail;
   currentPosition: ChromeProps['currentPosition'];
   onClose: () => void;
@@ -445,9 +476,10 @@ const AnnotationsPanel = (panelProps: {
       </div>
       <Show
         fallback={
-          <div class="flex justify-center py-6">
-            <Spinner />
-          </div>
+          <ListPending
+            errored={() => panelProps.annotations.error !== undefined}
+            onRetry={panelProps.refetch}
+          />
         }
         when={panelProps.annotations()}
       >
@@ -482,7 +514,7 @@ const AnnotationsPanel = (panelProps: {
                         </button>
                         <button
                           aria-label={t('delete')}
-                          class="cursor-pointer hover:text-red-700"
+                          class="cursor-pointer hover:text-red-700 dark:hover:text-red-400"
                           onClick={() => void remove(annotation.id)}
                           type="button"
                         >
