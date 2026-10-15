@@ -5,6 +5,7 @@ use axum::{
     routing::{get, post, put},
 };
 use chrono::{SecondsFormat, Utc};
+use serde::Deserialize;
 use sqlx::{Pool, Sqlite};
 use tokio::io::AsyncWriteExt as _;
 
@@ -13,15 +14,19 @@ use crate::{
     config::Config,
     error::{ApiResponse, AppError},
     models::{
-        AdminListItem, AdminSetReadingTimeRequest, AdminUserListItem, AuditLog,
-        ChangePasswordRequest, CheckSetupResponse, CreateAdminRequest, CreateInviteCodeRequest,
-        CreateInviteCodeResponse, DEFAULT_INVITE_CODE_REQUIRED, ImportUserResponse, InviteCode,
-        ListAdminsResponse, ListAuditLogsResponse, ListInviteCodesResponse, ListUsersResponse,
+        AdminBookListItem, AdminBookListResponse, AdminListItem, AdminSetReadingTimeRequest,
+        AdminUpdateBookRequest, AdminUserListItem, AuditLog, ChangePasswordRequest,
+        CheckSetupResponse, CreateAdminRequest, CreateInviteCodeRequest, CreateInviteCodeResponse,
+        DEFAULT_INVITE_CODE_REQUIRED, ImportUserResponse, InviteCode, ListAdminsResponse,
+        ListAuditLogsResponse, ListInviteCodesResponse, ListUsersResponse,
         ResetUserPasswordRequest, Settings, UpdateSettingsRequest, UserStatus,
     },
     routes::{
         auth::{validate_password, validate_username},
-        books::{PaginationParams, map_multipart_err},
+        books::{
+            PaginationParams, apply_book_field_updates, delete_book_cascade, escape_like,
+            map_multipart_err, remove_book_file,
+        },
         reading::set_reading_time,
     },
     user_data::{self, ExportScope},
@@ -47,6 +52,11 @@ pub fn routes() -> Router<crate::app::AppState> {
         .route("/users/{user_id}/ban", post(ban_user))
         .route("/users/{user_id}/unban", post(unban_user))
         .route("/users/{user_id}/export", get(export_user))
+        .route("/books", get(list_all_books))
+        .route(
+            "/books/{book_id}",
+            put(admin_update_book).delete(admin_delete_book),
+        )
         .route("/admins", get(list_admins).post(create_admin))
         .route("/audit_logs", get(list_audit_logs))
         .route("/backup", get(backup_global))
@@ -308,6 +318,182 @@ async fn list_users(
     .await?;
 
     Ok(Json(ApiResponse::success(ListUsersResponse { users })))
+}
+
+// 管理员书籍列表查询参数（q 非空时按 标题/作者/所有者用户名 模糊匹配）
+#[derive(Debug, Deserialize)]
+pub struct AdminBookSearchParams {
+    pub q: Option<String>,
+}
+
+// 全站书籍列表行（私用 FromRow 结构，避免在闭包里手动取列）
+#[derive(sqlx::FromRow)]
+struct AdminBookRow {
+    id: i64,
+    title: String,
+    author: Option<String>,
+    user_id: i64,
+    owner_username: String,
+    is_public: bool,
+    total_chars: i64,
+    total_pages: i64,
+    file_path: String,
+    created_at: String,
+    format: crate::models::BookFormat,
+}
+
+// 全站书籍列表（含所有者与磁盘文件大小）
+async fn list_all_books(
+    _: AuthAdmin,
+    State(pool): State<Pool<Sqlite>>,
+    Query(pagination): Query<PaginationParams>,
+    Query(search): Query<AdminBookSearchParams>,
+) -> Result<Json<ApiResponse<AdminBookListResponse>>, AppError> {
+    // 钳制风格与审计日志一致：默认 20，上限 100
+    let (limit, offset) = pagination.normalize(20, 100);
+
+    let q = search.q.as_deref().unwrap_or("").trim();
+    let pattern = (!q.is_empty()).then(|| format!("%{}%", escape_like(q)));
+
+    let mut count_qb = sqlx::QueryBuilder::<Sqlite>::new(
+        "SELECT COUNT(*) FROM books b JOIN users u ON u.id = b.user_id",
+    );
+    let mut list_qb = sqlx::QueryBuilder::<Sqlite>::new(
+        // 注意：QueryBuilder 是运行时拼接，sqlx 的 `AS "col: Type"` 类型覆盖语法
+        // （编译期宏专用）会被当成字面列名导致 ColumnNotFound，枚举列靠 FromRow 按名解码
+        "SELECT b.id, b.title, b.author, b.user_id, u.username AS owner_username, b.is_public, \
+         b.total_chars, b.total_pages, b.file_path, b.created_at, b.format FROM books b JOIN \
+         users u ON u.id = b.user_id",
+    );
+    if let Some(pattern) = &pattern {
+        // push 与 push_bind 必须交错：push 只追加原文，push_bind 会再追加一个 `?` 占位符
+        for qb in [&mut count_qb, &mut list_qb] {
+            qb.push(" WHERE (b.title LIKE ")
+                .push_bind(pattern.clone())
+                .push(" ESCAPE '\\' OR b.author LIKE ")
+                .push_bind(pattern.clone())
+                .push(" ESCAPE '\\' OR u.username LIKE ")
+                .push_bind(pattern.clone())
+                .push(" ESCAPE '\\')");
+        }
+    }
+
+    let total: i64 = count_qb
+        .build_query_scalar::<i64>()
+        .fetch_one(&pool)
+        .await?;
+    list_qb
+        .push(" ORDER BY b.created_at DESC LIMIT ")
+        .push_bind(limit)
+        .push(" OFFSET ")
+        .push_bind(offset);
+
+    let rows = list_qb
+        .build_query_as::<AdminBookRow>()
+        .fetch_all(&pool)
+        .await?;
+
+    // 文件大小不入库，逐行 stat（单页 ≤ 100 行，开销可忽略）；文件缺失返回 null
+    let books: Vec<AdminBookListItem> = {
+        let mut items = Vec::with_capacity(rows.len());
+        for row in rows {
+            let file_size = tokio::fs::metadata(&row.file_path)
+                .await
+                .ok()
+                .map(|m| m.len());
+            items.push(AdminBookListItem {
+                book_id: row.id,
+                title: row.title,
+                author: row.author,
+                owner_id: row.user_id,
+                owner_username: row.owner_username,
+                is_public: row.is_public,
+                format: row.format,
+                total_chars: row.total_chars,
+                total_pages: row.total_pages,
+                file_size: file_size.and_then(|s| i64::try_from(s).ok()),
+                created_at: row.created_at,
+            });
+        }
+        items
+    };
+
+    Ok(Json(ApiResponse::success(AdminBookListResponse {
+        total,
+        books,
+    })))
+}
+
+// 管理员编辑任意书籍的元数据（标题/作者/可见性），复用用户侧更新路径
+async fn admin_update_book(
+    admin: AuthAdmin,
+    State(pool): State<Pool<Sqlite>>,
+    Path(book_id): Path<i64>,
+    Json(req): Json<AdminUpdateBookRequest>,
+) -> Result<Json<ApiResponse<()>>, AppError> {
+    if req.title.is_none() && req.author.is_none() && req.is_public.is_none() {
+        return Ok(Json(ApiResponse::<()>::message("No updates")));
+    }
+
+    let mut tx = pool.begin().await?;
+    let exists = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM books WHERE id = ?)")
+        .bind(book_id)
+        .fetch_one(&mut *tx)
+        .await?;
+    if !exists {
+        return Err(AppError::BookNotFound);
+    }
+
+    apply_book_field_updates(
+        &mut tx,
+        book_id,
+        req.title.as_deref(),
+        req.author.as_deref(),
+        req.is_public,
+        None,
+    )
+    .await?;
+    tx.commit().await?;
+
+    log_audit(
+        &pool,
+        &admin,
+        "update_book",
+        Some("book"),
+        Some(book_id),
+        Some(&format!(
+            "title={:?} author={:?} is_public={:?}",
+            req.title, req.author, req.is_public
+        )),
+    )
+    .await;
+
+    Ok(Json(ApiResponse::<()>::message("Update successful")))
+}
+
+// 管理员删除任意书籍：级联清理与用户自删完全一致（文件/章节/标签/批注/进度/统计）
+async fn admin_delete_book(
+    admin: AuthAdmin,
+    State(pool): State<Pool<Sqlite>>,
+    Path(book_id): Path<i64>,
+) -> Result<Json<ApiResponse<()>>, AppError> {
+    let mut tx = pool.begin().await?;
+    let (owner_id, file_path) = delete_book_cascade(&mut tx, book_id).await?;
+    tx.commit().await?;
+
+    remove_book_file(&file_path).await;
+
+    log_audit(
+        &pool,
+        &admin,
+        "delete_book",
+        Some("book"),
+        Some(book_id),
+        Some(&format!("owner_id={owner_id}")),
+    )
+    .await;
+
+    Ok(Json(ApiResponse::<()>::message("Deleted successfully")))
 }
 
 // 导出指定用户的全部数据（迁移范围：含密码哈希与书籍文件），用于跨实例迁移。

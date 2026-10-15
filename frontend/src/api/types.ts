@@ -1,5 +1,21 @@
 // API types mirroring doc/interface.md. Keep in sync with the backend.
 
+// Admin: global book list item (GET /api/v1/admin/books).
+export interface AdminBookItem {
+  author: null | string;
+  book_id: number;
+  created_at: string;
+  /** 磁盘文件字节数；文件缺失（被外部清理）时为 null */
+  file_size: null | number;
+  format: BookFormat;
+  is_public: boolean;
+  owner_id: number;
+  owner_username: string;
+  title: string;
+  total_chars: number;
+  total_pages: number;
+}
+
 export interface AdminItem {
   admin_id: number;
   created_at: string;

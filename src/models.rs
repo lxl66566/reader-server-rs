@@ -600,6 +600,38 @@ pub struct ListAuditLogsResponse {
     pub logs: Vec<AuditLog>,
 }
 
+// 管理员书籍列表项（全局视角，含所有者与磁盘文件大小）
+#[derive(Debug, Serialize)]
+pub struct AdminBookListItem {
+    pub book_id: i64,
+    pub title: String,
+    pub author: Option<String>,
+    pub owner_id: i64,
+    pub owner_username: String,
+    pub is_public: bool,
+    pub format: BookFormat,
+    pub total_chars: i64,
+    pub total_pages: i64,
+    /// 磁盘文件字节数；文件缺失（被外部清理）时为 null
+    pub file_size: Option<i64>,
+    pub created_at: String,
+}
+
+// 管理员书籍列表响应
+#[derive(Debug, Serialize)]
+pub struct AdminBookListResponse {
+    pub total: i64,
+    pub books: Vec<AdminBookListItem>,
+}
+
+// 管理员编辑书籍请求（全部可选；至少提供一项才会产生更新）
+#[derive(Debug, Deserialize)]
+pub struct AdminUpdateBookRequest {
+    pub title: Option<String>,
+    pub author: Option<String>,
+    pub is_public: Option<bool>,
+}
+
 // 书籍列表响应
 #[derive(Debug, Serialize)]
 pub struct BookListResponse {

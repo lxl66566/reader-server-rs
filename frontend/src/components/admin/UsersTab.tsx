@@ -47,6 +47,53 @@ export const UsersTab: Component<{ onUnauthorized: () => void }> = props => {
   });
   const list = () => users() ?? [];
 
+  // ============ 修正阅读时长（按 书籍 ID + 秒数 直接设定） ============
+
+  const [fixTimeUser, setFixTimeUser] = createSignal<AdminUserItem | null>(
+    null,
+  );
+  const [fixBookId, setFixBookId] = createSignal('');
+  const [fixSeconds, setFixSeconds] = createSignal('');
+  const [fixingTime, setFixingTime] = createSignal(false);
+
+  const closeFixTime = () => {
+    setFixTimeUser(null);
+    setFixBookId('');
+    setFixSeconds('');
+  };
+
+  // 两个输入都必须是非负整数（bookId 正整数）；空值/非法值禁用提交
+  const fixTimeValid = () => {
+    const bookId = Number(fixBookId());
+    const seconds = Number(fixSeconds());
+    return (
+      Number.isInteger(bookId) &&
+      bookId > 0 &&
+      Number.isInteger(seconds) &&
+      seconds >= 0
+    );
+  };
+
+  const submitFixTime = async () => {
+    const user = fixTimeUser();
+    if (!user || !fixTimeValid()) return;
+    setFixingTime(true);
+    try {
+      await adminApi.setReadingTime(
+        user.user_id,
+        Number(fixBookId()),
+        Number(fixSeconds()),
+      );
+      toast.success(t('editReadingTimeSuccess'));
+      closeFixTime();
+    } catch (err) {
+      if (isUnauthorized(err)) props.onUnauthorized();
+      toastError(err, t);
+    } finally {
+      setFixingTime(false);
+    }
+  };
+
   const closePending = () => {
     setPending(null);
     setNewPassword('');
@@ -198,6 +245,10 @@ export const UsersTab: Component<{ onUnauthorized: () => void }> = props => {
                           onClick={() => void downloadExport(item)}
                         />
                         <ActionButton
+                          label={t('fixReadingTime')}
+                          onClick={() => setFixTimeUser(item)}
+                        />
+                        <ActionButton
                           label={t('resetPassword')}
                           onClick={() =>
                             setPending({ kind: 'reset', user: item })
@@ -303,6 +354,49 @@ export const UsersTab: Component<{ onUnauthorized: () => void }> = props => {
             onClick={() => void submitImport()}
           >
             {importing() ? <Spinner class="size-4" /> : null}
+            {t('confirm')}
+          </Button>
+        </div>
+      </Modal>
+
+      <Modal
+        onClose={closeFixTime}
+        open={fixTimeUser() !== null}
+        title={t('fixReadingTime')}
+      >
+        <p class="text-muted mb-1 text-sm">{fixTimeUser()?.username ?? ''}</p>
+        <p class="text-muted mb-3 text-sm">{t('fixReadingTimeDesc')}</p>
+        <label class="mb-3 flex flex-col gap-1 text-sm">
+          <span class="text-muted">{t('bookIdLabel')}</span>
+          <Input
+            min={1}
+            onInput={setFixBookId}
+            type="number"
+            value={fixBookId()}
+          />
+        </label>
+        <label class="mb-4 flex flex-col gap-1 text-sm">
+          <span class="text-muted">{t('readingTimeSeconds')}</span>
+          <Input
+            min={0}
+            onInput={setFixSeconds}
+            type="number"
+            value={fixSeconds()}
+          />
+        </label>
+        <div class="flex justify-end gap-2">
+          <Button
+            disabled={fixingTime()}
+            onClick={closeFixTime}
+            variant="ghost"
+          >
+            {t('cancel')}
+          </Button>
+          <Button
+            disabled={fixingTime() || !fixTimeValid()}
+            onClick={() => void submitFixTime()}
+          >
+            {fixingTime() ? <Spinner class="size-4" /> : null}
             {t('confirm')}
           </Button>
         </div>

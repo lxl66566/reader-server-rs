@@ -2,6 +2,7 @@
 
 export * from './AdminsTab';
 export * from './AuditLogsTab';
+export * from './BooksTab';
 export * from './ConfirmDialog';
 export * from './InviteCodesTab';
 export * from './SettingsTab';

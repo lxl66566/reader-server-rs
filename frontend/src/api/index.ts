@@ -1,5 +1,6 @@
 import { api } from './client';
 import type {
+  AdminBookItem,
   AdminItem,
   AdminUserItem,
   Annotation,
@@ -240,6 +241,12 @@ export const adminApi = {
     api.post<Record<string, never>>(`/api/v1/admin/users/${userId}/ban`, {
       tokenKind: 'admin',
     }),
+  // 全站书籍列表：q 非空时按 标题/作者/所有者 模糊匹配
+  books: (page: number, limit: number, q?: string) =>
+    api.get<{ books: AdminBookItem[]; total: number }>('/api/v1/admin/books', {
+      query: { limit, page, q },
+      tokenKind: 'admin',
+    }),
   checkSetup: () => api.get<{ is_setup: boolean }>('/api/v1/admin/check_setup'),
   createAdmin: (username: string, password: string) =>
     api.post<Record<string, never>>('/api/v1/admin/admins', {
@@ -249,6 +256,10 @@ export const adminApi = {
   createInviteCode: (limitTimes: number, description?: string) =>
     api.post<{ invite_code: string }>('/api/v1/admin/invite_code', {
       body: { description, limit_times: limitTimes },
+      tokenKind: 'admin',
+    }),
+  deleteBook: (bookId: number) =>
+    api.delete<Record<string, never>>(`/api/v1/admin/books/${bookId}`, {
       tokenKind: 'admin',
     }),
   exportUser: (userId: number) =>
@@ -276,12 +287,27 @@ export const adminApi = {
       `/api/v1/admin/users/${userId}/revoke_tokens`,
       { tokenKind: 'admin' },
     ),
+  // 修正任意用户在某本书上的累计阅读时长（秒），语义同用户侧 PUT /reading/progress/:book_id
+  setReadingTime: (userId: number, bookId: number, seconds: number) =>
+    api.put<Record<string, never>>(
+      `/api/v1/admin/users/${userId}/reading_time`,
+      { body: { book_id: bookId, reading_time: seconds }, tokenKind: 'admin' },
+    ),
   settings: () =>
     api.get<{ invite_code_required: boolean }>('/api/v1/admin/settings', {
       tokenKind: 'admin',
     }),
   unban: (userId: number) =>
     api.post<Record<string, never>>(`/api/v1/admin/users/${userId}/unban`, {
+      tokenKind: 'admin',
+    }),
+  // 管理员编辑任意书籍元数据（与用户侧 PUT /books/:id 同一更新路径）
+  updateBook: (
+    bookId: number,
+    patch: { author?: string; is_public?: boolean; title?: string },
+  ) =>
+    api.put<Record<string, never>>(`/api/v1/admin/books/${bookId}`, {
+      body: patch,
       tokenKind: 'admin',
     }),
   updateSettings: (inviteCodeRequired: boolean) =>

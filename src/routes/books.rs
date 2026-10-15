@@ -727,35 +727,30 @@ async fn update_book(
     // 元数据更新与章节重切放同一事务，避免出现“规则已更新但章节未变”的中间态
     let mut tx = pool.begin().await?;
 
-    // 构建动态更新 SQL（使用 separated 自动处理逗号分隔）
-    let mut query_builder: sqlx::QueryBuilder<Sqlite> =
-        sqlx::QueryBuilder::new("UPDATE books SET ");
-    let mut sep = query_builder.separated(", ");
+    apply_book_field_updates(
+        &mut tx,
+        book_id,
+        req.title.as_deref(),
+        req.author.as_deref(),
+        req.is_public,
+        req.cover_path.as_deref(),
+    )
+    .await?;
 
-    if let Some(title) = &req.title {
-        sep.push("title = ").push_bind_unseparated(title.clone());
-    }
-    if let Some(author) = &req.author {
-        sep.push("author = ").push_bind_unseparated(author.clone());
-    }
-    if let Some(is_public) = req.is_public {
-        sep.push("is_public = ").push_bind_unseparated(is_public);
-    }
-    if let Some(cover_path) = &req.cover_path {
-        sep.push("cover_path = ")
-            .push_bind_unseparated(cover_path.clone());
-    }
     if pattern_changed {
         // 恢复默认时写 NULL
         let stored: Option<String> = match &pattern_update {
             PatternUpdate::Set(p) => Some(p.clone()),
             _ => None,
         };
-        sep.push("chapter_pattern = ").push_bind_unseparated(stored);
+        sqlx::query!(
+            "UPDATE books SET chapter_pattern = ? WHERE id = ?",
+            stored,
+            book_id
+        )
+        .execute(&mut *tx)
+        .await?;
     }
-
-    query_builder.push(" WHERE id = ").push_bind(book_id);
-    query_builder.build().execute(&mut *tx).await?;
 
     if let Some(chapters) = new_chapters {
         sqlx::query!("DELETE FROM chapters WHERE book_id = ?", book_id)
@@ -785,35 +780,82 @@ async fn delete_book(
     State(_config): State<Config>,
     Path(book_id): Path<i64>,
 ) -> Result<Json<ApiResponse<()>>, AppError> {
-    // 在事务内查询书籍信息并验证权限
+    // 在事务内删除 DB 行并校验权限：非 owner 报错时事务回滚、删除不生效
     let mut tx = pool.begin().await?;
-    let book = sqlx::query!("SELECT user_id, file_path FROM books WHERE id = ?", book_id)
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or_else(|| AppError::BookNotFound)?;
-
-    // 验证权限
-    if book.user_id != auth.user_id {
+    let (owner_id, file_path) = delete_book_cascade(&mut tx, book_id).await?;
+    if owner_id != auth.user_id {
         return Err(AppError::BookDeleteDenied);
     }
-
-    let file_path = book.file_path;
-
-    // 先删除数据库记录（外键约束会级联删除章节和阅读进度）
-    sqlx::query!("DELETE FROM books WHERE id = ?", book_id)
-        .execute(&mut *tx)
-        .await?;
     tx.commit().await?;
 
     // DB 删除成功后再删文件；文件删除失败只记日志，不影响响应。
     // 孤儿文件比"DB 记录存在但文件丢失"更安全。
-    if PathBuf::from(&file_path).exists() {
-        if let Err(e) = fs::remove_file(&file_path).await {
-            tracing::warn!(error = %e, file_path = %file_path, "Failed to delete book file");
-        }
-    }
+    remove_book_file(&file_path).await;
 
     Ok(Json(ApiResponse::<()>::message("Deleted successfully")))
+}
+
+/// 动态更新书籍元数据字段（仅 SET 提供的列；全为 None 时不执行 SQL）。
+/// 用户侧 PUT /books/:id 与管理员侧编辑共用同一更新路径
+pub(crate) async fn apply_book_field_updates(
+    tx: &mut sqlx::SqliteConnection,
+    book_id: i64,
+    title: Option<&str>,
+    author: Option<&str>,
+    is_public: Option<bool>,
+    cover_path: Option<&str>,
+) -> Result<(), AppError> {
+    if title.is_none() && author.is_none() && is_public.is_none() && cover_path.is_none() {
+        return Ok(());
+    }
+    // 构建动态更新 SQL（使用 separated 自动处理逗号分隔）
+    let mut query_builder: sqlx::QueryBuilder<Sqlite> =
+        sqlx::QueryBuilder::new("UPDATE books SET ");
+    let mut sep = query_builder.separated(", ");
+    if let Some(title) = title {
+        sep.push("title = ")
+            .push_bind_unseparated(title.to_string());
+    }
+    if let Some(author) = author {
+        sep.push("author = ")
+            .push_bind_unseparated(author.to_string());
+    }
+    if let Some(is_public) = is_public {
+        sep.push("is_public = ").push_bind_unseparated(is_public);
+    }
+    if let Some(cover_path) = cover_path {
+        sep.push("cover_path = ")
+            .push_bind_unseparated(cover_path.to_string());
+    }
+    query_builder.push(" WHERE id = ").push_bind(book_id);
+    query_builder.build().execute(tx).await?;
+    Ok(())
+}
+
+/// 事务内删除书籍 DB 行，返回 `(owner_user_id, 磁盘文件路径)`；外键 ON DELETE
+/// CASCADE 级联清理章节/标签关联/书签/批注/阅读进度/每日统计。
+/// 磁盘文件由调用方在事务提交成功后删除（孤儿文件比"DB 行存在但文件丢失"更安全）
+pub(crate) async fn delete_book_cascade(
+    tx: &mut sqlx::SqliteConnection,
+    book_id: i64,
+) -> Result<(i64, String), AppError> {
+    let book = sqlx::query!("SELECT user_id, file_path FROM books WHERE id = ?", book_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(AppError::BookNotFound)?;
+    sqlx::query!("DELETE FROM books WHERE id = ?", book_id)
+        .execute(&mut *tx)
+        .await?;
+    Ok((book.user_id, book.file_path))
+}
+
+/// 删除书籍磁盘文件（best-effort）：文件已不存在则跳过，失败仅记日志不影响响应
+pub(crate) async fn remove_book_file(file_path: &str) {
+    if PathBuf::from(file_path).exists()
+        && let Err(e) = fs::remove_file(file_path).await
+    {
+        tracing::warn!(error = %e, file_path, "Failed to delete book file");
+    }
 }
 
 /// 下载书籍原始文件
@@ -1196,7 +1238,7 @@ async fn get_random_public_books(
 }
 
 /// 转义 `SQLite` LIKE 的特殊字符（%, _, \），用 ESCAPE '\' 配合
-fn escape_like(input: &str) -> String {
+pub(crate) fn escape_like(input: &str) -> String {
     let mut out = String::with_capacity(input.len() + 2);
     for ch in input.chars() {
         match ch {

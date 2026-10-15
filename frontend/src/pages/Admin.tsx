@@ -15,6 +15,7 @@ import { adminApi, authApi, getToken, setToken } from '../api';
 import {
   AdminsTab,
   AuditLogsTab,
+  BooksTab,
   InviteCodesTab,
   SettingsTab,
   UsersTab,
@@ -24,7 +25,7 @@ import { Button, Input, Spinner } from '../components/ui';
 import { useI18n } from '../i18n';
 import { toastError } from '../utils/toast';
 
-type AdminTab = 'admins' | 'invite' | 'logs' | 'settings' | 'users';
+type AdminTab = 'admins' | 'books' | 'invite' | 'logs' | 'settings' | 'users';
 type Phase = 'checking' | 'dashboard' | 'login' | 'setup';
 
 const Admin: Component = () => {
@@ -169,6 +170,11 @@ const Admin: Component = () => {
             onClick={() => setTab('users')}
           />
           <TabButton
+            active={tab() === 'books'}
+            label={t('adminTabBooks')}
+            onClick={() => setTab('books')}
+          />
+          <TabButton
             active={tab() === 'admins'}
             label={t('adminTabAdmins')}
             onClick={() => setTab('admins')}
@@ -190,6 +196,9 @@ const Admin: Component = () => {
           </Show>
           <Show when={tab() === 'users'}>
             <UsersTab onUnauthorized={backToLogin} />
+          </Show>
+          <Show when={tab() === 'books'}>
+            <BooksTab onUnauthorized={backToLogin} />
           </Show>
           <Show when={tab() === 'admins'}>
             <AdminsTab onUnauthorized={backToLogin} />

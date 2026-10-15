@@ -27,6 +27,22 @@ export function formatDuration(
   return t('timeHoursMinutes', { h: hours, m: rest });
 }
 
+// Formats a byte count into a compact human-readable size (B/KB/MB/...).
+export function formatFileSize(bytes: number): string {
+  let value = bytes;
+  let unit = 'B';
+  for (const next of ['KB', 'MB', 'GB', 'TB'] as const) {
+    if (value < 1024) break;
+    value /= 1024;
+    unit = next;
+  }
+  const rounded =
+    unit === 'B' || value >= 100
+      ? Math.round(value)
+      : Math.round(value * 10) / 10;
+  return `${rounded} ${unit}`;
+}
+
 export function formatPercent(ratio: number): string {
   return (ratio * 100).toFixed(1);
 }

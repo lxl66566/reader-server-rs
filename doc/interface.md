@@ -69,6 +69,8 @@ type InviteCodeItem = { id: number; invite_code: string; limit_times: number; us
 type UserItem = { user_id: number; username: string; created_at: string; book_count: number; total_reading_time: number; status: 'active' | 'banned'; banned_at: string | null }
 type AdminItem = { admin_id: number; username: string; created_at: string }
 type AuditLogItem = { id: number; admin_id: number | null; admin_username: string | null; action: string; target_type: string | null; target_id: number | null; detail: string | null; created_at: string }
+type AdminBookItem = { book_id: number; title: string; author: string | null; owner_id: number; owner_username: string; is_public: boolean; format: BookFormat; total_chars: number; total_pages: number; file_size: number | null; created_at: string }
+// file_size：磁盘文件字节数；文件缺失（被外部清理）时为 null
 
 type Bookmark = {
   id: number; user_id: number; book_id: number;
@@ -129,6 +131,9 @@ type Annotation = {
 | POST | /api/v1/admin/users/import | Admin | FormData: file (zip，用户数据导出包), username?: string, password?: string | { user_id: number; username: string; book_count: number }；username/password 省略或留空时使用包内原值；包内无密码哈希（用户自助导出）时必须提供 password，否则 400；用户名冲突返回 400。请求体上限独立放宽为 4GB（可打包用户全部书籍），服务端流式落盘。同时兼容导入历史版本（无版本号）的用户自助导出包；txt 书籍按包内 chapter_pattern（缺省为内置规则）从原文件重提章节 |
 | GET | /api/v1/admin/admins | Admin | - | { admins: AdminItem[] } |
 | POST | /api/v1/admin/admins | Admin | Body: { username: string; password: string } | {} |
+| GET | /api/v1/admin/books?page=number&limit=number&q=string | Admin | q 非空时按 标题/作者/所有者用户名 模糊匹配（LIKE，缺省/空 = 不过滤） | { total: number; books: AdminBookItem[] }；按上传时间倒序 |
+| PUT | /api/v1/admin/books/:book_id | Admin | Body: { title?: string; author?: string; is_public?: boolean }（全部可选；至少一项才会更新，与用户侧 `PUT /books/:book_id` 同一更新路径） | {}；书不存在 404；编辑记录审计日志（action=update_book） |
+| DELETE | /api/v1/admin/books/:book_id | Admin | - | {}；级联清理与用户自删一致：磁盘文件、章节、标签关联、书签、批注、阅读进度、每日统计；书不存在 404；记录审计日志（action=delete_book，detail 含 owner_id） |
 | GET | /api/v1/admin/audit_logs?page=number&limit=number | Admin | - | { total: number; logs: AuditLogItem[] }；除管理操作外还记录登录事件（admin_setup / admin_login / admin_login_failed / user_login_failed），登录类事件的 admin_id/admin_username 可能为 null |
 | GET | /api/v1/admin/backup | Admin | - | application/zip 流，包含 reader.db（`VACUUM INTO` 生成的一致性快照）+ 整个 books 目录（不压缩），用于全局灾难恢复；任何文件缺失/读取失败会整体返回 500 而不是产出残缺备份 |
 
@@ -142,7 +147,7 @@ type Annotation = {
 > 标题兜底链：用户输入（trim 非空）> epub/pdf 内嵌元数据 > 上传文件名（去扩展名）；全部为空返回 400。
 > 章节切分正则（chapter_pattern）：每本书可设置独立的 txt 章节切分规则，空/缺省 = 内置默认规则（自动识别“第X章/序章/楔子”等标题行）。仅 txt 有意义：epub/pdf 上传携带非空值返回 400，PUT 设置非空值同样返回 400。服务端用 fancy-regex 编译，无法编译返回 400。修改后服务端从磁盘原文件重新切分章节（原文件丢失返回 404，章节数超上限返回 400）；与现值相同的请求不会触发重切。
 > 单本书章节数上限 50_000（防御构造性文本），超出返回 400。
-> 分页接口（`/books`、`/books/public`、`/books/search`、`/admin/audit_logs`）：`page` 小于 1 按第一页处理；`limit` 有上限（书籍列表 50、审计日志 100），超限自动钳制。
+> 分页接口（`/books`、`/books/public`、`/books/search`、`/admin/books`、`/admin/audit_logs`）：`page` 小于 1 按第一页处理；`limit` 有上限（书籍列表 50、管理端书籍列表 100、审计日志 100），超限自动钳制。
 
 | 方法 | URL | 权限 | 请求参数 | 响应 data |
 |---|---|---|---|---|
