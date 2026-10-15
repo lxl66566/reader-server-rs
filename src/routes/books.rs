@@ -171,91 +171,38 @@ pub(crate) fn clean_tags(tags: impl IntoIterator<Item = String>) -> Vec<String> 
         .collect()
 }
 
-async fn upload_book(
-    auth: AuthUser,
-    State(pool): State<Pool<Sqlite>>,
-    State(config): State<Config>,
-    mut multipart: Multipart,
-) -> Result<Json<ApiResponse<UploadBookResponse>>, AppError> {
-    // 解析multipart表单数据
-    let mut title = None;
-    let mut author = None;
-    let mut is_public = false;
-    let mut file_content = None;
-    // 上传文件名（用于标题兜底）
-    let mut file_name: Option<String> = None;
-    // 自定义章节切分正则（仅 txt 有意义）
-    let mut chapter_pattern: Option<String> = None;
+/// 上传解析的 CPU 密集产物：格式、统计、章节、元数据与内容哈希
+struct ParsedUpload {
+    format: BookFormat,
+    total_chars: i64,
+    total_pages: i64,
+    chapters: Vec<(String, i64)>,
+    title: String,
+    author: Option<String>,
+    content_hash: String,
+}
 
-    while let Some(field) = multipart
-        .next_field()
-        .await
-        .map_err(|e| map_multipart_err(&e, AppError::FormParseError))?
-    {
-        let name = field.name().unwrap_or("").to_string();
-
-        match name.as_str() {
-            "title" => {
-                title =
-                    Some(field.text().await.map_err(|e| {
-                        AppError::FieldReadError("title".to_string(), e.to_string())
-                    })?);
-            },
-            "author" => {
-                author =
-                    Some(field.text().await.map_err(|e| {
-                        AppError::FieldReadError("author".to_string(), e.to_string())
-                    })?);
-            },
-            "is_public" => {
-                let value = field.text().await.map_err(|e| {
-                    AppError::FieldReadError("is_public".to_string(), e.to_string())
-                })?;
-                is_public = value == "true" || value == "1";
-            },
-            "chapter_pattern" => {
-                chapter_pattern = Some(field.text().await.map_err(|e| {
-                    AppError::FieldReadError("chapter_pattern".to_string(), e.to_string())
-                })?);
-            },
-            "file" => {
-                file_name = field.file_name().map(str::to_string);
-                file_content = Some(field.bytes().await.map_err(|e| {
-                    map_multipart_err(&e, |s| AppError::FieldReadError("file".to_string(), s))
-                })?);
-            },
-            _ => {},
-        }
-    }
-
-    // 验证必要字段：title 允许缺省（后续按 元数据/文件名 兜底），文件必须存在且非空
-    let title = title.unwrap_or_default();
-    let file_content = file_content.ok_or_else(|| AppError::FileEmpty)?;
-
-    // 0 字节文件会成为“不可读之书”（/content 恒 400），直接拒绝
-    if file_content.is_empty() {
-        return Err(AppError::FileEmpty);
-    }
-
-    // 验证文件大小（从配置读取上限）
-    if file_content.len() > config.storage.max_file_size {
-        return Err(AppError::FileTooLarge);
-    }
-
+/// 同步解析上传文件：格式识别（全文 UTF-8 校验）、元数据派生、章节提取
+/// （逐行正则 / 全书 HTML 解析 / PDF 解析）与 sha256，均为 CPU 密集操作，
+/// 调用方必须置于 `spawn_blocking`（项目约定，参照 user_data.rs）
+fn parse_upload_sync(
+    content: &[u8],
+    title: String,
+    author: Option<String>,
+    chapter_pattern: Option<&str>,
+    file_name: Option<&str>,
+) -> Result<ParsedUpload, AppError> {
     // 检测格式（同时校验内容签名，拒绝未知/二进制格式）
-    let format = detect_format(&file_content)?;
+    let format = detect_format(content)?;
 
-    // 章节 regex 仅对 txt 有意义：归一化为 None（空 = 默认规则），非 txt 携带非空值拒绝
-    let chapter_pattern = chapter_pattern
-        .map(|p| p.trim().to_string())
-        .filter(|p| !p.is_empty());
+    // 章节 regex 仅对 txt 有意义：非 txt 携带非空值拒绝
     if chapter_pattern.is_some() && format != BookFormat::Txt {
         return Err(AppError::ChapterPatternNotSupported);
     }
-    validate_chapter_pattern(chapter_pattern.as_deref().unwrap_or(""))?;
+    validate_chapter_pattern(chapter_pattern.unwrap_or(""))?;
 
     // 根据格式派生元数据 + 提取章节
-    let (total_chars, total_pages, chapters, final_title, final_author): (
+    let (total_chars, total_pages, chapters, title, author): (
         i64,
         i64,
         Vec<(String, i64)>,
@@ -263,17 +210,15 @@ async fn upload_book(
         Option<String>,
     ) = match format {
         BookFormat::Txt => {
-            let text = std::str::from_utf8(&file_content)
-                .map_err(|_| AppError::FileInvalidUtf8)?
-                .to_string();
+            let text = std::str::from_utf8(content).map_err(|_| AppError::FileInvalidUtf8)?;
             #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
             let tc = text.chars().count() as i64;
-            let chs = extract_chapters(&text, chapter_pattern.as_deref())?;
+            let chs = extract_chapters(text, chapter_pattern)?;
             // txt 元数据全部来自用户输入
             (tc, 0i64, chs, title, author)
         },
         BookFormat::Epub => {
-            let parsed = parse_epub(&file_content)?;
+            let parsed = parse_epub(content)?;
             #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
             let tc = parsed.text_content.chars().count() as i64;
             // 章节：用 spine_index 作为 position（前端按 spine 渲染）
@@ -283,38 +228,35 @@ async fn upload_book(
                 .map(|c| (c.title.clone(), c.spine_index))
                 .collect();
             // EPUB 解析出的 title/author 优先级低于用户上传时的显式输入
-            let final_title = if title.trim().is_empty() {
+            let title = if title.trim().is_empty() {
                 parsed.title.unwrap_or(title)
             } else {
                 title
             };
-            let final_author = author.or(parsed.author);
-            (tc, 0i64, chs, final_title, final_author)
+            (tc, 0i64, chs, title, author.or(parsed.author))
         },
         BookFormat::Pdf => {
-            let parsed = parse_pdf(&file_content)?;
+            let parsed = parse_pdf(content)?;
             // PDF 不做章节提取（暂不解析 outline），前端用页码导航
-            let final_title = if title.trim().is_empty() {
+            let title = if title.trim().is_empty() {
                 parsed.title.unwrap_or(title)
             } else {
                 title
             };
-            let final_author = author.or(parsed.author);
             (
                 0i64,
                 parsed.num_pages,
                 Vec::new(),
-                final_title,
-                final_author,
+                title,
+                author.or(parsed.author),
             )
         },
     };
 
     // 标题兜底：用户输入（trim 非空）> 格式元数据（epub/pdf 已并入）
     // > 上传文件名（去扩展名）；全部为空则拒绝入库
-    let final_title = if final_title.trim().is_empty() {
+    let title = if title.trim().is_empty() {
         file_name
-            .as_deref()
             .and_then(|name| std::path::Path::new(name).file_stem())
             .and_then(std::ffi::OsStr::to_str)
             .map(str::trim)
@@ -322,23 +264,142 @@ async fn upload_book(
             .ok_or(AppError::TitleEmpty)?
             .to_string()
     } else {
-        final_title
+        title
     };
 
     // 文件 hash（用原文件字节，不依赖格式）
-    let content_hash = sha256_hex(&file_content);
+    Ok(ParsedUpload {
+        format,
+        total_chars,
+        total_pages,
+        chapters,
+        title,
+        author,
+        content_hash: sha256_hex(content),
+    })
+}
 
-    // 生成唯一文件名（保留原格式扩展名）
+async fn upload_book(
+    auth: AuthUser,
+    State(pool): State<Pool<Sqlite>>,
+    State(config): State<Config>,
+    mut multipart: Multipart,
+) -> Result<Json<ApiResponse<UploadBookResponse>>, AppError> {
+    let mut is_public = false;
+
+    // 文件流式落盘到临时路径（与 book_dir 同目录，rename 不会跨文件系统）：
+    // 接收侧不再把整个文件缓冲进内存，内存占用与上传体积无关
     let file_id = generate_uuid();
-    let file_path =
-        PathBuf::from(&config.storage.book_dir).join(format!("{file_id}.{}", format.ext()));
-    let file_path_string = file_path.to_string_lossy().into_owned();
+    let temp_path = PathBuf::from(&config.storage.book_dir).join(format!("{file_id}.part"));
 
-    // 先写入原文件
-    let mut file = fs::File::create(&file_path).await.map_err(AppError::Io)?;
-    file.write_all(&file_content).await.map_err(AppError::Io)?;
-    file.flush().await.map_err(AppError::Io)?;
-    drop(file); // 确保文件句柄关闭
+    // multipart 接收 → 阻塞解析 → rename 为正式文件名；无论成败，
+    // 收尾统一清理临时文件（成功路径文件已被 rename 走，删除为 NotFound noop）
+    let result: Result<(ParsedUpload, PathBuf, Option<String>), AppError> = async {
+        // 解析 multipart 表单字段；title 允许缺省（后续按 元数据/文件名 兜底）
+        let mut title = None;
+        let mut author = None;
+        // 上传文件名（用于标题兜底）
+        let mut file_name: Option<String> = None;
+        // 自定义章节切分正则（仅 txt 有意义）
+        let mut chapter_pattern: Option<String> = None;
+        // 0 字节文件会成为“不可读之书”（/content 恒 400），直接拒绝
+        let mut have_file = false;
+
+        while let Some(mut field) = multipart
+            .next_field()
+            .await
+            .map_err(|e| map_multipart_err(&e, AppError::FormParseError))?
+        {
+            let name = field.name().unwrap_or("").to_string();
+
+            match name.as_str() {
+                "title" => {
+                    title = Some(field.text().await.map_err(|e| {
+                        AppError::FieldReadError("title".to_string(), e.to_string())
+                    })?);
+                },
+                "author" => {
+                    author = Some(field.text().await.map_err(|e| {
+                        AppError::FieldReadError("author".to_string(), e.to_string())
+                    })?);
+                },
+                "is_public" => {
+                    let value = field.text().await.map_err(|e| {
+                        AppError::FieldReadError("is_public".to_string(), e.to_string())
+                    })?;
+                    is_public = value == "true" || value == "1";
+                },
+                "chapter_pattern" => {
+                    chapter_pattern = Some(field.text().await.map_err(|e| {
+                        AppError::FieldReadError("chapter_pattern".to_string(), e.to_string())
+                    })?);
+                },
+                "file" => {
+                    file_name = field.file_name().map(str::to_string);
+                    let mut file = fs::File::create(&temp_path).await.map_err(AppError::Io)?;
+                    let mut written: usize = 0;
+                    while let Some(chunk) = field.chunk().await.map_err(|e| {
+                        map_multipart_err(&e, |s| AppError::FieldReadError("file".to_string(), s))
+                    })? {
+                        written += chunk.len();
+                        // 边收边限大小：超限立即中止，不等整个文件落盘
+                        if written > config.storage.max_file_size {
+                            return Err(AppError::FileTooLarge);
+                        }
+                        file.write_all(&chunk).await.map_err(AppError::Io)?;
+                    }
+                    // flush 落盘后再交给阻塞线程，避免读到截断文件
+                    file.flush().await.map_err(AppError::Io)?;
+                    drop(file);
+                    have_file = written > 0;
+                },
+                _ => {},
+            }
+        }
+
+        if !have_file {
+            return Err(AppError::FileEmpty);
+        }
+
+        // 章节 regex 归一化：空 = 默认规则（入库为 NULL）
+        let pattern = chapter_pattern
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty());
+
+        // CPU 密集段（格式识别 / 解析 / 章节提取 / 哈希）整体移入阻塞线程池，
+        // 避免并发上传拖慢所有请求；阻塞内按需读入整文件，处理期峰值
+        // ≈ 1×文件大小 + 解析产物，受 max_file_size 约束（解析器均以 &[u8] 为输入，
+        // 流式化收益有限，暂不重构）
+        let parse_path = temp_path.clone();
+        // clone 一份小字符串交给 'static 闭包；pattern 本体随后入库
+        let pattern_for_task = pattern.clone();
+        let parsed = tokio::task::spawn_blocking(move || -> Result<ParsedUpload, AppError> {
+            let content = std::fs::read(&parse_path).map_err(AppError::Io)?;
+            parse_upload_sync(
+                &content,
+                title.unwrap_or_default(),
+                author,
+                pattern_for_task.as_deref(),
+                file_name.as_deref(),
+            )
+        })
+        .await
+        .map_err(|e| AppError::Internal(format!("upload parse task failed: {e}")))??;
+
+        // 解析成功：临时文件转为正式文件名（保留原格式扩展名）
+        let file_path = PathBuf::from(&config.storage.book_dir)
+            .join(format!("{file_id}.{}", parsed.format.ext()));
+        fs::rename(&temp_path, &file_path)
+            .await
+            .map_err(AppError::Io)?;
+
+        Ok((parsed, file_path, pattern))
+    }
+    .await;
+
+    let _ = fs::remove_file(&temp_path).await;
+    let (parsed, file_path, chapter_pattern) = result?;
+    let file_path_string = file_path.to_string_lossy().into_owned();
 
     // 将书籍信息和章节写入数据库；失败时清理已写入的文件，避免孤儿文件。
     // books + chapters + reading_progress 放进同一事务：任一步失败整体回滚，
@@ -351,14 +412,14 @@ async fn upload_book(
              total_pages, format, content_hash, chapter_pattern) VALUES (?, ?, ?, ?, ?, ?, ?, ?, \
              ?, ?)",
             auth.user_id,
-            final_title,
-            final_author,
+            parsed.title,
+            parsed.author,
             file_path_string,
             is_public,
-            total_chars,
-            total_pages,
-            format,
-            content_hash,
+            parsed.total_chars,
+            parsed.total_pages,
+            parsed.format,
+            parsed.content_hash,
             chapter_pattern,
         )
         .execute(&mut *tx)
@@ -366,12 +427,12 @@ async fn upload_book(
         .last_insert_rowid();
 
         // 批量插入章节（单次 roundtrip），通过 last_insert_rowid 推算所有 id
-        let chapter_responses = if chapters.is_empty() {
+        let chapter_responses = if parsed.chapters.is_empty() {
             Vec::new()
         } else {
             let mut chapter_qb =
                 sqlx::QueryBuilder::new("INSERT INTO chapters (book_id, title, position) ");
-            chapter_qb.push_values(chapters.iter(), |mut b, (title, position)| {
+            chapter_qb.push_values(parsed.chapters.iter(), |mut b, (title, position)| {
                 b.push_bind(book_id)
                     .push_bind(title.clone())
                     .push_bind(*position);
@@ -380,11 +441,12 @@ async fn upload_book(
 
             // SQLite 多行 INSERT 的 rowid 连续递增
             #[allow(clippy::cast_sign_loss, clippy::cast_possible_wrap)]
-            let count = chapters.len() as i64;
+            let count = parsed.chapters.len() as i64;
             let last_id = result.last_insert_rowid();
             let first_id = last_id - count + 1;
 
-            chapters
+            parsed
+                .chapters
                 .into_iter()
                 .zip(first_id..=last_id)
                 .map(|((title, position), chapter_id)| ChapterResponse {
@@ -422,11 +484,11 @@ async fn upload_book(
     // 返回响应
     let response = UploadBookResponse {
         book_id,
-        title: final_title,
-        author: final_author,
-        format,
-        total_chars,
-        total_pages,
+        title: parsed.title,
+        author: parsed.author,
+        format: parsed.format,
+        total_chars: parsed.total_chars,
+        total_pages: parsed.total_pages,
         chapters: chapter_responses,
     };
 
@@ -639,12 +701,20 @@ async fn update_book(
             tracing::error!(book_id, file_path = %book.file_path, "book file missing on disk");
             return Err(AppError::BookNotFound);
         }
-        let text = fs::read_to_string(&path).await?;
         let pattern = match &pattern_update {
-            PatternUpdate::Set(p) => Some(p.as_str()),
+            PatternUpdate::Set(p) => Some(p.clone()),
             _ => None,
         };
-        Some(extract_chapters(&text, pattern)?)
+        // 读全文 + 逐行正则切分为 CPU 密集操作，移入阻塞线程池（参照 user_data.rs）；
+        // 上传时已保证 UTF-8，此处失败即文件被外部篡改，沿用 Io 错误语义
+        Some(
+            tokio::task::spawn_blocking(move || -> Result<Vec<(String, i64)>, AppError> {
+                let text = std::fs::read_to_string(&path).map_err(AppError::Io)?;
+                extract_chapters(&text, pattern.as_deref())
+            })
+            .await
+            .map_err(|e| AppError::Internal(format!("chapter re-split task failed: {e}")))??,
+        )
     } else {
         None
     };
@@ -1339,8 +1409,51 @@ async fn set_book_tags(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_content_disposition, read_char_slice};
-    use crate::{models::BookFormat, utils::utf8::UTF8_CHUNK_SIZE};
+    use super::{build_content_disposition, parse_upload_sync, read_char_slice};
+    use crate::{error::AppError, models::BookFormat, utils::utf8::UTF8_CHUNK_SIZE};
+
+    #[test]
+    fn parse_upload_sync_txt_metadata_and_hash() {
+        let content = "第一章 开始\n内容\n第二章 结尾\n";
+        let parsed = parse_upload_sync(
+            content.as_bytes(),
+            String::new(),
+            None,
+            None,
+            Some("我的书.txt"),
+        )
+        .unwrap();
+        assert_eq!(parsed.format, BookFormat::Txt);
+        assert_eq!(parsed.chapters.len(), 2);
+        // 文件名兜底：去扩展名
+        assert_eq!(parsed.title, "我的书");
+        assert_eq!(
+            parsed.total_chars,
+            i64::try_from(content.chars().count()).unwrap()
+        );
+        assert_eq!(
+            parsed.content_hash,
+            crate::utils::sha256_hex(content.as_bytes())
+        );
+    }
+
+    #[test]
+    fn parse_upload_sync_title_empty_rejected() {
+        // 用户输入与文件名兜底均为空：TitleEmpty
+        assert!(matches!(
+            parse_upload_sync("内容\n".as_bytes(), "  ".into(), None, None, None).err(),
+            Some(AppError::TitleEmpty)
+        ));
+    }
+
+    #[test]
+    fn parse_upload_sync_pattern_checked_before_parse() {
+        // 非 txt 携带非空 chapter_pattern：在解析前即拒绝
+        assert!(matches!(
+            parse_upload_sync(b"%PDF-1.4\n", "t".into(), None, Some("^第.章"), None).err(),
+            Some(AppError::ChapterPatternNotSupported)
+        ));
+    }
 
     #[test]
     fn content_disposition_ascii_fallback_keeps_printable() {

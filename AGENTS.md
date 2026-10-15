@@ -23,6 +23,7 @@ reader-server-rs 是一个读书服务端软件，用户可以向服务器上传
 
 - [接口文档](doc/interface.md)，接口变更必须同步到其中
 - 修改 db schema 后需要做一下迁移
+- CPU 密集型任务（文件解析、哈希、压缩、密码哈希等）必须置于 `spawn_blocking`，不得在 async 上下文同步执行
 - 前端代码必须同时考虑 PC 与移动端页面、i18n、light/dark theme、屏幕比例的兼容性
 - 你可以使用 solid-icons 图标库、solid-toast 提示库、kobalte 辅助组件开发
 - TS 侧的动态 import 仅允许字符串字面量路径（如路由/模态框的 `lazy(() => import('./Xxx'))`，类型完全静态可推导）；禁止变量路径的动态 import（类型会退化为 `Promise<any>`）

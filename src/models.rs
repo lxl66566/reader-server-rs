@@ -413,6 +413,7 @@ pub struct UpdateBookRequest {
     pub title: Option<String>,
     pub author: Option<String>,
     pub is_public: Option<bool>,
+    /// 封面路径：字段保留但封面功能有意暂不实现（无上传/展示链路），见 review.md
     pub cover_path: Option<String>,
     #[serde(default)]
     pub chapter_pattern: PatternUpdate,

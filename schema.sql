@@ -91,6 +91,7 @@ CREATE TABLE
     -- 原文件存储路径（绝对或相对 book_dir）
     file_path TEXT NOT NULL,
     is_public BOOLEAN NOT NULL DEFAULT 0,
+    -- 封面路径：字段保留但封面功能有意暂不实现（无上传/展示链路），见 review.md
     cover_path TEXT,
     -- 章节内容总字数（chars().count()）；txt/epub 在上传时计算，pdf 为 0
     total_chars INTEGER NOT NULL DEFAULT 0,
