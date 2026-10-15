@@ -415,7 +415,6 @@ const Stats: Component = () => {
             bookId={id}
             color={goldenColor(id)}
             name={editingName()}
-            today={todayKey()}
             onClose={() => {
               setEditingBookId(null);
             }}
@@ -424,6 +423,7 @@ const Stats: Component = () => {
               void refetch();
               void dailyActions.refetch();
             }}
+            today={todayKey()}
           />
         )}
       </Show>

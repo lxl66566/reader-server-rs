@@ -37,12 +37,12 @@ interface DailyEditModalProps {
   color: string;
   /** 书名（当前区间无记录的深链场景下调用方回退为 #id） */
   name: string;
-  /** 今天（用户时区 YYYY-MM-DD）：新增日期选择器的上限 */
-  today: string;
   /** 关闭（不保存） */
   onClose: () => void;
   /** 保存成功后由父级刷新统计资源（stats 与 daily） */
   onSaved: () => void;
+  /** 今天（用户时区 YYYY-MM-DD）：新增日期选择器的上限 */
+  today: string;
 }
 
 const DailyEditModal: Component<DailyEditModalProps> = props => {
