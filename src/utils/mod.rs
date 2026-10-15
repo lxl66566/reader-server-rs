@@ -1,4 +1,5 @@
 use rand::RngExt;
+use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 pub mod argon2;
@@ -7,6 +8,12 @@ pub mod zip;
 
 // 密码哈希固定在专用线程执行（见 argon2.rs），此处重导出保持调用点写法不变
 pub use argon2::{hash_password, timing_guard_verify, verify_password};
+
+/// 导出 / 备份 / 导入等重负载任务的全局并发上限。
+/// zip 打包（spawn_blocking 全量搬运书籍文件）与 VACUUM INTO 会放大
+/// CPU / 内存 / IO，超出上限的请求排队等待而非拒绝，
+/// 防止并发刷接口造成资源放大
+pub static HEAVY_TASK_LIMIT: Semaphore = Semaphore::const_new(2);
 
 /// 简易 `ETag` 哈希：用 FNV-1a 64bit，足够短、足够快、无外部依赖
 /// 返回带双引号的 `ETag` 字符串（符合 RFC 7232）

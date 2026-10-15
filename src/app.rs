@@ -11,7 +11,10 @@ use tower_governor::{
     GovernorLayer, governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor,
 };
 use tower_http::{
-    compression::CompressionLayer,
+    compression::{
+        CompressionLayer, DefaultPredicate,
+        predicate::{NotForContentType, Predicate},
+    },
     cors::{Any, CorsLayer},
     trace::TraceLayer,
 };
@@ -125,13 +128,24 @@ pub fn create_app(db: Pool<Sqlite>, config: &Config) -> Router {
         // 健康检查（不受限流影响，方便监控探活）
         .route("/health", get(|| async { "ok" }))
         .merge(api)
-        // 其它中间件
-        .layer(
-            ServiceBuilder::new()
-                .layer(CompressionLayer::new())
-                .layer(TraceLayer::new_for_http().make_span_with(make_trace_span))
-                .layer(cors),
-        )
+    // 其它中间件
+    .layer(
+        ServiceBuilder::new()
+            .layer(compression_layer())
+            .layer(TraceLayer::new_for_http().make_span_with(make_trace_span))
+            .layer(cors),
+    )
+}
+
+/// 压缩层：在 DefaultPredicate 之上排除 zip / epub / pdf——
+/// 它们本身已是压缩/不可压缩格式，下载响应再 gzip 一遍纯属白耗 CPU
+/// （书籍 /export、/admin/backup 的 zip 尤甚），体积还可能不降反增
+fn compression_layer() -> CompressionLayer<impl Predicate> {
+    let predicate = DefaultPredicate::new()
+        .and(NotForContentType::const_new("application/zip"))
+        .and(NotForContentType::const_new("application/epub+zip"))
+        .and(NotForContentType::const_new("application/pdf"));
+    CompressionLayer::new().compress_when(predicate)
 }
 
 /// WS 鉴权 token 走 query 参数（浏览器 WebSocket 无法设置请求头），

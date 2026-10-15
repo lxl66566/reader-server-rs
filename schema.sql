@@ -265,3 +265,5 @@ CREATE INDEX IF NOT EXISTS idx_annotations_user_book ON annotations (user_id, bo
 CREATE INDEX IF NOT EXISTS idx_daily_reading_user_date ON daily_reading_stats (user_id, date);
 CREATE INDEX IF NOT EXISTS idx_daily_reading_book ON daily_reading_stats (book_id);
 CREATE INDEX IF NOT EXISTS idx_book_tags_tag_id ON book_tags (tag_id);
+-- 审计日志按 created_at 倒序分页
+CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs (created_at);

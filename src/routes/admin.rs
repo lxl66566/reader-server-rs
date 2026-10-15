@@ -317,6 +317,12 @@ async fn export_user(
     State(pool): State<Pool<Sqlite>>,
     Path(user_id): Path<i64>,
 ) -> Result<Response, AppError> {
+    // 重负载任务：进入全局并发排队（zip 打包全量书籍文件）
+    let _permit = crate::utils::HEAVY_TASK_LIMIT
+        .acquire()
+        .await
+        .expect("heavy task semaphore is never closed");
+
     log_audit(
         &pool,
         &admin,
@@ -345,6 +351,12 @@ async fn import_user(
     State(config): State<Config>,
     mut multipart: Multipart,
 ) -> Result<Json<ApiResponse<ImportUserResponse>>, AppError> {
+    // 重负载任务：进入全局并发排队（zip 流式落盘 + 全量恢复）
+    let _permit = crate::utils::HEAVY_TASK_LIMIT
+        .acquire()
+        .await
+        .expect("heavy task semaphore is never closed");
+
     let zip_path = std::env::temp_dir().join(format!("reader-import-{}.zip", generate_uuid()));
 
     let result = async {
@@ -723,6 +735,12 @@ async fn backup_global(
     State(pool): State<Pool<Sqlite>>,
     State(config): State<Config>,
 ) -> Result<Response, AppError> {
+    // 重负载任务：进入全局并发排队（VACUUM INTO + zip 打包全部书籍）
+    let _permit = crate::utils::HEAVY_TASK_LIMIT
+        .acquire()
+        .await
+        .expect("heavy task semaphore is never closed");
+
     log_audit(&pool, &admin, "backup_global", None, None, None).await;
 
     // 用 VACUUM INTO 生成数据库一致性快照（SQLite 在线备份）：

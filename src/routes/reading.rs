@@ -15,9 +15,8 @@ use crate::{
     error::{ApiResponse, AppError},
     limits::DAILY_STATS_MAX_ENTRIES,
     models::{
-        ChineseConversion, DailyBookReadingStat, DailyReadingStatsResponse,
-        DailyStatEntriesResponse, DailyStatEntry, PaginationMode, ReadingSettings,
-        ReadingStatsResponse, ReadingTheme, SetReadingTimeRequest, SetReadingTimeResponse,
+        DailyBookReadingStat, DailyReadingStatsResponse, DailyStatEntriesResponse, DailyStatEntry,
+        ReadingSettings, ReadingStatsResponse, SetReadingTimeRequest, SetReadingTimeResponse,
         UpdateDailyStatsRequest, UpdateReadingSettingsRequest,
     },
     utils::make_etag,
@@ -132,38 +131,18 @@ async fn get_reading_settings(
     let settings = if let Some(settings) = settings {
         settings
     } else {
-        // 创建默认设置。IGNORE 命中（并发下已被其他请求创建）时 last_insert_rowid
-        // 返回的是过期 rowid，必须重查 id
+        // 创建默认设置后回读该行：schema 默认值是唯一事实来源，
+        // 避免此处再硬编码一份默认值、与 schema 漂移后首响应用旧值
         sqlx::query!(
             "INSERT OR IGNORE INTO reading_settings (user_id) VALUES (?)",
             auth.user_id
         )
         .execute(&pool)
         .await?;
-        let id = sqlx::query_scalar!(
-            "SELECT id FROM reading_settings WHERE user_id = ?",
-            auth.user_id
-        )
-        .fetch_one(&pool)
-        .await?;
-
-        ReadingSettings {
-            id,
-            user_id: auth.user_id,
-            font_size: 18,
-            background_color: "#F5F5DC".to_string(),
-            text_color: "#000000".to_string(),
-            line_height: 1.5,
-            letter_spacing: 0.05,
-            paragraph_spacing: 1.2,
-            reading_width: 40,
-            text_indent: 2.0,
-            chinese_conversion: ChineseConversion::None,
-            timezone: "UTC".to_string(),
-            font_family: "serif".to_string(),
-            theme: ReadingTheme::System,
-            pagination_mode: PaginationMode::Scroll,
-        }
+        sqlx::query_as::<_, ReadingSettings>("SELECT * FROM reading_settings WHERE user_id = ?")
+            .bind(auth.user_id)
+            .fetch_one(&pool)
+            .await?
     };
 
     // 序列化 payload，基于其内容生成 ETag；客户端 If-None-Match 命中则返回 304

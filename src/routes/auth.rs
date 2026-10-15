@@ -379,6 +379,12 @@ async fn export_data(
     auth: AuthUser,
     State(pool): State<Pool<Sqlite>>,
 ) -> Result<Response, AppError> {
+    // 重负载任务：进入全局并发排队（zip 打包全量书籍文件）
+    let _permit = crate::utils::HEAVY_TASK_LIMIT
+        .acquire()
+        .await
+        .expect("heavy task semaphore is never closed");
+
     let (zip_path, filename) = crate::user_data::build_user_export_zip(
         &pool,
         auth.user_id,

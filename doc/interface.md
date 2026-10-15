@@ -132,6 +132,8 @@ type Annotation = {
 | GET | /api/v1/admin/audit_logs?page=number&limit=number | Admin | - | { total: number; logs: AuditLogItem[] }；除管理操作外还记录登录事件（admin_setup / admin_login / admin_login_failed / user_login_failed），登录类事件的 admin_id/admin_username 可能为 null |
 | GET | /api/v1/admin/backup | Admin | - | application/zip 流，包含 reader.db（`VACUUM INTO` 生成的一致性快照）+ 整个 books 目录（不压缩），用于全局灾难恢复；任何文件缺失/读取失败会整体返回 500 而不是产出残缺备份 |
 
+> `/auth/export`、`/admin/users/:user_id/export`、`/admin/users/import`、`/admin/backup` 属重负载接口，服务端设有全局并发上限（2），超出上限的请求排队等待而非拒绝。
+
 ### 书籍管理
 
 > 文件大小上限默认 50MB（可在 config.json 的 `storage.max_file_size` 调整）；超过请求体上限返回 413，超过文件大小校验返回 400；0 字节文件返回 400。
