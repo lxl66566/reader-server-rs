@@ -14,6 +14,7 @@ import {
   createResource,
   createSignal,
   For,
+  onCleanup,
   Show,
   type Component,
 } from 'solid-js';
@@ -38,6 +39,7 @@ import { fetchBookList } from '../offline/api';
 import { useAuth } from '../stores/auth';
 
 const PAGE_SIZE = 20;
+const SEARCH_DEBOUNCE_MS = 300;
 
 // 排序/格式选项的 i18n 映射（Record 键序须为自然序）
 const SORT_LABELS: Record<BookSortKey, DictKey> = {
@@ -91,6 +93,11 @@ const Library: Component = () => {
   const [uploadOpen, setUploadOpen] = createSignal(false);
   const [trashOpen, setTrashOpen] = createSignal(false);
 
+  let searchTimer: ReturnType<typeof setTimeout> | undefined;
+  onCleanup(() => {
+    clearTimeout(searchTimer);
+  });
+
   const [myBooks, { refetch: refetchMyBooks }] = createResource(
     () => [page(), activeQuery(), scope(), sort(), order(), format()] as const,
     key => {
@@ -117,10 +124,23 @@ const Library: Component = () => {
     p => bookApi.listPublic(p, PAGE_SIZE),
   );
 
-  const submitSearch = (event: KeyboardEvent) => {
-    if (event.key !== 'Enter') return;
+  // 提交搜索：立即生效并重置分页
+  const commitQuery = () => {
+    clearTimeout(searchTimer);
     setActiveQuery(searchQuery().trim());
     setPage(1);
+  };
+
+  // 动态搜索：输入停顿 SEARCH_DEBOUNCE_MS 后自动提交，避免每个按键都发请求
+  const onSearchInput = (value: string) => {
+    setSearchQuery(value);
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(commitQuery, SEARCH_DEBOUNCE_MS);
+  };
+
+  const submitSearch = (event: KeyboardEvent) => {
+    if (event.key !== 'Enter') return;
+    commitQuery();
   };
 
   // 切换排序键时方向复位为降序（语义上最自然的默认），并回到第一页
@@ -162,7 +182,7 @@ const Library: Component = () => {
           <VsSearch class="text-muted absolute top-1/2 left-2.5 size-4 -translate-y-1/2" />
           <Input
             class="w-full pl-8"
-            onInput={setSearchQuery}
+            onInput={onSearchInput}
             onKeyDown={submitSearch}
             placeholder={t('searchPlaceholder')}
             value={searchQuery()}
