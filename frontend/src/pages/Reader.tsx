@@ -210,11 +210,14 @@ const ReaderBody = (props: ReaderBodyProps) => {
     }
   };
 
+  // 批注变更的统一入口：本端写入与 ws 推送都走这里刷新列表并通知 reader 重绘
+  const bumpAnnotations = () => {
+    setAnnotationsVersion(v => v + 1);
+    void refetchAnnotations();
+  };
+
   const session = createReadingSession(props.book.book_id, {
-    onAnnotationChanged: () => {
-      setAnnotationsVersion(v => v + 1);
-      void refetchAnnotations();
-    },
+    onAnnotationChanged: bumpAnnotations,
     onBookmarkChanged: () => void refetchBookmarks(),
     onGaveUp: () => setWsGaveUp(true),
     onHeartbeatAck: (_synced, updated) => {
@@ -334,6 +337,7 @@ const ReaderBody = (props: ReaderBodyProps) => {
               book={props.book}
               deepLink={deepLink()}
               initialLocator={initialLocator}
+              onAnnotationsChanged={bumpAnnotations}
               onPosition={onPosition}
               onTapCenter={() => setChromeVisible(v => !v)}
               registerNavigator={nav => {
@@ -361,6 +365,7 @@ const ReaderBody = (props: ReaderBodyProps) => {
               book={props.book}
               deepLink={deepLink()}
               initialLocator={initialLocator}
+              onAnnotationsChanged={bumpAnnotations}
               onPosition={onPosition}
               onTapCenter={() => setChromeVisible(v => !v)}
               registerNavigator={nav => {

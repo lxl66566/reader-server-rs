@@ -1,6 +1,8 @@
 // TXT reader: chunked loading + scroll / paginate modes + touch gestures.
+// 划词高亮：选区→locator 编码→批注写入；已存高亮按章节窗口裁剪后分段渲染。
 
 import { useNavigate } from '@solidjs/router';
+import { VsEdit, VsNote, VsSymbolColor, VsTrash } from 'solid-icons/vs';
 import {
   createEffect,
   createMemo,
@@ -12,17 +14,20 @@ import {
   Show,
   untrack,
 } from 'solid-js';
+import toast from 'solid-toast';
 
-import { bookApi } from '../api';
+import { bookApi, markerApi } from '../api';
+import type { Annotation } from '../api/types';
 import { LoadErrorPanel } from '../components/LoadErrorPanel';
 import { useI18n } from '../i18n';
-import { offlineContentLoader } from '../offline/api';
+import { fetchAnnotations, offlineContentLoader } from '../offline/api';
 import { fontFamilyCss, useSettings } from '../stores/settings';
 import {
   convertChinese,
   convertDirection,
   loadChineseConverter,
 } from '../utils/opencc';
+import { FloatingCard, type PopAnchor } from './FloatingCard';
 import {
   animateScrollBy,
   bindScrollEdges,
@@ -32,9 +37,20 @@ import {
   useStripFlip,
   useVerticalTapZones,
 } from './gestures';
+import {
+  charOffsetInParagraph,
+  encodeHighlightLocator,
+  highlightsInWindow,
+  paragraphElementOf,
+  parseHighlightLocator,
+  segmentParagraph,
+  splitParagraphs,
+  type HighlightRange,
+  type SplitParagraph,
+} from './highlights';
 import { measureCharsPerPage, type PageTypography } from './measure';
+import { NoteEditorModal } from './NoteEditor';
 import PageHint from './PageHint';
-import { stripParagraphIndent } from './paragraph';
 import {
   chapterBounds,
   chapterIndexAt,
@@ -43,6 +59,7 @@ import {
   extendWindowUp,
   jumpWindow,
   type ScrollWindow,
+  sliceByCodePoints,
   TextSource,
   TXT_CHUNK_SIZE,
 } from './textSource';
@@ -55,21 +72,32 @@ const MEASURE_DEBOUNCE_MS = 200;
 // 的回读容差必须与此对齐，否则跳转落定后首个 onScroll 会把位置读回
 // 上一段，每次开合页面进度回退一段并写回服务端
 const JUMP_TOP_INSET_PX = 12;
+// selectionchange 的去抖间隔：拖选过程中浮层跟随太抖
+const SELECTION_DEBOUNCE_MS = 160;
+// 摘录上限（码点）：远小于后端 8KB 文本上限
+const EXCERPT_MAX_CODE_POINTS = 600;
 
-interface Paragraph {
-  offset: number;
-  text: string;
+/** 已捕获的正文选区：全书字符区间 + 浮层锚点 */
+interface CapturedSelection {
+  anchor: PopAnchor;
+  end: number;
+  start: number;
 }
 
-/** 滚动锚点：视口顶部段落的字符位置与其相对段首的滚动偏移 */
 interface ScrollAnchor {
   delta: number;
   pos: number;
 }
 
 interface ViewProps {
+  annotations: () => readonly Annotation[];
   book: FormatReaderProps['book'];
   displayText: (text: string) => string;
+  /** tap 命中已有高亮时返回 true（由点按处理打开操作层） */
+  interceptMarkTap: (
+    target: EventTarget | null,
+    event?: MouseEvent | TouchEvent,
+  ) => boolean;
   onTapCenter: () => void;
   readingWidth: () => number;
   source: TextSource;
@@ -77,6 +105,7 @@ interface ViewProps {
 }
 
 const TxtReader = (props: FormatReaderProps) => {
+  const { t } = useI18n();
   const { settings } = useSettings();
   // 断网时 chunk 读取回退 IDB 缓存；在线读取写穿缓存
   const source = new TextSource(
@@ -92,6 +121,36 @@ const TxtReader = (props: FormatReaderProps) => {
   const [scrollJump, setScrollJump] = createSignal<null | number>(null);
   // 滚动模式跳转的完成回调：ScrollView 执行完 jumpTo 后 resolve
   let scrollJumpDone: ((ok: boolean) => void) | null = null;
+
+  // --- 划词高亮状态 ---
+  let rootEl: HTMLDivElement | undefined;
+  const [annotations, setAnnotations] = createSignal<readonly Annotation[]>([]);
+  // annotationsVersion 由 shell 在本端写入与 ws 推送时 bump
+  createEffect(() => {
+    props.annotationsVersion();
+    void fetchAnnotations(props.book.book_id)
+      .then(setAnnotations)
+      .catch((err: unknown) => {
+        console.error('Failed to load annotations', err);
+      });
+  });
+
+  const [selection, setSelection] = createSignal<CapturedSelection | null>(
+    null,
+  );
+  // 点按已有高亮弹出的操作层
+  const [markMenu, setMarkMenu] = createSignal<null | {
+    anchor: PopAnchor;
+    annotation: Annotation;
+  }>(null);
+  // 划词写笔记 / 编辑已有笔记的弹窗数据
+  const [noteDraft, setNoteDraft] = createSignal<null | {
+    end: number;
+    excerpt: string;
+    start: number;
+  }>(null);
+  const [editTarget, setEditTarget] = createSignal<Annotation | null>(null);
+  const [busy, setBusy] = createSignal(false);
 
   function initialOffset(): number {
     const fromLocator = Number.parseInt(props.initialLocator ?? '', 10);
@@ -151,6 +210,9 @@ const TxtReader = (props: FormatReaderProps) => {
   props.registerNavigator({
     jumpToChapter: position => jumpToOffset(position),
     jumpToLocator: locator => {
+      // 高亮 locator 落到选区起点；书签/进度仍为纯数字偏移
+      const highlight = parseHighlightLocator(locator);
+      if (highlight) return jumpToOffset(highlight.start);
       const at = Number.parseInt(locator, 10);
       return Number.isFinite(at) ? jumpToOffset(at) : Promise.resolve(false);
     },
@@ -187,42 +249,363 @@ const TxtReader = (props: FormatReaderProps) => {
     if (ready()) reportPosition(offset());
   });
 
+  // 位置变化（滚动/翻页）后浮层锚点失效：统一收起
+  createEffect(() => {
+    void offset();
+    setSelection(null);
+    setMarkMenu(null);
+  });
+
+  const closePopovers = () => {
+    setSelection(null);
+    setMarkMenu(null);
+  };
+
+  // --- 选区捕获：selectionchange 里校验「正文内的非空选区」并换算偏移 ---
+  let selectionTimer: ReturnType<typeof setTimeout> | undefined;
+  onMount(() => {
+    const onSelectionChange = () => {
+      clearTimeout(selectionTimer);
+      selectionTimer = setTimeout(() => {
+        // 笔记弹窗打开期间的选择变化（输入框光标等）不参与划词
+        if (noteDraft() || editTarget()) return;
+        captureSelection();
+      }, SELECTION_DEBOUNCE_MS);
+    };
+    document.addEventListener('selectionchange', onSelectionChange);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      clearSelection();
+      setMarkMenu(null);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    onCleanup(() => {
+      clearTimeout(selectionTimer);
+      document.removeEventListener('selectionchange', onSelectionChange);
+      window.removeEventListener('keydown', onKeyDown);
+    });
+  });
+
+  const clearSelection = () => {
+    window.getSelection()?.removeAllRanges();
+    setSelection(null);
+  };
+
+  // DOM 选区边界（段落元素 + 文本节点 + 码元偏移）→ 全书码点偏移
+  const domOffsetToBook = (
+    p: HTMLElement,
+    node: Node,
+    unitOffset: number,
+  ): null | number => {
+    const pos = Number(p.dataset.pos);
+    const indent = Number(p.dataset.indent);
+    const within = charOffsetInParagraph(p, node, unitOffset);
+    if (!Number.isFinite(pos) || !Number.isFinite(indent) || within === null) {
+      return null;
+    }
+    return pos + indent + within;
+  };
+
+  const popAnchorOf = (rect: DOMRect): null | PopAnchor => {
+    const rootRect = rootEl?.getBoundingClientRect();
+    if (!rootRect) return null;
+    return {
+      bottom: rect.bottom - rootRect.top,
+      left: rect.left + rect.width / 2 - rootRect.left,
+      top: rect.top - rootRect.top,
+    };
+  };
+
+  const captureSelection = () => {
+    const sel = document.getSelection();
+    const range =
+      sel && sel.rangeCount > 0 && !sel.isCollapsed ? sel.getRangeAt(0) : null;
+    if (!range) {
+      setSelection(null);
+      return;
+    }
+    // 出现新选区时收起高亮操作层（两者互斥）
+    setMarkMenu(null);
+    const startP = paragraphElementOf(range.startContainer);
+    const endP = paragraphElementOf(range.endContainer);
+    const start = startP
+      ? domOffsetToBook(startP, range.startContainer, range.startOffset)
+      : null;
+    const end = endP
+      ? domOffsetToBook(endP, range.endContainer, range.endOffset)
+      : null;
+    if (start === null || end === null || end <= start) {
+      setSelection(null);
+      return;
+    }
+    const anchor = popAnchorOf(range.getBoundingClientRect());
+    if (!anchor) {
+      setSelection(null);
+      return;
+    }
+    setSelection({ anchor, end, start });
+  };
+
+  // tap 命中已有高亮：打开操作层（两条手势路径都经此消费 tap）
+  const interceptMarkTap = (
+    target: EventTarget | null,
+    _event?: MouseEvent | TouchEvent,
+  ): boolean => {
+    const mark =
+      target instanceof Element
+        ? target.closest<HTMLElement>('mark[data-annotation-id]')
+        : null;
+    if (!mark) return false;
+    const id = Number(mark.dataset.annotationId);
+    const annotation = annotations().find(a => a.id === id);
+    if (!annotation) return false;
+    clearSelection();
+    const anchor = popAnchorOf(mark.getBoundingClientRect());
+    if (anchor) setMarkMenu({ anchor, annotation });
+    return true;
+  };
+
+  // --- 批注写入 ---
+  const percentAt = (at: number): number =>
+    props.book.total_chars > 0
+      ? Math.min(1, Math.max(0, at / props.book.total_chars))
+      : 0;
+
+  const locatorFor = (start: number, end: number): string =>
+    encodeHighlightLocator({
+      chapter: chapterIndexAt(props.book.chapters, start),
+      end,
+      start,
+    });
+
+  // 摘录取原文（渲染的是简繁转换后文本，但转换近似等长，摘录仅供阅读）
+  const excerptOf = (sel: { end: number; start: number }): string =>
+    sliceByCodePoints(
+      source.slice(sel.start, sel.end),
+      0,
+      EXCERPT_MAX_CODE_POINTS,
+    );
+
+  const createHighlight = async (): Promise<void> => {
+    const sel = selection();
+    if (!sel || busy()) return;
+    setBusy(true);
+    try {
+      await markerApi.addAnnotation(props.book.book_id, {
+        end_locator: String(sel.end),
+        end_percent: percentAt(sel.end),
+        excerpt: excerptOf(sel) || undefined,
+        kind: 'highlight',
+        start_locator: locatorFor(sel.start, sel.end),
+        start_percent: percentAt(sel.start),
+      });
+      props.onAnnotationsChanged?.();
+      toast.success(t('readerHighlightAdded'));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t('errorGeneric'));
+    } finally {
+      setBusy(false);
+      clearSelection();
+    }
+  };
+
+  const createNote = async (content: string): Promise<void> => {
+    const sel = noteDraft();
+    if (!sel || busy()) return;
+    setBusy(true);
+    try {
+      await markerApi.addAnnotation(props.book.book_id, {
+        content,
+        end_locator: String(sel.end),
+        end_percent: percentAt(sel.end),
+        excerpt: sel.excerpt || undefined,
+        kind: 'note',
+        start_locator: locatorFor(sel.start, sel.end),
+        start_percent: percentAt(sel.start),
+      });
+      setNoteDraft(null);
+      props.onAnnotationsChanged?.();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t('errorGeneric'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveNoteEdit = async (content: string): Promise<void> => {
+    const target = editTarget();
+    if (!target || busy()) return;
+    setBusy(true);
+    try {
+      await markerApi.updateAnnotation(props.book.book_id, target.id, {
+        content,
+      });
+      setEditTarget(null);
+      setMarkMenu(null);
+      props.onAnnotationsChanged?.();
+      toast.success(t('readerNoteSaved'));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t('errorGeneric'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removeHighlight = async (id: number): Promise<void> => {
+    if (busy()) return;
+    setBusy(true);
+    try {
+      await markerApi.removeAnnotation(props.book.book_id, id);
+      setMarkMenu(null);
+      props.onAnnotationsChanged?.();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t('errorGeneric'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const viewProps = (): ViewProps => ({
+    annotations,
     book: props.book,
     displayText,
-    onTapCenter: props.onTapCenter,
+    interceptMarkTap,
+    onTapCenter: () => {
+      closePopovers();
+      props.onTapCenter();
+    },
     readingWidth: () => settings.reading_width,
     source,
     typography,
   });
 
   return (
-    <Show
-      fallback={
-        <ScrollView
+    <div class="relative h-full w-full" ref={rootEl}>
+      <Show
+        fallback={
+          <ScrollView
+            {...viewProps()}
+            initialOffset={offset()}
+            jumpRequest={scrollJump}
+            onInit={() => setReady(true)}
+            onJumpHandled={jump => {
+              const done = scrollJumpDone;
+              scrollJumpDone = null;
+              setScrollJump(null); // 清空信号：相同目标的再次跳转仍可触发
+              // jump 链上已 settle（enqueueJump 保证不 reject），直接桥接结果
+              void jump.then(done ?? (() => undefined));
+            }}
+            onOffsetChange={setOffset}
+          />
+        }
+        when={settings.pagination_mode === 'paginate'}
+      >
+        <PaginateView
           {...viewProps()}
-          initialOffset={offset()}
-          jumpRequest={scrollJump}
+          offset={offset()}
           onInit={() => setReady(true)}
-          onJumpHandled={jump => {
-            const done = scrollJumpDone;
-            scrollJumpDone = null;
-            setScrollJump(null); // 清空信号：相同目标的再次跳转仍可触发
-            // jump 链上已 settle（enqueueJump 保证不 reject），直接桥接结果
-            void jump.then(done ?? (() => undefined));
-          }}
           onOffsetChange={setOffset}
         />
-      }
-      when={settings.pagination_mode === 'paginate'}
-    >
-      <PaginateView
-        {...viewProps()}
-        offset={offset()}
-        onInit={() => setReady(true)}
-        onOffsetChange={setOffset}
+      </Show>
+
+      {/* 划词操作浮层 */}
+      <Show when={selection()}>
+        {sel => (
+          <FloatingCard anchor={sel().anchor}>
+            <div class="flex items-center">
+              <button
+                class="hover:bg-page flex cursor-pointer items-center gap-1 rounded px-2 py-1.5 text-xs"
+                onClick={() => void createHighlight()}
+                onMouseDown={event => {
+                  event.preventDefault();
+                }}
+                type="button"
+              >
+                <VsSymbolColor class="size-4" />
+                {t('readerHighlight')}
+              </button>
+              <button
+                class="hover:bg-page flex cursor-pointer items-center gap-1 rounded px-2 py-1.5 text-xs"
+                onClick={() => {
+                  const current = sel();
+                  setNoteDraft({
+                    end: current.end,
+                    excerpt: excerptOf(current),
+                    start: current.start,
+                  });
+                  clearSelection();
+                }}
+                onMouseDown={event => {
+                  event.preventDefault();
+                }}
+                type="button"
+              >
+                <VsNote class="size-4" />
+                {t('addNote')}
+              </button>
+            </div>
+          </FloatingCard>
+        )}
+      </Show>
+
+      {/* 已有高亮的操作层 */}
+      <Show when={markMenu()}>
+        {menu => (
+          <FloatingCard anchor={menu().anchor}>
+            <Show when={menu().annotation.excerpt}>
+              <p class="border-edge text-muted mb-1.5 max-w-64 truncate border-l-2 pl-1.5 text-xs">
+                {menu().annotation.excerpt}
+              </p>
+            </Show>
+            <Show when={menu().annotation.content}>
+              <p class="mb-1.5 max-w-64 text-sm">{menu().annotation.content}</p>
+            </Show>
+            <div class="flex items-center justify-end gap-1">
+              <button
+                class="hover:bg-page flex cursor-pointer items-center gap-1 rounded px-2 py-1.5 text-xs"
+                onClick={() => {
+                  setEditTarget(menu().annotation);
+                }}
+                type="button"
+              >
+                <VsEdit class="size-3.5" />
+                {menu().annotation.content === null
+                  ? t('addNote')
+                  : t('readerEditNote')}
+              </button>
+              <button
+                class="flex cursor-pointer items-center gap-1 rounded px-2 py-1.5 text-xs text-red-700 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950"
+                disabled={busy()}
+                onClick={() => void removeHighlight(menu().annotation.id)}
+                type="button"
+              >
+                <VsTrash class="size-3.5" />
+                {t('delete')}
+              </button>
+            </div>
+          </FloatingCard>
+        )}
+      </Show>
+
+      <NoteEditorModal
+        busy={busy()}
+        initial=""
+        onClose={() => setNoteDraft(null)}
+        onSave={content => void createNote(content)}
+        open={noteDraft() !== null}
+        title={t('addNote')}
       />
-    </Show>
+      <NoteEditorModal
+        busy={busy()}
+        initial={editTarget()?.content ?? ''}
+        onClose={() => setEditTarget(null)}
+        onSave={content => void saveNoteEdit(content)}
+        open={editTarget() !== null}
+        title={
+          editTarget()?.content === null ? t('addNote') : t('readerEditNote')
+        }
+      />
+    </div>
   );
 };
 
@@ -241,25 +624,47 @@ function contentStyle(typo: PageTypography): Record<string, string> {
   };
 }
 
-const PageContent = (props: { text: string; typo: PageTypography }) => {
-  const paragraphs = createMemo(() =>
-    props.text.split('\n').map(stripParagraphIndent),
-  );
+// 段落正文：按高亮分段渲染，高亮段包 mark（点按与重绘都靠 data-annotation-id）
+// 简繁转换为近似等长的字级映射，展示偏移直接对齐原文偏移（段首缩进由 indent 补偿）
+const ParagraphText = (props: {
+  displayText: (text: string) => string;
+  highlights: () => HighlightRange[];
+  paragraph: SplitParagraph;
+}) => {
+  const display = () => props.displayText(props.paragraph.text);
+  const segments = createMemo(() => {
+    const start = props.paragraph.offset + props.paragraph.indent;
+    return segmentParagraph(
+      start,
+      start + codePointLength(display()),
+      props.highlights(),
+    );
+  });
   return (
-    <Index each={paragraphs()}>
-      {para => (
-        <p
-          style={{
-            margin: `0 0 ${props.typo.paragraphSpacing}em`,
-            'text-indent': `${props.typo.textIndent}em`,
-            'white-space': 'pre-wrap',
-            'word-break': 'break-word',
-          }}
-        >
-          {para() || ' '}
-        </p>
-      )}
-    </Index>
+    <Show fallback=" " when={segments().length > 0}>
+      <Index each={segments()}>
+        {seg => {
+          const text = () => {
+            const start = props.paragraph.offset + props.paragraph.indent;
+            return sliceByCodePoints(
+              display(),
+              seg().start - start,
+              seg().end - start,
+            );
+          };
+          return (
+            <Show fallback={text()} when={seg().highlighted}>
+              <mark
+                class="bg-highlight rounded-[2px] text-inherit"
+                data-annotation-id={seg().id}
+              >
+                {text()}
+              </mark>
+            </Show>
+          );
+        }}
+      </Index>
+    </Show>
   );
 };
 
@@ -268,7 +673,8 @@ const PageContent = (props: { text: string; typo: PageTypography }) => {
 const ChunkParagraphs = (props: {
   chunkEls: Map<number, HTMLElement[]>;
   displayText: (text: string) => string;
-  getParagraphs: (index: number) => Paragraph[];
+  getParagraphs: (index: number) => SplitParagraph[];
+  highlights: () => HighlightRange[];
   index: number;
   typo: () => PageTypography;
 }) => {
@@ -284,6 +690,7 @@ const ChunkParagraphs = (props: {
     <Index each={paragraphs()}>
       {para => (
         <p
+          data-indent={para().indent}
           data-pos={para().offset}
           ref={el => {
             els.push(el);
@@ -301,7 +708,11 @@ const ChunkParagraphs = (props: {
             'word-break': 'break-word',
           }}
         >
-          {props.displayText(para().text) || ' '}
+          <ParagraphText
+            displayText={props.displayText}
+            highlights={props.highlights}
+            paragraph={para()}
+          />
         </p>
       )}
     </Index>
@@ -439,22 +850,23 @@ const PaginateView = (
     return Math.min(totalPages() - 1, Math.floor(props.offset / cpp));
   });
 
-  // text of prev / current / next page
-  const pageTexts = createMemo((): string[] => {
+  // prev / current / next page 的原文切片（起点偏移供段落定位用）
+  const pageSlices = createMemo((): { raw: string; start: number }[] => {
     const cpp = charsPerPage();
     version(); // recompute after loads
-    if (cpp <= 0) return ['', '', ''];
+    if (cpp <= 0) return [];
     const current = page();
     return [-1, 0, 1].map(delta => {
       const p = current + delta;
-      if (p < 0 || p >= totalPages()) return '';
+      if (p < 0 || p >= totalPages()) return { raw: '', start: 0 };
       const start = p * cpp;
-      return props.displayText(
-        props.source.slice(
+      return {
+        raw: props.source.slice(
           start,
           Math.min(start + cpp, props.book.total_chars),
         ),
-      );
+        start,
+      };
     });
   });
 
@@ -479,6 +891,7 @@ const PaginateView = (
     bounds: () => container?.getBoundingClientRect() ?? null,
     canNext,
     canPrev,
+    interceptTap: props.interceptMarkTap,
     onCommit: dir => {
       const cpp = charsPerPage();
       const next = page() + dir;
@@ -514,13 +927,24 @@ const PaginateView = (
           onTransitionEnd={gestures.onTransitionEnd}
           style={{ transform: gestures.stripTransform(), width: '300%' }}
         >
-          <Index each={pageTexts()}>
-            {text => (
+          <Index each={pageSlices()}>
+            {slice => (
               <div
                 class="h-full w-1/3 overflow-hidden px-4"
                 style={contentStyle(typo())}
               >
-                <PageContent text={text()} typo={typo()} />
+                <PageContent
+                  displayText={props.displayText}
+                  highlights={() =>
+                    highlightsInWindow(
+                      props.annotations(),
+                      0,
+                      props.book.total_chars,
+                    )
+                  }
+                  page={slice()}
+                  typo={typo()}
+                />
               </div>
             )}
           </Index>
@@ -545,6 +969,40 @@ const PaginateView = (
         </div>
       </Show>
     </div>
+  );
+};
+
+// 单页正文：原文按 '\n' 拆段（保留原文偏移），逐段转换展示并叠加高亮分段
+const PageContent = (props: {
+  displayText: (text: string) => string;
+  highlights: () => HighlightRange[];
+  page: { raw: string; start: number };
+  typo: PageTypography;
+}) => {
+  const paragraphs = createMemo(() =>
+    splitParagraphs(props.page.raw, props.page.start),
+  );
+  return (
+    <Index each={paragraphs()}>
+      {para => (
+        <p
+          data-indent={para().indent}
+          data-pos={para().offset}
+          style={{
+            margin: `0 0 ${props.typo.paragraphSpacing}em`,
+            'text-indent': `${props.typo.textIndent}em`,
+            'white-space': 'pre-wrap',
+            'word-break': 'break-word',
+          }}
+        >
+          <ParagraphText
+            displayText={props.displayText}
+            highlights={props.highlights}
+            paragraph={para()}
+          />
+        </p>
+      )}
+    </Index>
   );
 };
 
@@ -581,6 +1039,12 @@ const ScrollView = (
     };
   };
 
+  // 当前章节内可渲染的高亮（章节区间 → 窗口裁剪）
+  const chapterHighlights = createMemo(() => {
+    const range = chapterRange();
+    return highlightsInWindow(props.annotations(), range.start, range.end);
+  });
+
   // 已加载的 chunk 窗口 [start, end)：双向滑动且有上限（不越出当前章），
   // 避免 DOM 无界增长
   const firstChunk = Math.floor(props.initialOffset / TXT_CHUNK_SIZE);
@@ -606,9 +1070,12 @@ const ScrollView = (
 
   // 缓存每个 chunk 的段落拆分结果：文本未变时复用同一数组引用，
   // 配合 <For> 的 key 让未变化的 chunk 完全不重渲染
-  const paraCache = new Map<number, { paras: Paragraph[]; text: string }>();
+  const paraCache = new Map<
+    number,
+    { paras: SplitParagraph[]; text: string }
+  >();
 
-  const chunkParagraphs = (index: number): Paragraph[] => {
+  const chunkParagraphs = (index: number): SplitParagraph[] => {
     version(); // chunk 数据到达后重算
     const start = index * TXT_CHUNK_SIZE;
     const text = props.source.slice(
@@ -618,16 +1085,10 @@ const ScrollView = (
     const cached = paraCache.get(index);
     if (cached && cached.text === text) return cached.paras;
     const { end: chapterEnd, start: chapterStart } = chapterRange();
-    const paras: Paragraph[] = [];
-    let at = start;
-    for (const piece of text.split('\n')) {
-      // offset 按原文推进，text 剥离段首字符缩进（CSS 已接管缩进）；
-      // 章节首尾的 chunk 会跨章，范围外的段落直接丢弃
-      if (at >= chapterStart && at < chapterEnd) {
-        paras.push({ offset: at, text: stripParagraphIndent(piece) });
-      }
-      at += codePointLength(piece) + 1; // +1 for the newline；码点口径与服务端偏移一致
-    }
+    // 章节首尾的 chunk 会跨章，范围外的段落直接丢弃
+    const paras = splitParagraphs(text, start).filter(
+      para => para.offset >= chapterStart && para.offset < chapterEnd,
+    );
     paraCache.set(index, { paras, text });
     return paras;
   };
@@ -936,6 +1397,7 @@ const ScrollView = (
   // 点击分区（触摸走 touchend，桌面走 click 门控）：上/下 1/3 章内滚动
   const tapZones = useVerticalTapZones({
     bounds: () => container?.getBoundingClientRect() ?? null,
+    interceptTap: props.interceptMarkTap,
     onPageScroll: pageScroll,
     onTapCenter: props.onTapCenter,
   });
@@ -980,6 +1442,7 @@ const ScrollView = (
                   chunkEls={chunkEls}
                   displayText={props.displayText}
                   getParagraphs={chunkParagraphs}
+                  highlights={chapterHighlights}
                   index={index}
                   typo={typo}
                 />

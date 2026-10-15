@@ -7,6 +7,7 @@ import {
   VsBookmark,
   VsChecklist,
   VsCloudDownload,
+  VsEdit,
   VsListOrdered,
   VsNote,
   VsSettingsGear,
@@ -22,6 +23,7 @@ import { Button, EmptyState, Input, Modal, Spinner } from '../components/ui';
 import { useI18n } from '../i18n';
 import type { DictKey } from '../i18n/zh-CN';
 import { formatPercent } from '../utils/format';
+import { NoteEditorModal } from './NoteEditor';
 import OfflinePanel from './OfflinePanel';
 import type { ReaderNavigator } from './types';
 
@@ -421,6 +423,8 @@ const AnnotationsPanel = (panelProps: {
   const { t } = useI18n();
   const [draft, setDraft] = createSignal('');
   const [busy, setBusy] = createSignal(false);
+  // 正在编辑笔记的批注（有 content 的条目才可编辑）
+  const [editing, setEditing] = createSignal<Annotation | null>(null);
 
   const add = async () => {
     const pos = panelProps.currentPosition();
@@ -443,6 +447,24 @@ const AnnotationsPanel = (panelProps: {
     }
   };
 
+  const saveEdit = async (content: string) => {
+    const target = editing();
+    if (!target || busy()) return;
+    setBusy(true);
+    try {
+      await markerApi.updateAnnotation(panelProps.book.book_id, target.id, {
+        content,
+      });
+      setEditing(null);
+      panelProps.refetch();
+      toast.success(t('readerNoteSaved'));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t('errorGeneric'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const remove = async (id: number) => {
     try {
       await markerApi.removeAnnotation(panelProps.book.book_id, id);
@@ -453,91 +475,111 @@ const AnnotationsPanel = (panelProps: {
   };
 
   return (
-    <Modal
-      onClose={panelProps.onClose}
-      open={panelProps.open}
-      title={t('readerAnnotations')}
-    >
-      <div class="mb-3">
-        <textarea
-          class="border-edge bg-surface text-ink focus:border-accent h-20 w-full rounded border px-3 py-2 text-sm outline-none"
-          onInput={event => setDraft(event.currentTarget.value)}
-          placeholder={t('readerNotePlaceholder')}
-          value={draft()}
-        />
-        <div class="mt-2 flex justify-end">
-          <Button
-            disabled={busy() || !draft().trim()}
-            onClick={() => void add()}
-          >
-            {t('readerSaveNote')}
-          </Button>
-        </div>
-      </div>
-      <Show
-        fallback={
-          <ListPending
-            errored={() => panelProps.annotations.error !== undefined}
-            onRetry={panelProps.refetch}
-          />
-        }
-        when={panelProps.annotations()}
+    <>
+      <Modal
+        onClose={panelProps.onClose}
+        open={panelProps.open}
+        title={t('readerAnnotations')}
       >
-        {list => (
-          <Show
-            fallback={<EmptyState text={t('noAnnotations')} />}
-            when={list().length > 0}
-          >
-            <ul class="max-h-[50vh] space-y-2 overflow-y-auto">
-              <For each={list()}>
-                {annotation => (
-                  <li class="border-edge rounded border p-2">
-                    <div class="text-muted flex items-center justify-between text-xs">
-                      <span>
-                        {annotation.kind === 'note'
-                          ? t('kindNote')
-                          : t('kindHighlight')}
-                        {' · '}
-                        {t('progressPercent', {
-                          percent: formatPercent(annotation.start_percent),
-                        })}
-                      </span>
-                      <span class="flex gap-2">
+        <div class="mb-3">
+          <textarea
+            class="border-edge bg-surface text-ink focus:border-accent h-20 w-full rounded border px-3 py-2 text-sm outline-none"
+            onInput={event => setDraft(event.currentTarget.value)}
+            placeholder={t('readerNotePlaceholder')}
+            value={draft()}
+          />
+          <div class="mt-2 flex justify-end">
+            <Button
+              disabled={busy() || !draft().trim()}
+              onClick={() => void add()}
+            >
+              {t('readerSaveNote')}
+            </Button>
+          </div>
+        </div>
+        <Show
+          fallback={
+            <ListPending
+              errored={() => panelProps.annotations.error !== undefined}
+              onRetry={panelProps.refetch}
+            />
+          }
+          when={panelProps.annotations()}
+        >
+          {list => (
+            <Show
+              fallback={<EmptyState text={t('noAnnotations')} />}
+              when={list().length > 0}
+            >
+              <ul class="max-h-[50vh] space-y-2 overflow-y-auto">
+                <For each={list()}>
+                  {annotation => (
+                    <li class="border-edge rounded border p-2">
+                      <div class="text-muted flex items-center justify-between text-xs">
+                        <span>
+                          {annotation.kind === 'note'
+                            ? t('kindNote')
+                            : t('kindHighlight')}
+                          {' · '}
+                          {t('progressPercent', {
+                            percent: formatPercent(annotation.start_percent),
+                          })}
+                        </span>
+                        <span class="flex gap-2">
+                          <button
+                            class="hover:text-ink cursor-pointer"
+                            onClick={() => {
+                              panelProps.onJump(annotation.start_locator);
+                            }}
+                            type="button"
+                          >
+                            <VsChecklist class="size-4" />
+                          </button>
+                          <button
+                            aria-label={t('delete')}
+                            class="cursor-pointer hover:text-red-700 dark:hover:text-red-400"
+                            onClick={() => void remove(annotation.id)}
+                            type="button"
+                          >
+                            {t('delete')}
+                          </button>
+                        </span>
+                      </div>
+                      <Show when={annotation.excerpt}>
+                        <p class="border-edge text-muted mt-1 border-l-2 pl-2 text-xs">
+                          {annotation.excerpt}
+                        </p>
+                      </Show>
+                      <Show when={annotation.content}>
+                        <p class="mt-1 text-sm">{annotation.content}</p>
+                      </Show>
+                      <Show when={annotation.content !== null}>
                         <button
-                          class="hover:text-ink cursor-pointer"
-                          onClick={() => {
-                            panelProps.onJump(annotation.start_locator);
-                          }}
+                          class="text-muted hover:text-ink mt-1 flex cursor-pointer items-center gap-1 text-xs"
+                          onClick={() => setEditing(annotation)}
                           type="button"
                         >
-                          <VsChecklist class="size-4" />
+                          <VsEdit class="size-3.5" />
+                          {t('readerEditNote')}
                         </button>
-                        <button
-                          aria-label={t('delete')}
-                          class="cursor-pointer hover:text-red-700 dark:hover:text-red-400"
-                          onClick={() => void remove(annotation.id)}
-                          type="button"
-                        >
-                          {t('delete')}
-                        </button>
-                      </span>
-                    </div>
-                    <Show when={annotation.excerpt}>
-                      <p class="border-edge text-muted mt-1 border-l-2 pl-2 text-xs">
-                        {annotation.excerpt}
-                      </p>
-                    </Show>
-                    <Show when={annotation.content}>
-                      <p class="mt-1 text-sm">{annotation.content}</p>
-                    </Show>
-                  </li>
-                )}
-              </For>
-            </ul>
-          </Show>
-        )}
-      </Show>
-    </Modal>
+                      </Show>
+                    </li>
+                  )}
+                </For>
+              </ul>
+            </Show>
+          )}
+        </Show>
+      </Modal>
+      <NoteEditorModal
+        busy={busy()}
+        initial={editing()?.content ?? ''}
+        onClose={() => setEditing(null)}
+        onSave={content => void saveEdit(content)}
+        open={editing() !== null}
+        title={t('readerEditNote')}
+      />
+    </>
   );
 };
 

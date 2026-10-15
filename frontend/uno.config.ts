@@ -17,6 +17,7 @@ const config: UserConfig<Theme> = defineConfig({
     colors: {
       accent: 'var(--color-accent)',
       edge: 'var(--color-border)',
+      highlight: 'var(--color-highlight)',
       ink: 'var(--color-fg)',
       muted: 'var(--color-muted)',
       // named "page" not "base": a color named "base" makes the Tailwind

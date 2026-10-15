@@ -7,6 +7,8 @@
   --color-muted: #8a857b;
   --color-border: #e2ded4;
   --color-accent: #7a6c52;
+  /* 划词高亮的 amber 底色（半透明，叠加在自定义背景色上） */
+  --color-highlight: rgb(217 119 6 / 0.26);
   color-scheme: light;
 }
 
@@ -18,6 +20,7 @@
   --color-muted: #9b8c70;
   --color-border: #e3d8bf;
   --color-accent: #8a6d3f;
+  --color-highlight: rgb(180 110 10 / 0.26);
   color-scheme: light;
 }
 
@@ -29,6 +32,7 @@
   --color-muted: #7d786c;
   --color-border: #38362f;
   --color-accent: #b09c72;
+  --color-highlight: rgb(234 179 8 / 0.3);
   color-scheme: dark;
 }
 

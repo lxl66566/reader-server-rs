@@ -174,10 +174,13 @@ const en: Dict = {
   readerBookmarkAdded: 'Bookmark added',
   readerBookmarks: 'Bookmarks',
   readerDeleteConfirm: 'Delete this item?',
+  readerEditNote: 'Edit note',
   readerExit: 'Exit',
   readerHighlight: 'Highlight',
+  readerHighlightAdded: 'Highlight added',
   readerNextChapter: 'Next chapter',
   readerNotePlaceholder: 'Write your thoughts…',
+  readerNoteSaved: 'Note saved',
   readerPageOf: '{page} / {total}',
   readerPrevChapter: 'Previous chapter',
   readerReconnectFailed:

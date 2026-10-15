@@ -20,6 +20,8 @@ export interface FormatReaderProps {
    * 供心跳的活跃检测使用
    */
   onActivity?: () => void;
+  /** 批注在本端写入（创建/删除/编辑）后回调：shell 刷新列表并广播重绘信号 */
+  onAnnotationsChanged?: () => void;
   /** report position changes for heartbeat and the chrome percent display */
   onPosition: (locator: string, percent: number) => void;
   /** tap on the middle zone of the page: shell toggles the chrome bars */

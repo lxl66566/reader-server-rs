@@ -26,6 +26,13 @@ export interface StripFlipOptions {
   bounds: () => null | TapBounds;
   canNext: () => boolean;
   canPrev: () => boolean;
+  /**
+   * 命中返回 true 表示 tap 已被消费（如点在划词高亮上），不再走分区翻页/chrome。
+   * event 供坐标命中判定（epub 高亮是 svg 覆盖层，target 可能不是高亮元素）
+   */
+  interceptTap?:
+    | ((target: EventTarget | null, event?: MouseEvent | TouchEvent) => boolean)
+    | undefined;
   /** 动画结束、位移归零后提交翻页（dir 为本次动画方向） */
   onCommit: (dir: -1 | 1) => void;
   onTapCenter: () => void;
@@ -40,6 +47,13 @@ export interface TapBounds {
 export interface TapSwipeOptions {
   /** tap 区域划分的基准范围（容器在视口中的实际位置） */
   bounds: () => null | TapBounds;
+  /**
+   * 命中返回 true 表示 tap 已被消费（如点在划词高亮上），不再走翻页/chrome。
+   * event 供坐标命中判定（epub 高亮是 svg 覆盖层，target 可能不是高亮元素）
+   */
+  interceptTap?:
+    | ((target: EventTarget | null, event?: MouseEvent | TouchEvent) => boolean)
+    | undefined;
   onFlip: (dir: -1 | 1) => void;
   onTapCenter: () => void;
   /** 是否翻页模式：滚动模式下 swipe 不翻页、tap 一律唤出 chrome */
@@ -158,7 +172,10 @@ export function attachTapSwipeGestures(
       }
     }
     if (isTap(Date.now() - t, deltaX, deltaY)) {
+      // 触摸路径 preventDefault 会吞掉合成 click：消费型 tap（如点在高亮上）
+      // 必须在这里就地处理，不能依赖元素的 click 监听
       event.preventDefault();
+      if (options.interceptTap?.(event.target, event)) return;
       handleTap(t0.clientX);
     }
   };
@@ -182,6 +199,7 @@ export function attachTapSwipeGestures(
   };
 
   const onClick = (event: MouseEvent) => {
+    if (options.interceptTap?.(event.target, event)) return;
     handleTap(event.clientX);
   };
 
@@ -247,6 +265,13 @@ const EDITABLE_TAGS = new Set(['INPUT', 'SELECT', 'TEXTAREA']);
 export interface VerticalTapZoneOptions {
   /** 滚动容器在视口中的纵向范围；不可得时 tap 一律按中区处理 */
   bounds: () => null | { bottom: number; top: number };
+  /**
+   * 命中返回 true 表示 tap 已被消费（如点在划词高亮上），不再走分区翻页/chrome。
+   * event 供坐标命中判定（epub 高亮是 svg 覆盖层，target 可能不是高亮元素）
+   */
+  interceptTap?:
+    | ((target: EventTarget | null, event?: MouseEvent | TouchEvent) => boolean)
+    | undefined;
   /** 上/下区触发的章内翻页 */
   onPageScroll: (dir: -1 | 1) => void;
   onTapCenter: () => void;
@@ -397,6 +422,7 @@ export function useStripFlip(options: StripFlipOptions) {
       return;
     }
     if (Date.now() - current.startT > TAP_MAX_MS) return;
+    if (options.interceptTap?.(event.target, event)) return;
     const endX = event.changedTouches[0]?.clientX ?? current.startX;
     handleTap(endX);
   };
@@ -411,6 +437,7 @@ export function useStripFlip(options: StripFlipOptions) {
 
   // desktop: click zones + keyboard
   const onClick = (event: MouseEvent) => {
+    if (options.interceptTap?.(event.target, event)) return;
     handleTap(event.clientX);
   };
 
@@ -476,6 +503,7 @@ export function useVerticalTapZones(options: VerticalTapZoneOptions) {
     const { t, x, y } = mouse;
     mouse = null;
     if (!isTap(Date.now() - t, event.clientX - x, event.clientY - y)) return;
+    if (options.interceptTap?.(event.target, event)) return;
     dispatch(event.clientY);
   };
 
@@ -492,6 +520,7 @@ export function useVerticalTapZones(options: VerticalTapZoneOptions) {
     if (!t0) return;
     if (!isTap(Date.now() - t, t0.clientX - x, t0.clientY - y)) return;
     event.preventDefault();
+    if (options.interceptTap?.(event.target, event)) return;
     dispatch(t0.clientY);
   };
 
