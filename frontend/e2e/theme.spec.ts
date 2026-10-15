@@ -9,9 +9,15 @@ import {
   updateSettings,
 } from './helpers';
 
-/** 定位导航栏主题按钮（title 为 zh-CN 词典文案） */
-function themeButton(page: Page, title: string) {
-  return page.locator('nav').getByTitle(title);
+/** 按钮只显示当前模式，选择项在点击展开的菜单里 */
+async function selectTheme(page: Page, label: string) {
+  await themeButton(page).click();
+  await page.getByRole('menuitemradio', { name: label }).click();
+}
+
+/** 定位导航栏主题按钮（aria-label 为 zh-CN 词典文案） */
+function themeButton(page: Page) {
+  return page.locator('nav').getByRole('button', { name: '主题' });
 }
 
 test('游客可切换主题并本地持久化，跟随系统', async ({ page }) => {
@@ -19,7 +25,7 @@ test('游客可切换主题并本地持久化，跟随系统', async ({ page }) 
   // 默认跟随系统：Playwright colorScheme=light
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
 
-  await themeButton(page, '深色').click();
+  await selectTheme(page, '深色');
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   expect(await page.evaluate(() => localStorage.getItem('rs_theme'))).toBe(
     'dark',
@@ -30,7 +36,7 @@ test('游客可切换主题并本地持久化，跟随系统', async ({ page }) 
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
 
   // 跟随系统：随 prefers-color-scheme 实时翻转
-  await themeButton(page, '跟随系统').click();
+  await selectTheme(page, '跟随系统');
   await page.emulateMedia({ colorScheme: 'dark' });
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   await page.emulateMedia({ colorScheme: 'light' });
@@ -53,7 +59,7 @@ test('登录后以服务端主题为准，切换同步服务端，退出保留�
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'sepia');
 
   // 登录态切换：UI 立即生效，防抖后同步服务端
-  await themeButton(page, '深色').click();
+  await selectTheme(page, '深色');
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   await expect
     .poll(

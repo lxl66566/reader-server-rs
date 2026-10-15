@@ -516,19 +516,25 @@ const StackedChart: Component<StackedChartProps> = props => {
                       <span
                         class="inline-block size-2 shrink-0 rounded-full"
                         style={{
-                          'background-color': dimmed() ? '#9ca3af' : r.color,
+                          'background-color': dimmed()
+                            ? 'var(--color-muted)'
+                            : r.color,
                         }}
                       />
                       {/* min-w-0 让书名可收缩，时长不被挤换行 */}
                       <span
                         class="min-w-0 truncate"
-                        style={{ color: dimmed() ? '#9ca3af' : r.color }}
+                        style={{
+                          color: dimmed() ? 'var(--color-muted)' : r.color,
+                        }}
                       >
                         {r.name}
                       </span>
                       <span
                         class="ml-auto shrink-0 pl-2 font-medium whitespace-nowrap tabular-nums"
-                        style={{ color: dimmed() ? '#9ca3af' : r.color }}
+                        style={{
+                          color: dimmed() ? 'var(--color-muted)' : r.color,
+                        }}
                       >
                         {formatDuration(r.secs, t)}
                       </span>
