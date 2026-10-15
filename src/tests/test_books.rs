@@ -356,3 +356,168 @@ async fn test_upload_book_with_description() -> Result<()> {
 
     Ok(())
 }
+
+// ============ 书内全文搜索（GET /books/:id/search） ============
+
+/// 多章节搜索夹具：目标词分布首章/中间章/末章，含大小写变体
+const SEARCH_BOOK: &str = concat!(
+    "第一章 起点\n",
+    "本章引入 treasure 这个词，Treasure 也应命中。\n",
+    "第二章 中间\n",
+    "中间章没有目标词，只有普通内容。\n",
+    "第三章 终点\n",
+    "末章再次出现 treasure，收尾。",
+);
+
+async fn search_in_book(
+    app: &Router,
+    token: &str,
+    book_id: i64,
+    query: &str,
+) -> (StatusCode, serde_json::Value) {
+    let resp = make_request(
+        app,
+        Method::GET,
+        &format!("/api/v1/books/{book_id}/search{query}"),
+        Body::empty(),
+        Some(token),
+    )
+    .await;
+    let status = resp.status();
+    (status, response_json(resp).await)
+}
+
+#[tokio::test]
+async fn test_search_in_book_cross_chapter_and_offsets() -> Result<()> {
+    let (app, _pool) = setup_test_app().await.unwrap();
+    let token = register_and_login(&app, "booksearch", "password1").await;
+    let book = upload_test_book(&app, &token, "书内搜索", SEARCH_BOOK, false).await;
+    let book_id = book["book_id"].as_i64().unwrap();
+
+    // 大小写不敏感：3 处命中分布首/末章，中间章无命中
+    let (status, json) = search_in_book(&app, &token, book_id, "?q=treasure").await;
+    assert_eq!(status, StatusCode::OK, "search failed: {json:?}");
+    let matches = json["data"]["matches"].as_array().unwrap();
+    assert_eq!(matches.len(), 3);
+    assert_eq!(json["data"]["truncated"], false);
+    assert_eq!(matches[0]["chapter_index"], 0);
+    assert_eq!(matches[0]["chapter_title"], "第一章 起点");
+    assert_eq!(matches[1]["chapter_index"], 0);
+    assert_eq!(matches[2]["chapter_index"], 2);
+    assert_eq!(matches[2]["chapter_title"], "第三章 终点");
+
+    // 坐标系一致性：char_offset 可直接喂给 /content 取回含命中词的内容
+    for m in matches {
+        let offset = m["char_offset"].as_i64().unwrap();
+        let resp = make_request(
+            &app,
+            Method::GET,
+            &format!("/api/v1/books/{book_id}/content?position={offset}&length=100"),
+            Body::empty(),
+            Some(&token),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let content = response_json(resp).await;
+        let text = content["data"]["content"].as_str().unwrap();
+        assert!(
+            text.to_lowercase().contains("treasure"),
+            "content at {offset} misses hit: {text}"
+        );
+        // excerpt 含命中本身
+        assert!(m["excerpt"].as_str().unwrap().len() >= "treasure".len());
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_search_in_book_no_match_and_empty_query() -> Result<()> {
+    let (app, _pool) = setup_test_app().await.unwrap();
+    let token = register_and_login(&app, "booksearch2", "password1").await;
+    let book = upload_test_book(&app, &token, "书内搜索二", SEARCH_BOOK, false).await;
+    let book_id = book["book_id"].as_i64().unwrap();
+
+    // 无命中：200 + 空列表
+    let (status, json) =
+        search_in_book(&app, &token, book_id, "?q=%E4%B8%8D%E5%AD%98%E5%9C%A8").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["data"]["matches"].as_array().unwrap().len(), 0);
+    assert_eq!(json["data"]["truncated"], false);
+
+    // 空 q / 纯空白 q：400（与书架搜索同一错误语义）
+    let (status, _) = search_in_book(&app, &token, book_id, "?q=").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, json) = search_in_book(&app, &token, book_id, "?q=%20%20").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(json["message"].as_str().unwrap().contains("empty"));
+
+    // 查询词超长：400
+    let long = "长".repeat(129);
+    let (status, json) = search_in_book(&app, &token, book_id, &format!("?q={long}")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(json["message"].as_str().unwrap().contains("'q'"));
+
+    // 未鉴权：401
+    let resp = make_request(
+        &app,
+        Method::GET,
+        &format!("/api/v1/books/{book_id}/search?q=x"),
+        Body::empty(),
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_search_in_book_rejects_epub_and_missing_file() -> Result<()> {
+    let (app, _pool) = setup_test_app().await.unwrap();
+    let token = register_and_login(&app, "booksearch3", "password1").await;
+
+    // epub：沿用 /content 的错误语义（400 ContentEndpointNotSupported）
+    let epub = upload_book_opts(
+        &app,
+        &token,
+        "epub搜索",
+        None,
+        None,
+        ("b.epub", SAMPLE_EPUB),
+    )
+    .await;
+    let epub_id = epub["book_id"].as_i64().unwrap();
+    let (status, json) = search_in_book(&app, &token, epub_id, "?q=x").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(json["message"].as_str().unwrap().contains("txt"));
+
+    // 不存在的书：404
+    let (status, _) = search_in_book(&app, &token, 999_999, "?q=x").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // 他人私有书：403
+    let other = register_and_login(&app, "booksearch4", "password1").await;
+    let (status, _) = search_in_book(&app, &other, epub_id, "?q=x").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_search_in_book_truncates_at_limit() -> Result<()> {
+    use std::fmt::Write as _;
+    let (app, _pool) = setup_test_app().await.unwrap();
+    let token = register_and_login(&app, "booksearch5", "password1").await;
+    // 250 个独立命中行（每行一个 "hit"），超过 200 上限
+    let mut content = String::from("第一章 全是命中\n");
+    for i in 0..250 {
+        let _ = writeln!(content, "行{i} hit");
+    }
+    let book = upload_test_book(&app, &token, "截断搜索", &content, false).await;
+    let book_id = book["book_id"].as_i64().unwrap();
+
+    let (status, json) = search_in_book(&app, &token, book_id, "?q=hit").await;
+    assert_eq!(status, StatusCode::OK);
+    let matches = json["data"]["matches"].as_array().unwrap();
+    assert_eq!(matches.len(), 200);
+    assert_eq!(json["data"]["truncated"], true);
+    Ok(())
+}

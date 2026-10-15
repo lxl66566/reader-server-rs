@@ -10,6 +10,7 @@ import {
   VsEdit,
   VsListOrdered,
   VsNote,
+  VsSearch,
   VsSettingsGear,
 } from 'solid-icons/vs';
 import { createSignal, For, Show, type Resource } from 'solid-js';
@@ -25,6 +26,7 @@ import type { DictKey } from '../i18n/zh-CN';
 import { formatPercent } from '../utils/format';
 import { NoteEditorModal } from './NoteEditor';
 import OfflinePanel from './OfflinePanel';
+import SearchPanel from './SearchPanel';
 import type { ReaderNavigator } from './types';
 
 export interface ChromeProps {
@@ -47,6 +49,7 @@ type Panel =
   | 'annotations'
   | 'bookmarks'
   | 'offline'
+  | 'search'
   | 'settings'
   | 'toc'
   | null;
@@ -103,6 +106,17 @@ const Chrome = (props: ChromeProps) => {
             <div class="min-w-0 flex-1 truncate text-sm font-medium">
               {props.book.title}
             </div>
+            {/* 书内全文搜索：仅 txt 提供（epub/pdf 无 char 偏移坐标系） */}
+            <Show when={props.book.format === 'txt'}>
+              <button
+                aria-label={t('readerSearch')}
+                class="text-muted hover:bg-page hover:text-ink flex size-9 cursor-pointer items-center justify-center rounded"
+                onClick={() => open('search')}
+                type="button"
+              >
+                <VsSearch class="size-5" />
+              </button>
+            </Show>
             <button
               aria-label={t('offlineCache')}
               class="text-muted hover:bg-page hover:text-ink flex size-9 cursor-pointer items-center justify-center rounded"
@@ -187,6 +201,17 @@ const Chrome = (props: ChromeProps) => {
         currentPosition={props.currentPosition}
         onClose={() => setPanel(null)}
         open={panel() === 'offline'}
+      />
+      {/* 命中跳转走 locator（纯数字串）→ 串行跳转链，永不 reject（R1 同款修法） */}
+      <SearchPanel
+        book={props.book}
+        onClose={() => setPanel(null)}
+        onJump={offset => {
+          jump(nav => {
+            void nav.jumpToLocator(String(offset));
+          });
+        }}
+        open={panel() === 'search'}
       />
       <SettingsPanel
         onClose={() => setPanel(null)}
