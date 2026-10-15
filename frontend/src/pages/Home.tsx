@@ -8,6 +8,7 @@ import {
   VsCloudUpload,
   VsRefresh,
   VsSearch,
+  VsTrash,
 } from 'solid-icons/vs';
 import {
   createResource,
@@ -28,6 +29,7 @@ import { BookCard } from '../components/home/BookCard';
 import { BookSection } from '../components/home/BookSection';
 import { Hero } from '../components/home/Hero';
 import { Pagination } from '../components/home/Pagination';
+import { TrashModal } from '../components/home/TrashModal';
 import { UploadModal } from '../components/home/UploadModal';
 import { Button, IconButton, Input } from '../components/ui';
 import { useI18n } from '../i18n';
@@ -87,6 +89,7 @@ const Library: Component = () => {
   const [order, setOrder] = createSignal<SortOrder>('desc');
   const [format, setFormat] = createSignal<BookFormat | undefined>(undefined);
   const [uploadOpen, setUploadOpen] = createSignal(false);
+  const [trashOpen, setTrashOpen] = createSignal(false);
 
   const [myBooks, { refetch: refetchMyBooks }] = createResource(
     () => [page(), activeQuery(), scope(), sort(), order(), format()] as const,
@@ -225,6 +228,18 @@ const Library: Component = () => {
       </div>
 
       <BookSection
+        actions={
+          <Button
+            class="px-2 text-xs"
+            onClick={() => {
+              setTrashOpen(true);
+            }}
+            variant="ghost"
+          >
+            <VsTrash class="size-4" />
+            {t('trash')}
+          </Button>
+        }
         empty={(myBooks()?.books ?? []).length === 0}
         emptyText={activeQuery() ? t('emptySearch') : t('emptyBooks')}
         error={myBooks.error !== undefined}
@@ -342,6 +357,15 @@ const Library: Component = () => {
         onClose={() => setUploadOpen(false)}
         onUploaded={onUploaded}
         open={uploadOpen()}
+      />
+      <TrashModal
+        onChanged={() => {
+          // 恢复的书回到书架；purge 公开书会影响公开书库
+          void refetchMyBooks();
+          void refetchPublic();
+        }}
+        onClose={() => setTrashOpen(false)}
+        open={trashOpen()}
       />
     </div>
   );

@@ -55,7 +55,7 @@ const en: Dict = {
   deleteAccountConfirm:
     'Enter your password to confirm. This cannot be undone.',
   deleteAccountDesc: 'Delete the account with all books and data',
-  deleteBookConfirm: 'Delete this book? This cannot be undone.',
+  deleteBookConfirm: 'Move this book to trash? You can restore it anytime.',
   deleteUserConfirm:
     'Delete user {username}? All their books, reading progress, annotations and stats will be permanently removed.',
   deleteUserSuccess: 'User deleted',
@@ -144,6 +144,7 @@ const en: Dict = {
   logout: 'Sign out',
   modePaginate: 'Paginate',
   modeScroll: 'Scroll',
+  movedToTrash: 'Moved to trash',
   myBooks: 'My books',
 
   navAdmin: 'Admin',
@@ -182,6 +183,7 @@ const en: Dict = {
   progressPercent: '{percent}%',
   publicLibrary: 'Public library',
   publicTag: 'Public',
+  purgedFromTrash: 'Permanently deleted',
   readBook: 'Read "{title}"',
   readerAddNoteHint: 'Select text to add a note or highlight',
   readerAnnotations: 'Annotations',
@@ -202,6 +204,11 @@ const en: Dict = {
   readerReconnecting: 'Connection lost, reconnecting…',
   readerReconnectManual: 'Disconnected — tap to reconnect',
   readerSaveNote: 'Save note',
+  readerSearch: 'Search',
+  readerSearchNoResults: 'No matches found',
+  readerSearchPlaceholder: 'Search in book…',
+  readerSearchResultCount: '{count} matches',
+  readerSearchTruncated: 'Only the first 200 matches are shown',
   readerSettings: 'Settings',
   readerSyncJump: 'Jumped to the latest position from another device',
   readerToc: 'Contents',
@@ -212,6 +219,7 @@ const en: Dict = {
   recommendToMe: 'Recommend to me',
   register: 'Sign up',
   resetPassword: 'Reset password',
+  restoredFromTrash: 'Restored',
 
   retry: 'Retry',
   revokeTokens: 'Force sign out',
@@ -293,6 +301,13 @@ const en: Dict = {
   titleLabel: 'Title',
   totalChars: '{count} characters',
   totalPages: '{count} pages',
+  trash: 'Trash',
+  trashDeletedAt: 'Deleted {date}',
+  trashEmpty: 'Trash is empty',
+  trashPurge: 'Delete forever',
+  trashPurgeConfirm:
+    'Permanently delete "{title}"? The book file, reading progress and annotations will be removed. This cannot be undone.',
+  trashRestore: 'Restore',
   unbanUser: 'Unban',
   unknownAuthor: 'Unknown',
   uploadBook: 'Upload book',

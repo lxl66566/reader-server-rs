@@ -4,6 +4,7 @@ pub mod test_books;
 pub mod test_integration;
 pub mod test_quality;
 pub mod test_security;
+pub mod test_trash;
 
 use anyhow::Result;
 use axum::{

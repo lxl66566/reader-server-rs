@@ -111,6 +111,9 @@ CREATE TABLE
     ),
     -- 每本书独立的章节切分正则（仅 txt 有意义）；NULL/空 = 使用内置默认章节规则
     chapter_pattern TEXT,
+    -- 软删除（回收站）：非空 = 已移入回收站（RFC3339 文本）；NULL = 正常。
+    -- 已删书对所有读取路径不可见（一律 404），恢复置回 NULL，彻底删除才物理删行
+    deleted_at TEXT,
     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
   );
 

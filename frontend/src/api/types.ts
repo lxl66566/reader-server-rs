@@ -5,6 +5,8 @@ export interface AdminBookItem {
   author: null | string;
   book_id: number;
   created_at: string;
+  /** 移入回收站的时间；仅 include_deleted=true 时非 null */
+  deleted_at: null | string;
   /** 磁盘文件字节数；文件缺失（被外部清理）时为 null */
   file_size: null | number;
   format: BookFormat;
@@ -116,6 +118,24 @@ export interface Bookmark {
   user_id: number;
 }
 
+// 书内全文搜索单条命中（仅 txt 有意义）
+export interface BookSearchMatch {
+  /** 命中所在章节在按 position 升序的章节列表中的下标（0-based） */
+  chapter_index: number;
+  chapter_title: string;
+  /** 命中起始字符的全书偏移（与章节 position、/content 的 position 同一坐标系） */
+  char_offset: number;
+  /** 命中前后各约 30 字符的纯文本上下文（含命中本身） */
+  excerpt: string;
+}
+
+// GET /api/v1/books/:book_id/search 响应
+export interface BookSearchResult {
+  matches: BookSearchMatch[];
+  /** 命中总数超过返回上限（200），结果已截断 */
+  truncated: boolean;
+}
+
 // 书架排序键（?sort=），缺省 last_read
 export type BookSortKey = 'author' | 'created' | 'last_read' | 'title';
 
@@ -200,6 +220,15 @@ export type SearchScope = 'all' | 'mine' | 'public';
 export type SortOrder = 'asc' | 'desc';
 
 export type ThemeMode = 'dark' | 'light' | 'sepia' | 'system';
+
+// 回收站列表项（GET /api/v1/books/trash）
+export interface TrashBook {
+  author: null | string;
+  book_id: number;
+  deleted_at: string;
+  format: BookFormat;
+  title: string;
+}
 
 export interface UserInfo {
   book_count: number;

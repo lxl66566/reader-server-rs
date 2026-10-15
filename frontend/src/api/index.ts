@@ -10,6 +10,7 @@ import type {
   Book,
   BookDetail,
   BookListQuery,
+  BookSearchResult,
   Bookmark,
   Chapter,
   DailyReadingStats,
@@ -19,6 +20,7 @@ import type {
   ReadingSettings,
   ReadingStats,
   SearchScope,
+  TrashBook,
   UserInfo,
 } from './types';
 
@@ -115,15 +117,31 @@ export const bookApi = {
     api.get<Page<PublicBook>>('/api/v1/books/public', {
       query: { limit, page },
     }),
+  // 回收站列表：仅本人已软删的书
+  listTrash: (page: number, limit: number) =>
+    api.get<Page<TrashBook>>('/api/v1/books/trash', {
+      query: { limit, page },
+    }),
+  // 彻底删除（不可恢复）：服务端级联清理；本地离线缓存由调用方清
+  purge: (bookId: number) =>
+    api.delete<Record<string, never>>(`/api/v1/books/${bookId}/purge`),
   randomPublic: (count: number) =>
     api.get<{ books: PublicBook[] }>('/api/v1/books/random_public', {
       query: { count },
     }),
   remove: (bookId: number) =>
     api.delete<Record<string, never>>(`/api/v1/books/${bookId}`),
+  // 从回收站恢复（软删除的逆操作）
+  restore: (bookId: number) =>
+    api.post<Record<string, never>>(`/api/v1/books/${bookId}/restore`),
   search: (q: string, scope: SearchScope, page: number, limit: number) =>
     api.get<Page<Book>>('/api/v1/books/search', {
       query: { limit, page, q, scope },
+    }),
+  // 书内全文搜索（仅 txt；q 由后端 trim，空串返回 400）
+  searchInBook: (bookId: number, q: string) =>
+    api.get<BookSearchResult>(`/api/v1/books/${bookId}/search`, {
+      query: { q },
     }),
   setTags: (bookId: number, tags: string[]) =>
     api.put<{ tags: string[] }>(`/api/v1/books/${bookId}/tags`, {

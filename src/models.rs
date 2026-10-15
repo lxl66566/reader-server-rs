@@ -618,6 +618,8 @@ pub struct AdminBookListItem {
     /// 磁盘文件字节数；文件缺失（被外部清理）时为 null
     pub file_size: Option<i64>,
     pub created_at: String,
+    /// 移入回收站的时间（仅 include_deleted=true 时非 null）
+    pub deleted_at: Option<String>,
 }
 
 // 管理员书籍列表响应
@@ -642,6 +644,24 @@ pub struct BookListResponse {
     pub books: Vec<BookListItem>,
 }
 
+// 回收站列表项
+#[derive(Debug, Serialize)]
+pub struct TrashBookListItem {
+    pub book_id: i64,
+    pub title: String,
+    pub author: Option<String>,
+    pub format: BookFormat,
+    /// 移入回收站的时间（RFC3339）
+    pub deleted_at: String,
+}
+
+// 回收站列表响应
+#[derive(Debug, Serialize)]
+pub struct TrashBookListResponse {
+    pub total: i64,
+    pub books: Vec<TrashBookListItem>,
+}
+
 // 公开书籍列表响应
 #[derive(Debug, Serialize)]
 pub struct PublicBookListResponse {
@@ -661,6 +681,26 @@ pub struct RandomPublicBooksResponse {
 pub struct JumpToChapterResponse {
     /// 章节首字符在全文字符流中的偏移（txt 用），epub 用 spine 索引
     pub position: i64,
+}
+
+// 书内全文搜索单条命中（仅 txt 格式有意义）
+#[derive(Debug, Serialize)]
+pub struct BookTextSearchMatch {
+    /// 命中所在章节在按 position 升序的章节列表中的下标（0-based）
+    pub chapter_index: i64,
+    pub chapter_title: String,
+    /// 命中起始字符的全书偏移（与章节 position、/content 的 position 同一坐标系）
+    pub char_offset: i64,
+    /// 命中前后各约 30 字符的纯文本上下文（含命中本身；前端按 offset 自行加粗）
+    pub excerpt: String,
+}
+
+// 书内全文搜索响应（仅 txt 格式有意义）
+#[derive(Debug, Serialize)]
+pub struct BookTextSearchResponse {
+    pub matches: Vec<BookTextSearchMatch>,
+    /// 命中总数超过返回上限，结果已截断
+    pub truncated: bool,
 }
 
 // ============ 书签 / 批注 ============

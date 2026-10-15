@@ -70,7 +70,8 @@ type UserItem = { user_id: number; username: string; created_at: string; book_co
 type AdminItem = { admin_id: number; username: string; created_at: string }
 type AuditLogItem = { id: number; admin_id: number | null; admin_username: string | null; action: string; target_type: string | null; target_id: number | null; detail: string | null; created_at: string }
 type AdminBookItem = { book_id: number; title: string; author: string | null; owner_id: number; owner_username: string; is_public: boolean; format: BookFormat; total_chars: number; total_pages: number; file_size: number | null; created_at: string }
-// file_size：磁盘文件字节数；文件缺失（被外部清理）时为 null
+// file_size：磁盘文件字节数；文件缺失（被外部清理）时为 null；deleted_at：移入回收站的时间，仅 `include_deleted=true` 时非 null
+type TrashBook = { book_id: number; title: string; author: string | null; format: BookFormat; deleted_at: string }
 
 type Bookmark = {
   id: number; user_id: number; book_id: number;
@@ -132,9 +133,9 @@ type Annotation = {
 | POST | /api/v1/admin/users/import | Admin | FormData: file (zip，用户数据导出包), username?: string, password?: string | { user_id: number; username: string; book_count: number }；username/password 省略或留空时使用包内原值；包内无密码哈希（用户自助导出）时必须提供 password，否则 400；用户名冲突返回 400。请求体上限独立放宽为 4GB（可打包用户全部书籍），服务端流式落盘。同时兼容导入历史版本（无版本号）的用户自助导出包；txt 书籍按包内 chapter_pattern（缺省为内置规则）从原文件重提章节 |
 | GET | /api/v1/admin/admins | Admin | - | { admins: AdminItem[] } |
 | POST | /api/v1/admin/admins | Admin | Body: { username: string; password: string } | {} |
-| GET | /api/v1/admin/books?page=number&limit=number&q=string | Admin | q 非空时按 标题/作者/所有者用户名 模糊匹配（LIKE，缺省/空 = 不过滤） | { total: number; books: AdminBookItem[] }；按上传时间倒序 |
+| GET | /api/v1/admin/books?page=number&limit=number&q=string&include_deleted=boolean | Admin | q 非空时按 标题/作者/所有者用户名 模糊匹配（LIKE，缺省/空 = 不过滤）；include_deleted 缺省/false = 不含回收站中的书，true = 全量返回（AdminBookItem.deleted_at 标记） | { total: number; books: AdminBookItem[] }；按上传时间倒序 |
 | PUT | /api/v1/admin/books/:book_id | Admin | Body: { title?: string; author?: string; is_public?: boolean }（全部可选；至少一项才会更新，与用户侧 `PUT /books/:book_id` 同一更新路径） | {}；书不存在 404；编辑记录审计日志（action=update_book） |
-| DELETE | /api/v1/admin/books/:book_id | Admin | - | {}；级联清理与用户自删一致：磁盘文件、章节、标签关联、书签、批注、阅读进度、每日统计；书不存在 404；记录审计日志（action=delete_book，detail 含 owner_id） |
+| DELETE | /api/v1/admin/books/:book_id | Admin | - | {}；**硬删除**（最终处置，含回收站中的书）：级联清理：磁盘文件、章节、标签关联、书签、批注、阅读进度、每日统计；书不存在 404；记录审计日志（action=delete_book，detail 含 owner_id） |
 | GET | /api/v1/admin/audit_logs?page=number&limit=number | Admin | - | { total: number; logs: AuditLogItem[] }；除管理操作外还记录登录事件（admin_setup / admin_login / admin_login_failed / user_login_failed），登录类事件的 admin_id/admin_username 可能为 null |
 | GET | /api/v1/admin/backup | Admin | - | application/zip 流，包含 reader.db（`VACUUM INTO` 生成的一致性快照）+ 整个 books 目录（不压缩），用于全局灾难恢复；任何文件缺失/读取失败会整体返回 500 而不是产出残缺备份 |
 
@@ -148,7 +149,7 @@ type Annotation = {
 > 标题兜底链：用户输入（trim 非空）> epub/pdf 内嵌元数据 > 上传文件名（去扩展名）；全部为空返回 400。
 > 章节切分正则（chapter_pattern）：每本书可设置独立的 txt 章节切分规则，空/缺省 = 内置默认规则（自动识别“第X章/序章/楔子”等标题行）。仅 txt 有意义：epub/pdf 上传携带非空值返回 400，PUT 设置非空值同样返回 400。服务端用 fancy-regex 编译，无法编译返回 400。修改后服务端从磁盘原文件重新切分章节（原文件丢失返回 404，章节数超上限返回 400）；与现值相同的请求不会触发重切。
 > 单本书章节数上限 50_000（防御构造性文本），超出返回 400。
-> 分页接口（`/books`、`/books/public`、`/books/search`、`/admin/books`、`/admin/audit_logs`）：`page` 小于 1 按第一页处理；`limit` 有上限（书籍列表 50、管理端书籍列表 100、审计日志 100），超限自动钳制。
+> 分页接口（`/books`、`/books/trash`、`/books/public`、`/books/search`、`/admin/books`、`/admin/audit_logs`）：`page` 小于 1 按第一页处理；`limit` 有上限（书籍列表 50、管理端书籍列表 100、审计日志 100），超限自动钳制。
 
 | 方法 | URL | 权限 | 请求参数 | 响应 data |
 |---|---|---|---|---|
@@ -159,8 +160,12 @@ type Annotation = {
 | GET | /api/v1/books/:book_id/file?download=boolean | Auth | Header: If-None-Match? | 200 + ETag：原文件字节流（Content-Type 按 format：text/plain; application/epub+zip; application/pdf）；ETag 命中返回 304。缺省 `Content-Disposition: inline`（pdf 内联预览），epub/pdf 客户端渲染时使用，txt 也可用；`download=true` 时为 `attachment`，文件名为「书名 - 作者」（作者缺省/空白时仅书名；RFC 5987 `filename*=UTF-8''…`，非 ASCII 的旧客户端回退 `book_{id}.{ext}`），用于保存到本地 |
 | GET | /api/v1/books/:book_id/content?position=number&length=number | Auth | Header: If-None-Match? | **仅 txt 格式可用**；epub/pdf 调用返回 400。200 + ETag：{ content: string; next_position: number }；ETag 命中返回 304 |
 | GET | /api/v1/books/:book_id/jump_to_chapter?chapter_id=number | Auth | - | { position: number }（txt=字符偏移；epub=spine 索引；pdf 通常无章节） |
+| GET | /api/v1/books/:book_id/search?q=string | Auth | - | **书内全文搜索，仅 txt 格式可用**；epub/pdf 调用返回 400（同 `/content` 语义）。q 必填（trim 后为空返回 400 `SearchQueryEmpty`），≤128 字符（超限 400）；ASCII 大小写不敏感的字面匹配（不分词/不归一化），重叠命中逐位置各计一条。返回 { matches: { chapter_index: number; chapter_title: string; char_offset: number; excerpt: string }[]; truncated: boolean }；`chapter_index` 为按 position 升序章节列表的 0-based 下标；`char_offset` 为命中的全书字符偏移（与章节 position、`/content` 的 position、进度 locator 同一坐标系，可直接用于内容切片定位）；`excerpt` 为命中前后各约 30 字符的纯文本上下文（含命中本身）；命中上限 200，超出截断且 `truncated=true`；查询词超长/为空/未鉴权（401）/无权限（403/404）语义同其他书籍读接口 |
 | PUT | /api/v1/books/:book_id | Auth | Body: { title?: string; author?: string; description?: string; is_public?: boolean; cover_path?: string; chapter_pattern?: string \| null }；description 空/纯空白 = 清空，缺省 = 不修改，≤2000 字符（超限 400）；chapter_pattern 仅 txt 可设置，null/空串 = 恢复内置默认规则，字段缺省 = 不修改，变更时从原文件重切本书全部章节 | {} |
-| DELETE | /api/v1/books/:book_id | Auth | - | {} |
+| DELETE | /api/v1/books/:book_id | Auth | - | {}；**软删除**（移入回收站）：写 books.deleted_at，书籍从书架/搜索/公开书库/推荐消失，直接访问详情/content/file/标签/批注/进度等一律 404；阅读进度与批注数据保留，可 restore 恢复；仅 owner 可操作（非 owner 403，书不存在或已在回收站 404） |
+| GET | /api/v1/books/trash?page=number&limit=number | Auth | - | { total: number; books: TrashBook[] }；当前用户的回收站，按删除时间倒序 |
+| POST | /api/v1/books/:book_id/restore | Auth | - | {}；从回收站恢复（deleted_at 置回 NULL），进度/批注原样保留；非本人、未删除或不存在均 404 |
+| DELETE | /api/v1/books/:book_id/purge | Auth | - | {}；彻底删除（不可恢复）：级联清理磁盘文件、章节、标签关联、书签、批注、阅读进度、每日统计；仅回收站中的书可 purge（未软删/非本人/不存在均 404）；前端需同步清理本地离线缓存 |
 | GET | /api/v1/books/public?page=number&limit=number | Auth | - | { total: number; books: PublicBook[] } |
 | GET | /api/v1/books/:book_id/tags | Auth | - | { tags: string[] } |
 | PUT | /api/v1/books/:book_id/tags | Auth（仅 owner） | Body: { tags: string[] }（覆盖式） | { tags: string[] } |

@@ -713,11 +713,11 @@ async fn get_daily_reading_stats(
         return Err(AppError::InvalidDateRange);
     }
 
-    // book 级联删除，JOIN 必命中
+    // book 级联删除，JOIN 必命中；回收站中的书不出现（恢复后重新可见）
     let days: Vec<DailyBookReadingStat> = sqlx::query_as::<_, DailyBookReadingStat>(
         "SELECT s.date, s.book_id, b.title, s.reading_seconds FROM daily_reading_stats s JOIN \
-         books b ON b.id = s.book_id WHERE s.user_id = ? AND s.date >= ? AND s.date <= ? ORDER BY \
-         s.date ASC, s.reading_seconds DESC",
+         books b ON b.id = s.book_id AND b.deleted_at IS NULL WHERE s.user_id = ? AND s.date >= ? \
+         AND s.date <= ? ORDER BY s.date ASC, s.reading_seconds DESC",
     )
     .bind(auth.user_id)
     .bind(start.format("%Y-%m-%d").to_string())

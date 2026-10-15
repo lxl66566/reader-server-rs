@@ -10,15 +10,20 @@ use crate::{error::AppError, models::UserStatus};
 /// 检查用户对书籍的读访问权限（所有者或公开书）
 ///
 /// 书不存在返回 404 `BookNotFound`，无权访问返回 403 `BookAccessDenied`。
+/// 软删除（回收站）的书同样按 404 处理：心跳/进度/书签/批注/WS 订阅等
+/// 所有按 book_id 的访问都经此收口，一处过滤全覆盖
 pub async fn check_book_access(
     pool: &Pool<Sqlite>,
     user_id: i64,
     book_id: i64,
 ) -> Result<(), AppError> {
-    let book = sqlx::query!("SELECT user_id, is_public FROM books WHERE id = ?", book_id)
-        .fetch_optional(pool)
-        .await?
-        .ok_or(AppError::BookNotFound)?;
+    let book = sqlx::query!(
+        "SELECT user_id, is_public FROM books WHERE id = ? AND deleted_at IS NULL",
+        book_id
+    )
+    .fetch_optional(pool)
+    .await?
+    .ok_or(AppError::BookNotFound)?;
 
     ensure_book_access(user_id, book.user_id, book.is_public)
 }

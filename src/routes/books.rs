@@ -8,6 +8,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
 };
+use chrono::{SecondsFormat, Utc};
 use serde::Deserialize;
 use sqlx::{Pool, Sqlite};
 use tokio::{fs, io::AsyncWriteExt};
@@ -18,11 +19,12 @@ use crate::{
     auth::AuthUser,
     config::Config,
     error::{ApiResponse, AppError},
-    limits::BOOK_DESCRIPTION_MAX_CHARS,
+    limits::{BOOK_DESCRIPTION_MAX_CHARS, BOOK_SEARCH_QUERY_MAX_CHARS},
     models::{
         Book, BookContentResponse, BookDetailResponse, BookFormat, BookListItem, BookListResponse,
-        BookTagsResponse, ChapterResponse, JumpToChapterResponse, PatternUpdate,
-        PublicBookListItem, PublicBookListResponse, RandomPublicBooksResponse, SetBookTagsRequest,
+        BookTagsResponse, BookTextSearchMatch, BookTextSearchResponse, ChapterResponse,
+        JumpToChapterResponse, PatternUpdate, PublicBookListItem, PublicBookListResponse,
+        RandomPublicBooksResponse, SetBookTagsRequest, TrashBookListItem, TrashBookListResponse,
         UpdateBookRequest, UploadBookResponse,
     },
     parser::{detect_format, extract_chapters, parse_epub, parse_pdf, validate_chapter_pattern},
@@ -195,15 +197,23 @@ pub fn routes() -> Router<crate::app::AppState> {
         .route("/search", get(search_books))
         .route("/public", get(list_public_books))
         .route("/random_public", get(get_random_public_books))
+        // 回收站列表（仅本人的已软删书籍）
+        .route("/trash", get(list_trash))
         .route(
             "/{book_id}",
             get(get_book_detail).put(update_book).delete(delete_book),
         )
+        // 从回收站恢复
+        .route("/{book_id}/restore", post(restore_book))
+        // 彻底删除（复用级联删除 + 文件清理，不可恢复）
+        .route("/{book_id}/purge", delete(purge_book))
         // 原文件下载：epub / pdf 客户端渲染时使用；txt 也可用
         .route("/{book_id}/file", get(download_book_file))
         // 内容切片：仅 txt 有意义；epub/pdf 走 /file
         .route("/{book_id}/content", get(get_book_content))
         .route("/{book_id}/jump_to_chapter", get(jump_to_chapter))
+        // 书内全文搜索：仅 txt 有意义；epub/pdf 沿用 content 的错误语义
+        .route("/{book_id}/search", get(search_in_book))
         .route(
             "/{book_id}/bookmarks",
             get(crate::routes::annotations::list_bookmarks)
@@ -628,18 +638,23 @@ async fn list_books(
     let direction = SortDirection::parse(params.order.as_deref())?;
     let format = parse_format_filter(params.format.as_deref())?;
 
-    // total 必须与列表共用同一筛选条件：有格式过滤时统计过滤后的总数
+    // total 必须与列表共用同一筛选条件：有格式过滤时统计过滤后的总数；
+    // 回收站中的书不计入书架
     let total = if format.is_some() {
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM books WHERE user_id = ? AND format = ?")
-            .bind(auth.user_id)
-            .bind(format)
-            .fetch_one(&pool)
-            .await?
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM books WHERE user_id = ? AND deleted_at IS NULL AND format = ?",
+        )
+        .bind(auth.user_id)
+        .bind(format)
+        .fetch_one(&pool)
+        .await?
     } else {
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM books WHERE user_id = ?")
-            .bind(auth.user_id)
-            .fetch_one(&pool)
-            .await?
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM books WHERE user_id = ? AND deleted_at IS NULL",
+        )
+        .bind(auth.user_id)
+        .fetch_one(&pool)
+        .await?
     };
 
     // 动态排序键 + 可选格式筛选：外部输入一律 push_bind；ORDER BY 片段来自
@@ -653,7 +668,8 @@ async fn list_books(
     );
     qb.push_bind(auth.user_id)
         .push(" WHERE b.user_id = ")
-        .push_bind(auth.user_id);
+        .push_bind(auth.user_id)
+        .push(" AND b.deleted_at IS NULL");
     if let Some(format) = format {
         qb.push(" AND b.format = ").push_bind(format);
     }
@@ -696,8 +712,8 @@ async fn get_book_detail(
     State(pool): State<Pool<Sqlite>>,
     Path(book_id): Path<i64>,
 ) -> Result<Json<ApiResponse<BookDetailResponse>>, AppError> {
-    // 查询书籍信息
-    let book = sqlx::query_as::<_, Book>("SELECT * FROM books WHERE id = ?")
+    // 查询书籍信息（已移入回收站的书按不存在处理）
+    let book = sqlx::query_as::<_, Book>("SELECT * FROM books WHERE id = ? AND deleted_at IS NULL")
         .bind(book_id)
         .fetch_optional(&pool)
         .await?
@@ -783,9 +799,9 @@ async fn update_book(
     Path(book_id): Path<i64>,
     Json(req): Json<UpdateBookRequest>,
 ) -> Result<Json<ApiResponse<()>>, AppError> {
-    // 检查书籍是否存在并属于当前用户
+    // 检查书籍是否存在并属于当前用户（回收站中的书不可编辑）
     let book = sqlx::query!(
-        r#"SELECT user_id, format AS "format!: BookFormat", file_path, chapter_pattern FROM books WHERE id = ?"#,
+        r#"SELECT user_id, format AS "format!: BookFormat", file_path, chapter_pattern FROM books WHERE id = ? AND deleted_at IS NULL"#,
         book_id
     )
     .fetch_optional(&pool)
@@ -932,26 +948,133 @@ async fn update_book(
     Ok(Json(ApiResponse::<()>::message("Update successful")))
 }
 
-// 删除书籍
+// 删除书籍（软删除）：写 deleted_at 移入回收站，进度/批注等数据原样保留，
+// 可经 /restore 恢复；彻底删除走 /purge 或管理员删除
 async fn delete_book(
     auth: AuthUser,
     State(pool): State<Pool<Sqlite>>,
-    State(_config): State<Config>,
     Path(book_id): Path<i64>,
 ) -> Result<Json<ApiResponse<()>>, AppError> {
-    // 在事务内删除 DB 行并校验权限：非 owner 报错时事务回滚、删除不生效
+    // 时间戳与 created_at 同为 RFC3339；先取行做权限校验，非 owner 时不产生任何写入
+    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     let mut tx = pool.begin().await?;
-    let (owner_id, file_path) = delete_book_cascade(&mut tx, book_id).await?;
+    let owner_id = sqlx::query_scalar!(
+        "SELECT user_id FROM books WHERE id = ? AND deleted_at IS NULL",
+        book_id
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(AppError::BookNotFound)?;
     if owner_id != auth.user_id {
         return Err(AppError::BookDeleteDenied);
     }
+    sqlx::query!("UPDATE books SET deleted_at = ? WHERE id = ?", now, book_id)
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
 
-    // DB 删除成功后再删文件；文件删除失败只记日志，不影响响应。
-    // 孤儿文件比"DB 记录存在但文件丢失"更安全。
+    Ok(Json(ApiResponse::<()>::message(
+        "Moved to trash successfully",
+    )))
+}
+
+// 回收站列表：仅当前用户已软删的书，按删除时间倒序，分页同书架
+async fn list_trash(
+    auth: AuthUser,
+    State(pool): State<Pool<Sqlite>>,
+    Query(pagination): Query<PaginationParams>,
+) -> Result<Json<ApiResponse<TrashBookListResponse>>, AppError> {
+    let (limit, offset) = pagination.normalize(10, 50);
+
+    let total = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM books WHERE user_id = ? AND deleted_at IS NOT NULL",
+    )
+    .bind(auth.user_id)
+    .fetch_one(&pool)
+    .await?;
+
+    let books = sqlx::query!(
+        r#"SELECT id, title, author, format AS "format!: BookFormat", deleted_at FROM books
+         WHERE user_id = ? AND deleted_at IS NOT NULL
+         ORDER BY deleted_at DESC, id DESC
+         LIMIT ? OFFSET ?"#,
+        auth.user_id,
+        limit,
+        offset
+    )
+    .fetch_all(&pool)
+    .await?;
+
+    let book_list: Vec<TrashBookListItem> = books
+        .into_iter()
+        // deleted_at 非空由 WHERE 保证
+        .map(|b| TrashBookListItem {
+            book_id: b.id,
+            title: b.title,
+            author: b.author,
+            format: b.format,
+            deleted_at: b.deleted_at.unwrap_or_default(),
+        })
+        .collect();
+
+    Ok(Json(ApiResponse::success(TrashBookListResponse {
+        total,
+        books: book_list,
+    })))
+}
+
+// 从回收站恢复：置回 deleted_at = NULL，进度/批注等数据未动过，自然恢复
+async fn restore_book(
+    auth: AuthUser,
+    State(pool): State<Pool<Sqlite>>,
+    Path(book_id): Path<i64>,
+) -> Result<Json<ApiResponse<()>>, AppError> {
+    let result = sqlx::query!(
+        "UPDATE books SET deleted_at = NULL WHERE id = ? AND user_id = ? AND deleted_at IS NOT \
+         NULL",
+        book_id,
+        auth.user_id
+    )
+    .execute(&pool)
+    .await?;
+
+    // 不存在 / 不属于本人 / 并发下已彻底删除 / 本就未删除，统一 404
+    if result.rows_affected() == 0 {
+        return Err(AppError::BookNotFound);
+    }
+
+    Ok(Json(ApiResponse::<()>::message("Restored successfully")))
+}
+
+// 彻底删除：级联清理 DB 行（章节/标签/书签/批注/进度/统计）+ 磁盘文件；
+// 仅回收站中的书可彻底删除。离线缓存为前端 IndexedDB，由前端在成功后自行清理
+async fn purge_book(
+    auth: AuthUser,
+    State(pool): State<Pool<Sqlite>>,
+    Path(book_id): Path<i64>,
+) -> Result<Json<ApiResponse<()>>, AppError> {
+    let mut tx = pool.begin().await?;
+
+    // 仅回收站中的书可 purge；未软删的书不存在于回收站视图，统一 404
+    // （SQLite EXISTS 返回 0/1 整数，按 i64 判非零）
+    let exists = sqlx::query_scalar!(
+        r#"SELECT EXISTS(SELECT 1 FROM books WHERE id = ? AND user_id = ? AND deleted_at IS NOT NULL)"#,
+        book_id,
+        auth.user_id
+    )
+    .fetch_one(&mut *tx)
+    .await?
+    != 0;
+    if !exists {
+        return Err(AppError::BookNotFound);
+    }
+
+    let (_owner_id, file_path) = delete_book_cascade(&mut tx, book_id).await?;
+    tx.commit().await?;
+
     remove_book_file(&file_path).await;
 
-    Ok(Json(ApiResponse::<()>::message("Deleted successfully")))
+    Ok(Json(ApiResponse::<()>::message("Purged successfully")))
 }
 
 /// 动态更新书籍元数据字段（仅 SET 提供的列；全为 None 时不执行 SQL）。
@@ -1037,7 +1160,7 @@ async fn download_book_file(
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
     let book = sqlx::query!(
-        r#"SELECT user_id, title, author, file_path, is_public, content_hash, format AS "format!: BookFormat" FROM books WHERE id = ?"#,
+        r#"SELECT user_id, title, author, file_path, is_public, content_hash, format AS "format!: BookFormat" FROM books WHERE id = ? AND deleted_at IS NULL"#,
         book_id
     )
     .fetch_optional(&pool)
@@ -1143,9 +1266,9 @@ async fn get_book_content(
     Query(params): Query<ContentParams>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
-    // 查询书籍信息
+    // 查询书籍信息（回收站中的书不可读）
     let book = sqlx::query!(
-        r#"SELECT user_id, file_path, is_public, total_chars, format AS "format!: BookFormat" FROM books WHERE id = ?"#,
+        r#"SELECT user_id, file_path, is_public, total_chars, format AS "format!: BookFormat" FROM books WHERE id = ? AND deleted_at IS NULL"#,
         book_id
     )
     .fetch_optional(&pool)
@@ -1296,10 +1419,12 @@ async fn list_public_books(
     // 归一化分页参数：page 最小为 1，limit 上限 50
     let (limit, offset) = params.normalize(10, 50);
 
-    // 获取总数
-    let total = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM books WHERE is_public = 1")
-        .fetch_one(&pool)
-        .await?;
+    // 获取总数（回收站中的书不再出现在公开书库）
+    let total = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM books WHERE is_public = 1 AND deleted_at IS NULL",
+    )
+    .fetch_one(&pool)
+    .await?;
 
     // 获取公开书籍列表
     let books = sqlx::query!(
@@ -1311,7 +1436,7 @@ async fn list_public_books(
         FROM books b
         JOIN users u ON b.user_id = u.id
         LEFT JOIN reading_progress rp ON rp.book_id = b.id AND rp.user_id = ?
-        WHERE b.is_public = 1
+        WHERE b.is_public = 1 AND b.deleted_at IS NULL
         ORDER BY b.created_at DESC
         LIMIT ? OFFSET ?
         "#,
@@ -1363,7 +1488,7 @@ async fn get_random_public_books(
         FROM books b
         JOIN users u ON b.user_id = u.id
         LEFT JOIN reading_progress rp ON rp.book_id = b.id AND rp.user_id = ?
-        WHERE b.is_public = 1 AND b.user_id != ?
+        WHERE b.is_public = 1 AND b.deleted_at IS NULL AND b.user_id != ?
         ORDER BY RANDOM()
         LIMIT ?
         "#,
@@ -1464,7 +1589,7 @@ async fn search_books(
     qb.push_bind(&pattern);
     qb.push(" ESCAPE '\\' OR c.title LIKE ");
     qb.push_bind(&pattern);
-    qb.push(" ESCAPE '\\') AND (");
+    qb.push(" ESCAPE '\\') AND b.deleted_at IS NULL AND (");
 
     push_scope_condition(&mut qb, scope, auth.user_id);
     qb.push(") ORDER BY b.created_at DESC LIMIT ")
@@ -1502,7 +1627,7 @@ async fn search_books(
     count_qb.push_bind(&pattern);
     count_qb.push(" ESCAPE '\\' OR c.title LIKE ");
     count_qb.push_bind(&pattern);
-    count_qb.push(" ESCAPE '\\') AND (");
+    count_qb.push(" ESCAPE '\\') AND b.deleted_at IS NULL AND (");
     push_scope_condition(&mut count_qb, scope, auth.user_id);
     count_qb.push(")");
 
@@ -1534,6 +1659,189 @@ fn push_scope_condition(qb: &mut sqlx::QueryBuilder<Sqlite>, scope: SearchScope,
     }
 }
 
+// ============ 书内全文搜索（仅 txt） ============
+
+// 书内全文搜索查询参数（区别于书架元数据搜索的 SearchParams）
+#[derive(Debug, Deserialize)]
+pub struct BookSearchParams {
+    pub q: String,
+}
+
+// 书内全文搜索：ASCII 大小写不敏感的字面匹配（不分词、不归一化）。
+// char_offset 为命中的全书字符偏移，与章节 position、/content 的 position、
+// 进度 locator 同一坐标系（chars().count() 语义），可直接用于内容切片定位
+async fn search_in_book(
+    auth: AuthUser,
+    State(pool): State<Pool<Sqlite>>,
+    Path(book_id): Path<i64>,
+    Query(params): Query<BookSearchParams>,
+) -> Result<Json<ApiResponse<BookTextSearchResponse>>, AppError> {
+    // 与书架搜索同一语义：trim 后为空 = 无效查询
+    let q = params.q.trim();
+    if q.is_empty() {
+        return Err(AppError::SearchQueryEmpty);
+    }
+    if q.chars().count() > BOOK_SEARCH_QUERY_MAX_CHARS {
+        return Err(AppError::FieldTooLarge("q"));
+    }
+
+    let book = sqlx::query!(
+        r#"SELECT user_id, file_path, is_public, format AS "format!: BookFormat" FROM books WHERE id = ?"#,
+        book_id
+    )
+    .fetch_optional(&pool)
+    .await?
+    .ok_or(AppError::BookNotFound)?;
+
+    // 读权限与 content / jump_to_chapter 一致：所有者或公开书
+    ensure_book_access(auth.user_id, book.user_id, book.is_public)?;
+
+    // 仅 txt；epub/pdf 沿用 content 端点的错误语义
+    if book.format != BookFormat::Txt {
+        return Err(AppError::ContentEndpointNotSupported);
+    }
+
+    // 章节归属表（position 升序；txt 的 position = 章节首字符偏移）
+    let chapters: Vec<(String, i64)> =
+        sqlx::query_as("SELECT title, position FROM chapters WHERE book_id = ? ORDER BY position")
+            .bind(book_id)
+            .fetch_all(&pool)
+            .await?;
+
+    // 全文扫描为 CPU 密集操作，移入阻塞线程池（参照 parse_upload_sync 的模式）；
+    // 多扫一条（cap+1）仅为判断截断，超出部分不返回
+    let file_path = book.file_path;
+    let query = q.to_string();
+    let scanned =
+        tokio::task::spawn_blocking(move || -> Result<Vec<BookTextSearchMatch>, AppError> {
+            scan_book_file(&file_path, &query, &chapters, BOOK_SEARCH_MAX_MATCHES + 1)
+        })
+        .await
+        .map_err(|e| AppError::Internal(format!("book search task failed: {e}")))??;
+
+    let truncated = scanned.len() > BOOK_SEARCH_MAX_MATCHES;
+    let mut matches = scanned;
+    matches.truncate(BOOK_SEARCH_MAX_MATCHES);
+
+    Ok(Json(ApiResponse::success(BookTextSearchResponse {
+        matches,
+        truncated,
+    })))
+}
+
+/// 单次书内搜索返回的命中上限：超出即停止扫描并以 `truncated` 标注
+pub(crate) const BOOK_SEARCH_MAX_MATCHES: usize = 200;
+
+/// 命中前后各取的上下文字符数（excerpt 长度 ≤ 2×该值 + 命中词长）
+const BOOK_SEARCH_EXCERPT_CONTEXT: usize = 30;
+
+/// 读入书籍文件并执行全文扫描。整文件读入的峰值内存受 max_file_size 约束，
+/// 与上传解析（[`parse_upload_sync`]）同一策略
+fn scan_book_file(
+    path: &str,
+    query: &str,
+    chapters: &[(String, i64)],
+    cap: usize,
+) -> Result<Vec<BookTextSearchMatch>, AppError> {
+    let bytes = std::fs::read(path).map_err(AppError::Io)?;
+    let text = std::str::from_utf8(&bytes).map_err(|_| {
+        // 上传时已保证 UTF-8：失败即文件被外部篡改，沿用 Io 错误语义（500）
+        AppError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "book file is not valid UTF-8",
+        ))
+    })?;
+    Ok(scan_matches(text, query, chapters, cap))
+}
+
+/// 在 `text` 中找出 `query` 的全部命中并换算为字符偏移、附上章节归属与摘录。
+/// 字节级 ASCII 大小写不敏感比较：UTF-8 自同步编码保证命中只会落在字符边界，
+/// 非 ASCII 字符不受 case fold 影响（等价于原样匹配）。命中数达到 `cap` 即停止；
+/// 重叠命中（如 "aa" 匹配 "aaa"）逐位置各计一条
+fn scan_matches(
+    text: &str,
+    query: &str,
+    chapters: &[(String, i64)],
+    cap: usize,
+) -> Vec<BookTextSearchMatch> {
+    let needle: Vec<u8> = query.bytes().map(|b| b.to_ascii_lowercase()).collect();
+    let mut matches = Vec::new();
+    // 已换算字节前缀 → 字符数的单遍游标：避免每条命中都重扫文件前缀
+    let (mut done_byte, mut done_char) = (0usize, 0usize);
+
+    let mut from = 0usize;
+    while matches.len() < cap
+        && let Some(hit) = find_fold(text.as_bytes(), &needle, from)
+    {
+        done_char += text[done_byte..hit].chars().count();
+        done_byte = hit;
+
+        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+        let (chapter_index, chapter_title, char_offset) = {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+            let offset = done_char as i64;
+            let (index, title) = chapter_at(chapters, offset);
+            (index, title, offset)
+        };
+        matches.push(BookTextSearchMatch {
+            chapter_index,
+            chapter_title,
+            char_offset,
+            excerpt: excerpt_around(text, hit, needle.len(), BOOK_SEARCH_EXCERPT_CONTEXT),
+        });
+        from = hit + 1;
+    }
+    matches
+}
+
+/// 从 `from` 字节起查找 `needle` 的首次 ASCII 大小写不敏感匹配，
+/// 返回命中起始字节偏移；`needle` 非空由调用方保证
+fn find_fold(haystack: &[u8], needle: &[u8], from: usize) -> Option<usize> {
+    let first = needle[0];
+    let last_start = haystack.len().checked_sub(needle.len())?;
+    (from..=last_start).find(|&i| {
+        haystack[i].to_ascii_lowercase() == first
+            && haystack[i + 1..i + needle.len()]
+                .iter()
+                .zip(&needle[1..])
+                .all(|(&h, &n)| h.to_ascii_lowercase() == n)
+    })
+}
+
+/// 二分定位命中所属章节，返回章节列表下标（0-based）与标题。
+/// txt 首章起于首个非空行，正常命中必落在某章内；空章节表或越前（防御）回退 (0, "")
+fn chapter_at(chapters: &[(String, i64)], char_offset: i64) -> (i64, String) {
+    let hit = chapters
+        .partition_point(|(_, position)| *position <= char_offset)
+        .checked_sub(1);
+    match hit.and_then(|i| chapters.get(i)) {
+        Some((title, _)) => {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+            let index = hit.unwrap_or_default() as i64;
+            (index, title.clone())
+        },
+        None => (0, String::new()),
+    }
+}
+
+/// 取命中前后各 `ctx` 个字符的纯文本上下文（含命中本身；文本不足时截到边界）
+fn excerpt_around(text: &str, hit: usize, match_bytes: usize, ctx: usize) -> String {
+    // 前文不足 ctx 字符时从头取（nth 越界返回 None → 0）
+    let start = text[..hit]
+        .char_indices()
+        .rev()
+        .nth(ctx - 1)
+        .map_or(0, |(i, _)| i);
+    let end = hit
+        + match_bytes
+        + text[hit + match_bytes..]
+            .chars()
+            .take(ctx)
+            .map(char::len_utf8)
+            .sum::<usize>();
+    text[start..end].to_string()
+}
+
 // ============ 书籍标签 ============
 
 /// 验证当前用户对书籍有写权限（必须是 owner；公开书不可改标签）
@@ -1542,10 +1850,12 @@ async fn require_book_owner(
     auth: &AuthUser,
     book_id: i64,
 ) -> Result<(), AppError> {
-    let owner_id: Option<i64> = sqlx::query_scalar("SELECT user_id FROM books WHERE id = ?")
-        .bind(book_id)
-        .fetch_optional(pool)
-        .await?;
+    // 回收站中的书不可改标签
+    let owner_id: Option<i64> =
+        sqlx::query_scalar("SELECT user_id FROM books WHERE id = ? AND deleted_at IS NULL")
+            .bind(book_id)
+            .fetch_optional(pool)
+            .await?;
     match owner_id {
         None => Err(AppError::BookNotFound),
         Some(uid) if uid == auth.user_id => Ok(()),
@@ -1620,7 +1930,10 @@ async fn set_book_tags(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_content_disposition, parse_upload_sync, read_char_slice};
+    use super::{
+        BOOK_SEARCH_MAX_MATCHES, build_content_disposition, chapter_at, excerpt_around, find_fold,
+        parse_upload_sync, read_char_slice, scan_matches,
+    };
     use crate::{error::AppError, models::BookFormat, utils::utf8::UTF8_CHUNK_SIZE};
 
     #[test]
@@ -1753,5 +2066,93 @@ mod tests {
         assert_eq!(s.chars().count(), content.chars().count());
 
         let _ = tokio::fs::remove_file(&tmp).await;
+    }
+
+    #[test]
+    fn scan_matches_case_insensitive_and_char_offsets() {
+        // ASCII 大小写不敏感；多字节字符按 chars().count() 计入偏移
+        let text = "第一章 A\nHello WORLD，世界 hello\n第二章 B\nend HELLO";
+        let chapters = vec![
+            ("第一章 A".to_string(), 0),
+            // "第一章 A\n"(6) + "Hello WORLD，世界 hello\n"(21) = 27
+            ("第二章 B".to_string(), 27),
+        ];
+        let matches = scan_matches(text, "hello", &chapters, BOOK_SEARCH_MAX_MATCHES + 1);
+        assert_eq!(matches.len(), 3);
+        // 偏移必须指向原文中的命中位置（chars().count() 语义）
+        let chars: Vec<char> = text.chars().collect();
+        for m in &matches {
+            let offset = usize::try_from(m.char_offset).unwrap();
+            let hit: String = chars[offset..offset + 5].iter().collect();
+            assert_eq!(hit.to_ascii_lowercase(), "hello");
+        }
+        assert_eq!(matches[0].char_offset, 6);
+        assert_eq!(matches[0].chapter_index, 0);
+        assert_eq!(matches[0].chapter_title, "第一章 A");
+        assert_eq!(matches[2].chapter_index, 1);
+        assert_eq!(matches[2].chapter_title, "第二章 B");
+        // excerpt 含命中本身与前后文
+        assert!(matches[0].excerpt.contains("Hello WORLD"));
+    }
+
+    #[test]
+    fn scan_matches_no_match_and_overlap() {
+        assert!(scan_matches("abc", "xyz", &[], 201).is_empty());
+        // 重叠命中逐位置各计一条
+        let hits = scan_matches("aaa", "aa", &[], 201);
+        assert_eq!(hits.iter().map(|m| m.char_offset).collect::<Vec<_>>(), [
+            0, 1
+        ]);
+    }
+
+    #[test]
+    fn scan_matches_truncates_at_cap() {
+        let text = "x".repeat(250);
+        // cap=201：扫描到 201 条即停止，调用方据此判断截断
+        let hits = scan_matches(&text, "x", &[], BOOK_SEARCH_MAX_MATCHES + 1);
+        assert_eq!(hits.len(), BOOK_SEARCH_MAX_MATCHES + 1);
+    }
+
+    #[test]
+    fn excerpt_around_context_boundaries() {
+        let text = "0123456789".repeat(10); // 100 ASCII 字符
+        // 命中在开头：前文不足 30 字符时从头取
+        assert_eq!(excerpt_around(&text, 0, 2, 3), "01234");
+        // 命中在中部：前后各 3 字符（"789" + "01" + "234"）
+        assert_eq!(excerpt_around(&text, 50, 2, 3), "78901234");
+        // 命中在结尾：后文不足时截到边界（"567" + "89"）
+        assert_eq!(excerpt_around(&text, 98, 2, 3), "56789");
+        // 多字节字符按字符（非字节）计数：前文仅 2 字符全取，后文取 2 字符
+        let cjk = "一二三四五六七八九十";
+        assert_eq!(excerpt_around(cjk, 6, 3, 2), "一二三四五");
+    }
+
+    #[test]
+    fn chapter_at_locates_by_position() {
+        let chapters = vec![
+            ("a".to_string(), 0),
+            ("b".to_string(), 10),
+            ("c".to_string(), 20),
+        ];
+        assert_eq!(chapter_at(&chapters, 0), (0, "a".to_string()));
+        assert_eq!(chapter_at(&chapters, 9), (0, "a".to_string()));
+        assert_eq!(chapter_at(&chapters, 10), (1, "b".to_string()));
+        assert_eq!(chapter_at(&chapters, 999), (2, "c".to_string()));
+        // 空章节表 / 越前：防御回退
+        assert_eq!(chapter_at(&[], 5), (0, String::new()));
+    }
+
+    #[test]
+    fn find_fold_ascii_case_fold_only() {
+        assert_eq!(find_fold(b"Hello World", b"world", 0), Some(6));
+        assert_eq!(find_fold(b"abcabc", b"cab", 0), Some(2));
+        // from 之后无命中
+        assert_eq!(find_fold(b"abcabc", b"abc", 3), Some(3));
+        assert_eq!(find_fold(b"abcabc", b"abc", 4), None);
+        // needle 比正文长
+        assert_eq!(find_fold(b"ab", b"abc", 0), None);
+        // 非 ASCII 字节不受 fold 影响（原样匹配）
+        assert_eq!(find_fold("世界".as_bytes(), "世界".as_bytes(), 0), Some(0));
+        assert_eq!(find_fold("世界".as_bytes(), "界世".as_bytes(), 0), None);
     }
 }

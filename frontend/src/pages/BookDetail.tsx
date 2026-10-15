@@ -2,6 +2,7 @@
 import { useNavigate, useParams } from '@solidjs/router';
 import { VsDownload, VsEdit, VsTrash } from 'solid-icons/vs';
 import { createResource, createSignal, Show, type Component } from 'solid-js';
+import toast from 'solid-toast';
 
 import { bookApi, markerApi, readingApi } from '../api';
 import type { Annotation, BookDetail, Bookmark } from '../api/types';
@@ -24,6 +25,7 @@ import { toastError } from '../utils/toast';
 const BookDetailPage: Component = () => {
   const params = useParams();
   const navigate = useNavigate();
+  const { t } = useI18n();
 
   // All four payloads load in parallel once the route param resolves.
   const bookId = () => Number(params.id);
@@ -51,8 +53,10 @@ const BookDetailPage: Component = () => {
     void refetchTags();
   };
 
+  // 软删除：移入回收站（可恢复），进度/批注数据保留
   const removeBook = async () => {
     await bookApi.remove(bookId());
+    toast.success(t('movedToTrash'));
     navigate('/', { replace: true });
   };
 

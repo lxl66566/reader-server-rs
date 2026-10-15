@@ -20,3 +20,6 @@ pub const DAILY_STATS_MAX_ENTRIES: usize = 1000;
 
 /// 书籍简介最大长度（字符数，按 `chars().count()` 计，CJK 友好）
 pub const BOOK_DESCRIPTION_MAX_CHARS: usize = 2000;
+
+/// 书内全文搜索单次查询词最大长度（字符数；防御超长查询词的扫描开销）
+pub const BOOK_SEARCH_QUERY_MAX_CHARS: usize = 128;

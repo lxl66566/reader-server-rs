@@ -391,10 +391,12 @@ async fn delete_user(
     )))
 }
 
-// 管理员书籍列表查询参数（q 非空时按 标题/作者/所有者用户名 模糊匹配）
+// 管理员书籍列表查询参数（q 非空时按 标题/作者/所有者用户名 模糊匹配；
+// include_deleted=true 时包含回收站中的书，行内带 deleted_at 标记）
 #[derive(Debug, Deserialize)]
 pub struct AdminBookSearchParams {
     pub q: Option<String>,
+    pub include_deleted: Option<bool>,
 }
 
 // 全站书籍列表行（私用 FromRow 结构，避免在闭包里手动取列）
@@ -410,6 +412,7 @@ struct AdminBookRow {
     total_pages: i64,
     file_path: String,
     created_at: String,
+    deleted_at: Option<String>,
     format: crate::models::BookFormat,
 }
 
@@ -425,6 +428,8 @@ async fn list_all_books(
 
     let q = search.q.as_deref().unwrap_or("").trim();
     let pattern = (!q.is_empty()).then(|| format!("%{}%", escape_like(q)));
+    // 默认不含回收站中的书；include_deleted=true 时全量返回并携带 deleted_at
+    let include_deleted = search.include_deleted.unwrap_or(false);
 
     let mut count_qb = sqlx::QueryBuilder::<Sqlite>::new(
         "SELECT COUNT(*) FROM books b JOIN users u ON u.id = b.user_id",
@@ -433,13 +438,25 @@ async fn list_all_books(
         // 注意：QueryBuilder 是运行时拼接，sqlx 的 `AS "col: Type"` 类型覆盖语法
         // （编译期宏专用）会被当成字面列名导致 ColumnNotFound，枚举列靠 FromRow 按名解码
         "SELECT b.id, b.title, b.author, b.user_id, u.username AS owner_username, b.is_public, \
-         b.total_chars, b.total_pages, b.file_path, b.created_at, b.format FROM books b JOIN \
-         users u ON u.id = b.user_id",
+         b.total_chars, b.total_pages, b.file_path, b.created_at, b.deleted_at, b.format FROM \
+         books b JOIN users u ON u.id = b.user_id",
     );
+    if !include_deleted {
+        for qb in [&mut count_qb, &mut list_qb] {
+            qb.push(" WHERE b.deleted_at IS NULL");
+        }
+    }
     if let Some(pattern) = &pattern {
+        // 已 push 过 deleted_at 过滤时用 AND 接续，否则开 WHERE
+        let keyword = if include_deleted {
+            " WHERE"
+        } else {
+            " AND"
+        };
         // push 与 push_bind 必须交错：push 只追加原文，push_bind 会再追加一个 `?` 占位符
         for qb in [&mut count_qb, &mut list_qb] {
-            qb.push(" WHERE (b.title LIKE ")
+            qb.push(keyword)
+                .push(" (b.title LIKE ")
                 .push_bind(pattern.clone())
                 .push(" ESCAPE '\\' OR b.author LIKE ")
                 .push_bind(pattern.clone())
@@ -484,6 +501,7 @@ async fn list_all_books(
                 total_pages: row.total_pages,
                 file_size: file_size.and_then(|s| i64::try_from(s).ok()),
                 created_at: row.created_at,
+                deleted_at: row.deleted_at,
             });
         }
         items
