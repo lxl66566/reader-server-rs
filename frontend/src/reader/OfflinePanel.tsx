@@ -189,8 +189,13 @@ const OfflinePanel: Component<{
   };
 
   const clear = async () => {
-    await clearBook(props.book.book_id);
-    void refetch();
+    try {
+      await clearBook(props.book.book_id);
+      void refetch();
+    } catch (err) {
+      // IDB 删除失败不能静默：与下载失败共用同一套提示
+      fail(err);
+    }
   };
 
   return (

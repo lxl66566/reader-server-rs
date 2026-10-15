@@ -100,21 +100,18 @@ export async function chunkPut(
 /** 清除单本书的内容缓存（详情/分块/文件/大小；进度另行保留） */
 export async function clearBookContent(bookId: number): Promise<void> {
   const database = await db();
-  const prefixes = [
-    cacheKey('b', bookId),
-    cacheKey('c', bookId) + ':',
-    cacheKey('f', bookId),
-  ];
+  // meta/files 每书仅一个 key，精确删除；前缀匹配会误伤 id 呈前缀关系的
+  // 其它书（如 1 与 12），曾导致清一本连累整库
+  await database.delete('meta', cacheKey('b', bookId));
+  await database.delete('files', cacheKey('f', bookId));
+  // chunks 每书多个 key（key 含分块起始偏移），必须带尾分隔符前缀枚举
+  const prefix = cacheKey('c', bookId) + ':';
   // 顺序执行：IDB 事务按序提交即可，无需并行
-  // 顺序执行：IDB 事务按序提交即可，无需并行
-  for (const store of ['meta', 'chunks', 'files'] as const) {
-    // oxlint-disable-next-line no-await-in-loop
-    const keys = await database.getAllKeys(store);
-    for (const key of keys) {
-      if (prefixes.some(prefix => key.startsWith(prefix))) {
-        // oxlint-disable-next-line no-await-in-loop
-        await database.delete(store, key);
-      }
+  const keys = await database.getAllKeys('chunks');
+  for (const key of keys) {
+    if (key.startsWith(prefix)) {
+      // oxlint-disable-next-line no-await-in-loop
+      await database.delete('chunks', key);
     }
   }
   await database.delete('kv', cacheKey('fmeta', bookId));
