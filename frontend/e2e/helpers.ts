@@ -37,6 +37,13 @@ interface BookProgress {
   percent: number;
 }
 
+/** 服务端 ws 下行帧（仅声明测试用到的子集） */
+interface WsFrame {
+  message?: string;
+  type: string;
+  updated?: boolean;
+}
+
 /** 经 API 注册专属测试用户 */
 export async function createUser(
   request: APIRequestContext,
@@ -77,6 +84,39 @@ export async function getSettings(
   expect(res.ok(), `get settings: ${await res.text()}`).toBe(true);
   const { data } = (await res.json()) as ApiResponse<Record<string, unknown>>;
   return data;
+}
+
+/**
+ * 经 WS 心跳把服务端进度播种到指定位置（进度只能经 ws 心跳写入，无 HTTP
+ * 端点）。直连后端而非前端 origin：vite dev 代理的 ws 转发在页面连接
+ * 快速更替时偶发失败；目标与 vite 的 /api 代理一致（E2E_PROXY 可覆盖）。
+ * 播种 device_id 与页面连接不同会先触发设备让位（首跳不落库），收到
+ * updated=true 的 ack 为止。
+ */
+export async function seedReadingProgress(
+  token: string,
+  bookId: number,
+  locator: number,
+  percent: number,
+): Promise<void> {
+  const origin = (process.env.E2E_PROXY ?? 'http://127.0.0.1:3000').replace(
+    /^http/,
+    'ws',
+  );
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      // 串行重试是语义要求：上一次失败后才能发起下一次
+      // oxlint-disable-next-line no-await-in-loop
+      await seedOnce(origin, token, bookId, locator, percent);
+      return;
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr instanceof Error
+    ? lastErr
+    : new Error('seedReadingProgress failed');
 }
 
 /** 把 token/locale 注入 localStorage：后续页面加载即处于登录态（zh-CN） */
@@ -158,4 +198,69 @@ export async function waitForSavedProgress(
     )
     .toBeGreaterThan(0);
   return saved;
+}
+
+/** 单次播种尝试：subscribe + 心跳重发至 updated=true（首跳设备让位不落库） */
+function seedOnce(
+  wsOrigin: string,
+  token: string,
+  bookId: number,
+  locator: number,
+  percent: number,
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const ws = new WebSocket(
+      `${wsOrigin}/api/v1/reading/ws?token=${encodeURIComponent(token)}`,
+    );
+    const heartbeat = () => {
+      ws.send(
+        JSON.stringify({
+          book_id: bookId,
+          locator: String(locator),
+          percent,
+          type: 'heartbeat',
+        }),
+      );
+    };
+    const timer = setTimeout(() => {
+      ws.close();
+      reject(new Error('seedReadingProgress timeout'));
+    }, 5000);
+    const fail = (reason: string) => {
+      clearTimeout(timer);
+      ws.close();
+      reject(new Error(reason));
+    };
+    ws.onerror = () => {
+      fail('seed ws connect failed');
+    };
+    ws.onopen = () => {
+      ws.send(
+        JSON.stringify({
+          book_id: bookId,
+          device_id: 'e2e-seed',
+          type: 'subscribe',
+        }),
+      );
+    };
+    // vite dev 代理在页面 ws 连接更替时偶发直接掐断升级连接（1006），
+    // 视为可重试失败而不是干等超时
+    ws.onclose = () => {
+      fail('seed ws closed before updated ack');
+    };
+    ws.onmessage = (evt: MessageEvent) => {
+      const frame = JSON.parse(String(evt.data)) as WsFrame;
+      if (frame.type === 'subscribed') heartbeat();
+      else if (frame.type === 'heartbeat_ack') {
+        if (frame.updated) {
+          clearTimeout(timer);
+          ws.onclose = null;
+          ws.close();
+          resolve();
+        } else heartbeat();
+      } else if (frame.type === 'error') {
+        fail(`seed ws error: ${frame.message ?? ''}`);
+      }
+    };
+  });
 }

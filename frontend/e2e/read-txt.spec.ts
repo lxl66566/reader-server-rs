@@ -1,6 +1,6 @@
 // TXT 阅读冒烟：UI 上传 → 详情页进入阅读 → 分页翻页 → 切滚动模式 →
 // 滚动产生进度 → 刷新后进度保留（心跳落库 + 位置恢复）。
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 
 import { expect, test, type Page } from '@playwright/test';
 
@@ -8,6 +8,7 @@ import {
   createUser,
   getBook,
   getSettings,
+  seedReadingProgress,
   seedSession,
   updateSettings,
   uploadBook,
@@ -37,8 +38,10 @@ function topOffset(page: Page): Promise<null | number> {
     if (!el) return null;
     const base = el.offsetTop;
     let best: null | number = null;
+    // 容差与 TxtReader 的 JUMP_TOP_INSET_PX 对齐：跳转落点（段落顶距
+    // 视口顶 12px 留白）必须读回该段落本身，否则永远差一段
     for (const p of el.querySelectorAll<HTMLElement>('[data-pos]')) {
-      if (p.offsetTop - base <= el.scrollTop + 8) best = Number(p.dataset.pos);
+      if (p.offsetTop - base <= el.scrollTop + 12) best = Number(p.dataset.pos);
       else break;
     }
     return best;
@@ -179,8 +182,10 @@ test('移动端滚动模式触摸 tap 可用', async ({ page }) => {
   await closeChrome(page);
   await expect(page.getByRole('button', { name: '目录' })).toBeHidden();
 
+  // 深链跳转是异步的（加载窗口 + rAF 定位）：等其生效再取样，
+  // 否则可能先于跳转完成读到 scrollTop=0（构建产物加载快时更易触发）
+  await expect.poll(() => scrollTopOf(page)).toBeGreaterThan(0);
   const before = await scrollTopOf(page);
-  expect(before).toBeGreaterThan(0);
   // 触摸 tap 下 1/3：向前滚动约一屏（等待 280ms 翻页动画结束再断言）
   await page.touchscreen.tap(vw / 2, vh * 0.85);
   await page.waitForTimeout(500);
@@ -198,6 +203,59 @@ function bookIdFromUrl(url: string): number {
   if (!match?.[1]) throw new Error(`no book id in url: ${url}`);
   return Number(match[1]);
 }
+
+test('滚动模式关闭重开标签页后恢复位置不回退', async ({ page: page1 }) => {
+  // 回归：恢复定位曾按 content-visibility 塌缩布局的 offsetTop 直接写
+  // scrollTop，重开页面后位置回退一到数页，且回退后的位置会被心跳写回
+  // 服务端，进度永久丢失
+  const request = page1.context().request;
+  const user = await createUser(request, 'restore');
+  seedSession(page1, user.token);
+  await updateSettings(request, user.token, { pagination_mode: 'scroll' });
+  const book = await uploadBook(request, user.token, BOOK_PATH);
+
+  // --- 第一段阅读：滚几屏建立设备心跳与本地进度缓存，随后关闭标签页 ---
+  await page1.goto(`/read/${book.book_id}`);
+  const scroller = page1.locator('.overflow-y-auto');
+  await expect(scroller).toBeVisible();
+  await expect.poll(() => topOffset(page1), { timeout: 15_000 }).not.toBeNull();
+  const { vh, vw } = viewportSize(page1);
+  await page1.mouse.move(vw / 2, vh / 2);
+  for (let i = 0; i < 4; i++) {
+    // oxlint-disable-next-line no-await-in-loop
+    await page1.mouse.wheel(0, Math.round(vh * 0.75));
+    // oxlint-disable-next-line no-await-in-loop
+    await page1.waitForTimeout(150);
+  }
+  await page1.waitForTimeout(2500); // 心跳落库 + IDB 写盘
+  await page1.close();
+
+  // --- 服务端进度播种到 chunk 深处（进度只能经 ws 心跳写入） ---
+  // 11985 是 novel.txt 第一章内的段落起点（全书 31452 字），距 chunk 顶
+  // （6000）约 90 段：塌缩布局下约 2500px，远超浏览器对 content-visibility
+  // 的近屏展开余量，恢复时目标必然处于塌缩状态——正是回归场景
+  const target = 11985;
+  await seedReadingProgress(
+    user.token,
+    book.book_id,
+    target,
+    target / readFileSync(BOOK_PATH, 'utf8').length,
+  );
+
+  // --- 关闭后重开（同 context：localStorage 保留登录态，sessionStorage
+  // 重建使设备标识变化，走服务端设备让位逻辑，等同真实关页重开） ---
+  const page2 = await page1.context().newPage();
+  seedSession(page2, user.token);
+  await page2.goto(`/read/${book.book_id}`);
+  await expect
+    .poll(() => topOffset(page2), { intervals: [300], timeout: 15_000 })
+    .toBe(target);
+
+  // 重开后的心跳不得把更早的位置写回服务端（回归里进度曾被写回旧值）
+  await page2.waitForTimeout(5000);
+  const saved = await getBook(request, user.token, book.book_id);
+  expect(saved.locator).toBe(String(target));
+});
 
 test('超长单章增量加载期间视口位置不回退', async ({ page }) => {
   // 回归：章节切分失败的超长单章在滚动模式增量加载时，曾因“先换窗后

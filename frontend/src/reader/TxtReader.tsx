@@ -51,6 +51,10 @@ import type { FormatReaderProps } from './types';
 const PAGE_INDICATOR_SPACE_PX = 28;
 // 分页重测的去抖间隔：拖动滑块时每个 tick 都改排版，停下后才重测
 const MEASURE_DEBOUNCE_MS = 200;
+// 滚动模式跳转落点：目标段落顶部距视口顶的留白。findParagraphElAtTop
+// 的回读容差必须与此对齐，否则跳转落定后首个 onScroll 会把位置读回
+// 上一段，每次开合页面进度回退一段并写回服务端
+const JUMP_TOP_INSET_PX = 12;
 
 interface Paragraph {
   offset: number;
@@ -724,13 +728,23 @@ const ScrollView = (
     await new Promise<void>(resolve => {
       requestAnimationFrame(() => {
         if (container) {
-          // 切到上一章时落到章末衔接阅读顺序，其余情况定位到目标段落
+          // content-visibility: auto 把视口外段落折叠成单行占位，直接读
+          // offsetTop / scrollHeight 拿到的是塌缩布局的值，恢复位置会
+          // 回退数页；scrollIntoView 会展开目标沿途段落并精确计算真实
+          // 落点（跳转目标是 cv 元素时视为 relevant to the user）
           if (land === 'bottom') {
-            container.scrollTop = container.scrollHeight;
+            // 切到上一章时落到章末衔接阅读顺序
+            const last = paragraphElsInOrder().at(-1);
+            if (last) last.scrollIntoView({ block: 'end' });
+            else container.scrollTop = container.scrollHeight;
           } else {
             const target = findParagraphEl(at);
             if (target) {
-              container.scrollTop = Math.max(0, target.offsetTop - 12);
+              target.scrollIntoView({ block: 'start' });
+              container.scrollTop = Math.max(
+                0,
+                container.scrollTop - JUMP_TOP_INSET_PX,
+              );
             }
           }
         }
@@ -763,7 +777,9 @@ const ScrollView = (
     const base = container.offsetTop;
     return lastMatching(
       paragraphElsInOrder(),
-      el => el.offsetTop - base <= scrollTop + 8,
+      // 容差与 JUMP_TOP_INSET_PX 对齐：跳转落点（段落顶距视口顶留白
+      // 12px）必须能读回该段落本身，否则每次恢复都回退一段
+      el => el.offsetTop - base <= scrollTop + JUMP_TOP_INSET_PX,
     );
   }
 
