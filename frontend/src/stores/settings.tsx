@@ -12,6 +12,7 @@ import { createStore } from 'solid-js/store';
 
 import { readingApi } from '../api';
 import type { PaginationMode, ReadingSettings, ThemeMode } from '../api/types';
+import { fetchSettings, persistSettings } from '../offline/api';
 import { resolvedTheme, setThemeMode } from '../theme';
 import { useAuth } from './auth';
 
@@ -69,11 +70,8 @@ export const SettingsProvider: ParentComponent = props => {
       // refetch 会绕过 source 门控强制执行 fetcher：登出后必须短路，
       // 否则会多发一次不带 token、注定 401 的请求
       if (!loggedIn) return undefined;
-      try {
-        return await readingApi.settings();
-      } catch {
-        return undefined;
-      }
+      // 断网时回退本地缓存的设置（离线阅读排版一致）
+      return await fetchSettings();
     },
   );
 
@@ -120,6 +118,10 @@ export const SettingsProvider: ParentComponent = props => {
 
   const update: SettingsContextValue['update'] = patch => {
     setSettings(patch);
+    // 乐观快照落本地缓存：离线时排版设置依然生效。
+    // untrack：初始化 effect 内调用 update 时，展开 settings 会把该
+    // effect 订阅到 store 全字段，用户后续改动将重放陈旧服务端值
+    persistSettings(untrack(() => ({ ...settings })));
     if (patch.theme !== undefined) setThemeMode(patch.theme);
     pending = { ...pending, ...patch };
     clearTimeout(syncTimer);

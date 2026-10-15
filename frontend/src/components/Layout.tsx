@@ -7,6 +7,7 @@ import toast from 'solid-toast';
 
 import { useI18n } from '../i18n';
 import { useAuth } from '../stores/auth';
+import { OfflineBanner } from './OfflineBanner';
 import { ThemeSwitcher } from './ThemeSwitcher';
 
 export const Layout: ParentComponent = props => {
@@ -22,6 +23,7 @@ export const Layout: ParentComponent = props => {
 
   return (
     <div class="flex min-h-full flex-col">
+      <OfflineBanner />
       <header class="safe-top border-edge bg-surface sticky top-0 z-40 border-b">
         <div class="mx-auto flex h-12 max-w-4xl items-center gap-2 px-4 sm:gap-4">
           <A class="flex items-center gap-1.5 text-base font-semibold" href="/">

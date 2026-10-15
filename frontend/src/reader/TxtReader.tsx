@@ -16,6 +16,7 @@ import {
 import { bookApi } from '../api';
 import { LoadErrorPanel } from '../components/LoadErrorPanel';
 import { useI18n } from '../i18n';
+import { offlineContentLoader } from '../offline/api';
 import { fontFamilyCss, useSettings } from '../stores/settings';
 import {
   convertChinese,
@@ -73,7 +74,12 @@ interface ViewProps {
 
 const TxtReader = (props: FormatReaderProps) => {
   const { settings } = useSettings();
-  const source = new TextSource(props.book.book_id, props.book.total_chars);
+  // 断网时 chunk 读取回退 IDB 缓存；在线读取写穿缓存
+  const source = new TextSource(
+    props.book.book_id,
+    props.book.total_chars,
+    offlineContentLoader(props.book.book_id),
+  );
 
   // char offset at the top of the viewport (scroll) or page start (paginate)
   const [offset, setOffset] = createSignal(initialOffset());

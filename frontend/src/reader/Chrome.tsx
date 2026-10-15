@@ -6,6 +6,7 @@ import {
   VsArrowLeft,
   VsBookmark,
   VsChecklist,
+  VsCloudDownload,
   VsListOrdered,
   VsNote,
   VsSettingsGear,
@@ -15,11 +16,13 @@ import toast from 'solid-toast';
 
 import { markerApi } from '../api';
 import type { Annotation, BookDetail, Bookmark } from '../api/types';
+import { isOnline, OfflineBanner } from '../components/OfflineBanner';
 import { ReaderSettingRows } from '../components/settings/ReaderSettingRows';
 import { Button, EmptyState, Input, Modal, Spinner } from '../components/ui';
 import { useI18n } from '../i18n';
 import type { DictKey } from '../i18n/zh-CN';
 import { formatPercent } from '../utils/format';
+import OfflinePanel from './OfflinePanel';
 import type { ReaderNavigator } from './types';
 
 export interface ChromeProps {
@@ -38,7 +41,13 @@ export interface ChromeProps {
   wsGaveUp: () => boolean;
 }
 
-type Panel = 'annotations' | 'bookmarks' | 'settings' | 'toc' | null;
+type Panel =
+  | 'annotations'
+  | 'bookmarks'
+  | 'offline'
+  | 'settings'
+  | 'toc'
+  | null;
 
 const Chrome = (props: ChromeProps) => {
   const { t } = useI18n();
@@ -54,14 +63,15 @@ const Chrome = (props: ChromeProps) => {
 
   return (
     <>
-      {/* reconnecting hint is always visible, even with chrome hidden */}
-      <Show when={props.reconnecting()}>
+      {/* reconnecting hint is always visible, even with chrome hidden.
+          Offline state is already indicated by the offline banner. */}
+      <Show when={props.reconnecting() && isOnline()}>
         <div class="bg-fg/70 text-bg safe-top absolute top-0 left-0 z-30 w-full py-1 text-center text-xs">
           {t('readerReconnecting')}
         </div>
       </Show>
       {/* 自动重连放弃：横幅变为可点击的手动重连入口 */}
-      <Show when={props.wsGaveUp()}>
+      <Show when={props.wsGaveUp() && isOnline()}>
         <button
           class="bg-fg/70 text-bg hover:bg-fg/85 safe-top absolute top-0 left-0 z-30 w-full cursor-pointer py-1 text-center text-xs underline-offset-2 hover:underline"
           onClick={() => {
@@ -71,6 +81,8 @@ const Chrome = (props: ChromeProps) => {
           {t('readerReconnectManual')}
         </button>
       </Show>
+
+      <OfflineBanner class="safe-top absolute top-0 left-0 z-30" />
 
       <Show when={props.visible()}>
         {/* top bar */}
@@ -89,6 +101,14 @@ const Chrome = (props: ChromeProps) => {
             <div class="min-w-0 flex-1 truncate text-sm font-medium">
               {props.book.title}
             </div>
+            <button
+              aria-label={t('offlineCache')}
+              class="text-muted hover:bg-page hover:text-ink flex size-9 cursor-pointer items-center justify-center rounded"
+              onClick={() => open('offline')}
+              type="button"
+            >
+              <VsCloudDownload class="size-5" />
+            </button>
             <div class="text-muted text-xs tabular-nums">
               {t('progressPercent', {
                 percent: formatPercent(props.percent()),
@@ -159,6 +179,12 @@ const Chrome = (props: ChromeProps) => {
         }}
         open={panel() === 'annotations'}
         refetch={props.refetchAnnotations}
+      />
+      <OfflinePanel
+        book={props.book}
+        currentPosition={props.currentPosition}
+        onClose={() => setPanel(null)}
+        open={panel() === 'offline'}
       />
       <SettingsPanel
         onClose={() => setPanel(null)}

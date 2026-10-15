@@ -46,6 +46,12 @@ reader-server-rs 是一个阅读服务器，用户可以向服务器上传 txt �
 
 NixOS 用户：请使用[我的 NUR](https://github.com/lxl66566/NUR)。
 
+### 离线阅读
+
+阅读器顶栏的离线缓存按钮支持缓存后续若干章或缓存全本（txt 按分块、epub/pdf 按整本文件），阅读过的 txt 内容也会自动写穿到本地缓存。断网后重新打开页面即可继续阅读：页面外壳由 Service Worker 预缓存提供，书籍内容与详情、书架、书签、批注、阅读设置均回退到 IndexedDB 中的本地副本；离线期间产生的阅读进度会在恢复联网后随心跳自动推送。缓存按用户隔离，可在缓存面板中随时清除。
+
+离线打开页面依赖 Service Worker，需要 secure context（HTTPS 或 localhost）；纯 HTTP 的局域网部署无法使用离线打开，但已打开的页面在断网后仍可继续阅读与缓存已加载的内容。
+
 ### 开发
 
 前端由 vite dev server 单独提供，后端不内嵌：

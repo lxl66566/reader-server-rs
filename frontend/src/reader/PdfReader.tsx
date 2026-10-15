@@ -13,10 +13,10 @@ import {
   Show,
 } from 'solid-js';
 
-import { bookApi } from '../api';
 import { LoadErrorPanel } from '../components/LoadErrorPanel';
 import { Spinner } from '../components/ui';
 import { useI18n } from '../i18n';
+import { fetchBookFile } from '../offline/api';
 import { useSettings } from '../stores/settings';
 import { useStripFlip } from './gestures';
 import type { FormatReaderProps } from './types';
@@ -56,7 +56,8 @@ const PdfReader = (props: FormatReaderProps) => {
   const load = async () => {
     setError(false);
     try {
-      const data = await bookApi.fetchFile(props.book.book_id);
+      // 断网时回退显式缓存的整本文件
+      const data = await fetchBookFile(props.book.book_id);
       // getDocument 会把 buffer transfer 给 worker（原件被 detach），
       // 复制一份保住 ETag 缓存里的原 buffer
       loadingTask = pdfjs.getDocument({ data: data.slice(0) });

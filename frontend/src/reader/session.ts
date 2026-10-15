@@ -24,6 +24,8 @@ export interface ReadingSessionHandlers {
   onBookmarkChanged: () => void;
   /** 重连放弃（达到上限）：UI 应提供手动重连入口 */
   onGaveUp?: () => void;
+  /** 每次心跳应答：synced=false 表示进度未落库（他端持有 / 新设备接管） */
+  onHeartbeatAck?: (synced: boolean) => void;
   onReconnecting?: (reconnecting: boolean) => void;
   /** another device moved; jump to stay in sync */
   onRemoteProgress: (locator: string, percent: number) => void;
@@ -134,6 +136,7 @@ export function createReadingSession(
           handlers.onBookmarkChanged();
           break;
         case 'heartbeat_ack':
+          handlers.onHeartbeatAck?.(message.synced);
           if (!message.synced) {
             handlers.onSyncRequired(message.locator, message.percent);
           }

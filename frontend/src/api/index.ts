@@ -82,6 +82,17 @@ export const bookApi = {
       binary: true,
       cache: true,
     }),
+  // 流式拉取整本文件并回调累计字节数：离线缓存下载的进度展示用
+  fetchFileStreaming: (
+    bookId: number,
+    onProgress: (received: number) => void,
+    signal?: AbortSignal,
+  ) =>
+    api.get<ArrayBuffer>(`/api/v1/books/${bookId}/file`, {
+      binary: true,
+      onDownloadProgress: onProgress,
+      signal,
+    }),
   fileUrl: (bookId: number) => `/api/v1/books/${bookId}/file`,
   jumpToChapter: (bookId: number, chapterId: number) =>
     api.get<{ position: number }>(`/api/v1/books/${bookId}/jump_to_chapter`, {

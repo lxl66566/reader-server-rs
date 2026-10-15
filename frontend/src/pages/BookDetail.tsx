@@ -17,6 +17,7 @@ import { TagEditor } from '../components/book/TagEditor';
 import { LoadErrorPanel } from '../components/LoadErrorPanel';
 import { IconButton, Spinner } from '../components/ui';
 import { useI18n } from '../i18n';
+import { fetchAnnotations, fetchBookmarks, fetchDetail } from '../offline/api';
 import { saveResponseFile } from '../utils/download';
 import { toastError } from '../utils/toast';
 
@@ -26,16 +27,18 @@ const BookDetailPage: Component = () => {
 
   // All four payloads load in parallel once the route param resolves.
   const bookId = () => Number(params.id);
-  const [detail, { refetch: refetchDetail }] = createResource(bookId, id =>
-    bookApi.detail(id),
+  // 断网时详情/书签/批注回退本地缓存（写穿）
+  const [detail, { refetch: refetchDetail }] = createResource(
+    bookId,
+    async id => (await fetchDetail(id)).detail,
   );
   const [bookmarks, { refetch: refetchBookmarks }] = createResource(
     bookId,
-    id => markerApi.bookmarks(id),
+    id => fetchBookmarks(id),
   );
   const [annotations, { refetch: refetchAnnotations }] = createResource(
     bookId,
-    id => markerApi.annotations(id),
+    id => fetchAnnotations(id),
   );
   const [tags, { refetch: refetchTags }] = createResource(bookId, id =>
     bookApi.tags(id),
@@ -100,9 +103,9 @@ const BookDetailPage: Component = () => {
       <Show when={!invalidId() && !detail.loading && detail()}>
         {/* detail() is guaranteed here by the Show guard above */}
         <BookView
-          annotations={annotations()?.annotations ?? []}
+          annotations={annotations() ?? []}
           book={detail()!}
-          bookmarks={bookmarks()?.bookmarks ?? []}
+          bookmarks={bookmarks() ?? []}
           onBookDelete={removeBook}
           onBookUpdate={updateBook}
           onDeleteAnnotation={removeAnnotation}

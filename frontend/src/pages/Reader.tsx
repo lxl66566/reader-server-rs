@@ -14,11 +14,18 @@ import {
 } from 'solid-js';
 import toast from 'solid-toast';
 
-import { bookApi, markerApi } from '../api';
 import type { BookDetail } from '../api/types';
 import { LoadErrorPanel } from '../components/LoadErrorPanel';
 import { Spinner } from '../components/ui';
 import { useI18n } from '../i18n';
+import {
+  fetchAnnotations,
+  fetchBookmarks,
+  fetchDetail,
+  markProgressPushed,
+  readProgress,
+  saveProgress,
+} from '../offline/api';
 import Chrome from '../reader/Chrome';
 import { createReadingSession } from '../reader/session';
 import TxtReader from '../reader/TxtReader';
@@ -37,6 +44,8 @@ const ACTIVITY_WINDOW_MS = 60_000;
 const SYNC_JUMP_MIN_INTERVAL_MS = 2000;
 const SYNC_JUMP_MIN_PERCENT_DELTA = 0.005;
 const SYNC_TOAST_MIN_INTERVAL_MS = 10_000;
+// 本地进度持久化的节流间隔：离线续读精度与 IDB 写频的折中
+const PROGRESS_SAVE_MS = 3000;
 
 const Reader = () => {
   useRequireAuth();
@@ -48,7 +57,15 @@ const Reader = () => {
 
   const [book, { refetch }] = createResource(
     () => (invalidId() ? null : bookId()),
-    id => bookApi.detail(id),
+    async (id: number) => {
+      // fetchDetail：断网回退缓存详情；readProgress：本地进度恢复。
+      // 详情来自缓存回退（等效离线）或进度未推送时，本地进度优先于
+      // 缓存详情里的陈旧服务端进度
+      const { detail, fromCache } = await fetchDetail(id);
+      const cached = await readProgress(id);
+      const start = cached && (cached.unpushed || fromCache) ? cached : null;
+      return { detail, start };
+    },
   );
   const hasError = () => invalidId() || Boolean(book.error);
 
@@ -77,14 +94,20 @@ const Reader = () => {
       }
       when={book()}
     >
-      {detail => <ReaderBody book={detail()} />}
+      {boot => <ReaderBody book={boot().detail} offlineStart={boot().start} />}
     </Show>
   );
 };
 
 export default Reader;
 
-const ReaderBody = (props: { book: BookDetail }) => {
+interface ReaderBodyProps {
+  book: BookDetail;
+  /** 本地未推送的离线进度：作为初始位置并抑制一次服务端回跳 */
+  offlineStart: null | { locator: string; percent: number };
+}
+
+const ReaderBody = (props: ReaderBodyProps) => {
   const { t } = useI18n();
   const { reload: reloadSettings, settings } = useSettings();
   const [searchParams] = useSearchParams<{
@@ -96,18 +119,40 @@ const ReaderBody = (props: { book: BookDetail }) => {
   const [reconnecting, setReconnecting] = createSignal(false);
   // 重连放弃状态：横幅变为可点击的手动重连入口
   const [wsGaveUp, setWsGaveUp] = createSignal(false);
-  const [percent, setPercent] = createSignal(props.book.percent);
+  // 离线进度优先于服务端进度作为起点；percent 显示同步采用
+  const [percent, setPercent] = createSignal(
+    props.offlineStart ? props.offlineStart.percent : props.book.percent,
+  );
+  const initialLocator = props.offlineStart
+    ? props.offlineStart.locator
+    : props.book.locator;
   const [annotationsVersion, setAnnotationsVersion] = createSignal(0);
 
+  // 断网回退缓存的书签/批注列表（写穿）
   const [bookmarks, { refetch: refetchBookmarks }] = createResource(() =>
-    markerApi.bookmarks(props.book.book_id).then(res => res.bookmarks),
+    fetchBookmarks(props.book.book_id),
   );
   const [annotations, { refetch: refetchAnnotations }] = createResource(() =>
-    markerApi.annotations(props.book.book_id).then(res => res.annotations),
+    fetchAnnotations(props.book.book_id),
   );
 
   let navigatorRef: null | ReaderNavigator = null;
   let positionRef: null | { locator: string; percent: number } = null;
+
+  // --- 本地进度持久化（离线续读） ---
+  // 心跳 ack synced=true 表示当前位置已落库：清除回跳抑制并标记已推送
+  let suppressSync = props.offlineStart !== null;
+  let progressDirty = true;
+  let lastProgressSave = 0;
+  let pendingPosition: null | { locator: string; percent: number } = null;
+  const saveProgressThrottled = (pos: { locator: string; percent: number }) => {
+    pendingPosition = pos;
+    const now = Date.now();
+    if (now - lastProgressSave < PROGRESS_SAVE_MS) return;
+    lastProgressSave = now;
+    progressDirty = true;
+    void saveProgress(props.book.book_id, pos.locator, pos.percent);
+  };
 
   // --- 跨设备进度同步 ---
   // 跳转是异步的（txt 需加载窗口、epub 需加载章节）：期间清空 positionRef
@@ -146,6 +191,8 @@ const ReaderBody = (props: { book: BookDetail }) => {
     locator: string,
     remotePercent: number,
   ): void => {
+    // 本地未推送进度优先：抑制回跳，下一次心跳把本地进度写回服务端
+    if (suppressSync) return;
     const now = Date.now();
     if (
       positionRef !== null &&
@@ -170,6 +217,15 @@ const ReaderBody = (props: { book: BookDetail }) => {
     },
     onBookmarkChanged: () => void refetchBookmarks(),
     onGaveUp: () => setWsGaveUp(true),
+    onHeartbeatAck: synced => {
+      if (!synced) return;
+      // 本地进度已落库：解除回跳抑制；缓存标记为已推送
+      suppressSync = false;
+      if (progressDirty) {
+        progressDirty = false;
+        void markProgressPushed(props.book.book_id);
+      }
+    },
     onReconnecting: reconnecting => {
       setReconnecting(reconnecting);
       if (!reconnecting) setWsGaveUp(false);
@@ -229,9 +285,22 @@ const ReaderBody = (props: { book: BookDetail }) => {
     }
     positionRef = { locator, percent: nextPercent };
     setPercent(nextPercent);
+    // 本地持久化：离线续读与重开页面时的进度恢复
+    saveProgressThrottled(positionRef);
     // 位置变化是活跃证据（如 epub 分页翻页）；远端同步跳转除外
     markActivity();
   };
+
+  // 卸载时补写最后一次节流未落盘的进度（离线场景尤其重要）
+  onCleanup(() => {
+    if (pendingPosition) {
+      void saveProgress(
+        props.book.book_id,
+        pendingPosition.locator,
+        pendingPosition.percent,
+      );
+    }
+  });
 
   // page uses the user's custom reading colors, overriding the global theme
   const surfaceStyle = () => ({
@@ -262,7 +331,7 @@ const ReaderBody = (props: { book: BookDetail }) => {
               annotationsVersion={annotationsVersion}
               book={props.book}
               deepLink={deepLink()}
-              initialLocator={props.book.locator}
+              initialLocator={initialLocator}
               onPosition={onPosition}
               onTapCenter={() => setChromeVisible(v => !v)}
               registerNavigator={nav => {
@@ -275,7 +344,7 @@ const ReaderBody = (props: { book: BookDetail }) => {
               annotationsVersion={annotationsVersion}
               book={props.book}
               deepLink={deepLink()}
-              initialLocator={props.book.locator}
+              initialLocator={initialLocator}
               onActivity={markActivity}
               onPosition={onPosition}
               onTapCenter={() => setChromeVisible(v => !v)}
@@ -289,7 +358,7 @@ const ReaderBody = (props: { book: BookDetail }) => {
               annotationsVersion={annotationsVersion}
               book={props.book}
               deepLink={deepLink()}
-              initialLocator={props.book.locator}
+              initialLocator={initialLocator}
               onPosition={onPosition}
               onTapCenter={() => setChromeVisible(v => !v)}
               registerNavigator={nav => {

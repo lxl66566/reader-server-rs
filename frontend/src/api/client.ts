@@ -61,6 +61,8 @@ export interface RequestOptions {
   cache?: boolean;
   form?: FormData;
   headers?: Record<string, string>;
+  /** 二进制下载的进度回调（已接收字节数）；仅 binary 模式生效 */
+  onDownloadProgress?: (received: number) => void;
   query?: Record<string, boolean | number | string | undefined>;
   /** return raw Response (for zip downloads etc.) */
   raw?: boolean;
@@ -126,7 +128,7 @@ export async function request<T>(
   if (options.binary) {
     if (!res.ok) throw await toApiError(res);
     const etag = res.headers.get('ETag');
-    const data: unknown = await res.arrayBuffer();
+    const data: unknown = await readBody(res, options.onDownloadProgress);
     if (options.cache && etag) {
       cachePut(cacheKey, {
         bytes: (data as ArrayBuffer).byteLength,
@@ -186,6 +188,33 @@ function cachePut(key: string, entry: CacheEntry): void {
     etagCache.delete(oldest.value);
     if (evicted?.bytes !== undefined) etagBinaryBytes -= evicted.bytes;
   }
+}
+
+/** 读响应体为 ArrayBuffer；带进度回调时走流式读取逐段计数 */
+async function readBody(
+  res: Response,
+  onProgress?: (received: number) => void,
+): Promise<ArrayBuffer> {
+  if (!onProgress || !res.body) return res.arrayBuffer();
+  const reader = res.body.getReader();
+  const parts: Uint8Array[] = [];
+  let received = 0;
+  // 流式读取天然逐段 await
+  for (;;) {
+    // oxlint-disable-next-line no-await-in-loop
+    const { done, value } = await reader.read();
+    if (done) break;
+    parts.push(value);
+    received += value.byteLength;
+    onProgress(received);
+  }
+  const out = new Uint8Array(received);
+  let at = 0;
+  for (const part of parts) {
+    out.set(part, at);
+    at += part.byteLength;
+  }
+  return out.buffer;
 }
 
 async function toApiError(res: Response): Promise<ApiError> {

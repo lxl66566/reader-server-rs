@@ -20,6 +20,7 @@ import { Pagination } from '../components/home/Pagination';
 import { UploadModal } from '../components/home/UploadModal';
 import { Button, Input } from '../components/ui';
 import { useI18n } from '../i18n';
+import { fetchBookList } from '../offline/api';
 import { useAuth } from '../stores/auth';
 
 const PAGE_SIZE = 20;
@@ -49,7 +50,7 @@ const Library: Component = () => {
       const [p, q, s] = key;
       return q
         ? bookApi.search(q, s, p, PAGE_SIZE)
-        : bookApi.list(p, PAGE_SIZE);
+        : fetchBookList(p, PAGE_SIZE);
     },
   );
 

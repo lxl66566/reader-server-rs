@@ -15,6 +15,7 @@ import {
 import { bookApi } from '../api';
 import { LoadErrorPanel } from '../components/LoadErrorPanel';
 import { Spinner } from '../components/ui';
+import { fetchBookFile } from '../offline/api';
 import { fontFamilyCss, useSettings } from '../stores/settings';
 import {
   type ConvertDirection,
@@ -121,7 +122,8 @@ const EpubReader = (props: FormatReaderProps) => {
     // 修复部分电子书（XHTML 允许、HTML 解析器不认）自闭合的 raw-text 标签，
     // 否则章节正文会被 script 标签吞掉，整章渲染为空白
     cachedData ??= await sanitizeEpubArchive(
-      await bookApi.fetchFile(props.book.book_id),
+      // 断网时回退显式缓存的整本文件
+      await fetchBookFile(props.book.book_id),
     );
     // 每次重建都切一份副本给 epub.js，避免其实例污染共享缓存
     book = ePub(cachedData.slice(0));

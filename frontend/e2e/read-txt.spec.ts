@@ -237,8 +237,12 @@ test('超长单章增量加载期间视口位置不回退', async ({ page }) => 
   await page.mouse.move(vw / 2, vh / 2);
   const samples: number[] = [];
   for (let i = 0; i < 32; i++) {
+    // 轮询采样必须逐步 await，滚动窗口才会逐块加载
+    // oxlint-disable-next-line no-await-in-loop
     await page.mouse.wheel(0, 500);
+    // oxlint-disable-next-line no-await-in-loop
     await page.waitForTimeout(90);
+    // oxlint-disable-next-line no-await-in-loop
     const at = await topOffset(page);
     if (at !== null) samples.push(at);
   }
