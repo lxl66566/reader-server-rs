@@ -1,4 +1,5 @@
 pub mod test_admin_books;
+pub mod test_books;
 pub mod test_integration;
 pub mod test_quality;
 pub mod test_security;

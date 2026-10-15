@@ -9,6 +9,7 @@ import type {
   AuthResult,
   Book,
   BookDetail,
+  BookListQuery,
   Bookmark,
   Chapter,
   DailyReadingStats,
@@ -99,8 +100,17 @@ export const bookApi = {
     api.get<{ position: number }>(`/api/v1/books/${bookId}/jump_to_chapter`, {
       query: { chapter_id: chapterId },
     }),
-  list: (page: number, limit: number) =>
-    api.get<Page<Book>>('/api/v1/books', { query: { limit, page } }),
+  // sort/order/format 缺省时由后端取默认（last_read / desc / 不过滤）
+  list: (page: number, limit: number, query?: BookListQuery) =>
+    api.get<Page<Book>>('/api/v1/books', {
+      query: {
+        format: query?.format,
+        limit,
+        order: query?.order,
+        page,
+        sort: query?.sort,
+      },
+    }),
   listPublic: (page: number, limit: number) =>
     api.get<Page<PublicBook>>('/api/v1/books/public', {
       query: { limit, page },
@@ -127,6 +137,8 @@ export const bookApi = {
       author?: string;
       // null = 恢复内置默认切分规则
       chapter_pattern?: null | string;
+      // 空/纯空白字符串 = 清空简介（服务端语义），与缺省（不修改）不同
+      description?: string;
       is_public?: boolean;
       title?: string;
     },

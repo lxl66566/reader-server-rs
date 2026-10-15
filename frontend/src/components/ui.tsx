@@ -68,6 +68,26 @@ const INPUT_SIZE_STYLES: Record<InputSize, string> = {
   sm: 'px-2.5 py-1 text-xs',
 };
 
+export const Textarea: ParentComponent<{
+  class?: string;
+  maxLength?: number;
+  onInput: (value: string) => void;
+  placeholder?: string;
+  rows?: number;
+  value: string;
+}> = props => (
+  <textarea
+    class={`border-edge bg-surface text-ink focus:border-accent w-full rounded border px-3 py-1.5 text-sm outline-none ${props.class ?? ''}`}
+    maxLength={props.maxLength}
+    onInput={event => {
+      props.onInput(event.currentTarget.value);
+    }}
+    placeholder={props.placeholder}
+    rows={props.rows ?? 3}
+    value={props.value}
+  />
+);
+
 // 无文字的图标按钮，需自带 aria-label 作为可访问名称
 export const IconButton: ParentComponent<{
   'aria-label': string;

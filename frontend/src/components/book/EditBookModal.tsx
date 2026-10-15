@@ -1,4 +1,4 @@
-// Edit modal for book metadata (title / author / visibility toggle).
+// Edit modal for book metadata (title / author / description / visibility).
 import { createEffect, createSignal, Show, type Component } from 'solid-js';
 import toast from 'solid-toast';
 
@@ -8,13 +8,18 @@ import {
   ChapterPatternField,
   isValidChapterPattern,
 } from '../ChapterPatternField';
-import { Button, Input, Modal, Toggle } from '../ui';
+import { Button, Input, Modal, Textarea, Toggle } from '../ui';
+
+// 与后端 PUT /books/:id 的 description 上限一致
+const DESCRIPTION_MAX = 2000;
 
 // Patch shape accepted by bookApi.update.
 export interface BookPatch {
   author?: string;
   // 仅 txt：null = 恢复内置默认切分规则
   chapter_pattern?: null | string;
+  // 空/纯空白 = 清空简介
+  description?: string;
   is_public?: boolean;
   title?: string;
 }
@@ -29,6 +34,7 @@ export const EditBookModal: Component<{
   const [title, setTitle] = createSignal('');
   const [author, setAuthor] = createSignal('');
   const [chapterPattern, setChapterPattern] = createSignal('');
+  const [description, setDescription] = createSignal('');
   const [isPublic, setIsPublic] = createSignal(false);
   const [busy, setBusy] = createSignal(false);
 
@@ -40,6 +46,7 @@ export const EditBookModal: Component<{
       setTitle(props.book.title);
       setAuthor(props.book.author ?? '');
       setChapterPattern(props.book.chapter_pattern ?? '');
+      setDescription(props.book.description ?? '');
       setIsPublic(props.book.is_public);
     }
   });
@@ -50,6 +57,8 @@ export const EditBookModal: Component<{
     const patch: BookPatch = {
       author: author().trim() || undefined,
       chapter_pattern: isTxt() ? chapterPattern().trim() || null : undefined,
+      // description 恒发送：空串语义为「清空」，缺省才是「不修改」
+      description: description().trim(),
       is_public: isPublic(),
       title: title().trim(),
     };
@@ -77,6 +86,19 @@ export const EditBookModal: Component<{
         <label class="block">
           <span class="text-muted mb-1 block text-sm">{t('authorLabel')}</span>
           <Input onInput={setAuthor} onKeyDown={onEnter} value={author()} />
+        </label>
+        <label class="block">
+          <span class="text-muted mb-1 block text-sm">
+            {t('synopsisLabel')}
+          </span>
+          <Textarea
+            maxLength={DESCRIPTION_MAX}
+            onInput={setDescription}
+            value={description()}
+          />
+          <span class="text-muted mt-1 block text-right text-xs">
+            {description().length} / {DESCRIPTION_MAX}
+          </span>
         </label>
         <Show when={isTxt()}>
           <ChapterPatternField

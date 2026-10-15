@@ -17,3 +17,6 @@ pub const ANNOTATION_TEXT_MAX_BYTES: usize = 8 * 1024;
 /// 每日统计单次提交 `entries` 数量上限（覆盖多年逐日补录；
 /// 同时保证批量 INSERT 的绑定参数远低于 SQLite 上限）
 pub const DAILY_STATS_MAX_ENTRIES: usize = 1000;
+
+/// 书籍简介最大长度（字符数，按 `chars().count()` 计，CJK 友好）
+pub const BOOK_DESCRIPTION_MAX_CHARS: usize = 2000;

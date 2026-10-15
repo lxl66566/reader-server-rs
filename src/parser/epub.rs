@@ -23,6 +23,8 @@ pub struct EpubParseResult {
     pub chapters: Vec<EpubChapter>,
     pub title: Option<String>,
     pub author: Option<String>,
+    /// 内嵌元数据中的简介（dc:description）；原始文本，不做 HTML 清洗
+    pub description: Option<String>,
 }
 
 /// EPUB 单个 zip 条目（章节 HTML 等）解压后的字节数上限，防御 zip 炸弹
@@ -119,6 +121,10 @@ fn parse_epub_with_limits(
 
     let title = doc.mdata("title").map(|item| item.value.clone());
     let author = doc.mdata("creator").map(|item| item.value.clone());
+    let description = doc
+        .mdata("description")
+        .map(|item| item.value.trim().to_string())
+        .filter(|d| !d.is_empty());
 
     let num_chapters = doc.get_num_chapters();
     // TOC 标签按归一化路径索引，作为无 heading 章节的标题回退
@@ -198,6 +204,7 @@ fn parse_epub_with_limits(
         chapters,
         title,
         author,
+        description,
     })
 }
 

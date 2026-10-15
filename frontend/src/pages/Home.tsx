@@ -2,7 +2,13 @@
 // my books / recommendations / public library (logged-in).
 
 import { useNavigate } from '@solidjs/router';
-import { VsCloudUpload, VsRefresh, VsSearch } from 'solid-icons/vs';
+import {
+  VsArrowDown,
+  VsArrowUp,
+  VsCloudUpload,
+  VsRefresh,
+  VsSearch,
+} from 'solid-icons/vs';
 import {
   createResource,
   createSignal,
@@ -12,18 +18,53 @@ import {
 } from 'solid-js';
 
 import { bookApi } from '../api';
-import type { SearchScope } from '../api/types';
+import type {
+  BookFormat,
+  BookSortKey,
+  SearchScope,
+  SortOrder,
+} from '../api/types';
 import { BookCard } from '../components/home/BookCard';
 import { BookSection } from '../components/home/BookSection';
 import { Hero } from '../components/home/Hero';
 import { Pagination } from '../components/home/Pagination';
 import { UploadModal } from '../components/home/UploadModal';
-import { Button, Input } from '../components/ui';
+import { Button, IconButton, Input } from '../components/ui';
 import { useI18n } from '../i18n';
+import type { DictKey } from '../i18n/zh-CN';
 import { fetchBookList } from '../offline/api';
 import { useAuth } from '../stores/auth';
 
 const PAGE_SIZE = 20;
+
+// 排序/格式选项的 i18n 映射（Record 键序须为自然序）
+const SORT_LABELS: Record<BookSortKey, DictKey> = {
+  author: 'sortAuthor',
+  created: 'sortCreated',
+  last_read: 'sortLastRead',
+  title: 'sortTitle',
+};
+
+const FORMAT_LABELS: Record<BookFormat, DictKey> = {
+  epub: 'formatEpub',
+  pdf: 'formatPdf',
+  txt: 'formatTxt',
+};
+
+// select 选项语义序（非字母序）；解析用户输入用 find 回查，避免 as 断言
+const SORT_OPTIONS: readonly BookSortKey[] = [
+  'last_read',
+  'created',
+  'title',
+  'author',
+];
+const FORMAT_OPTIONS: readonly BookFormat[] = ['txt', 'epub', 'pdf'];
+
+const parseSortKey = (value: string): BookSortKey | undefined =>
+  SORT_OPTIONS.find(key => key === value);
+
+const parseFormat = (value: string): BookFormat | undefined =>
+  FORMAT_OPTIONS.find(format => format === value);
 
 const Home: Component = () => {
   const auth = useAuth();
@@ -42,17 +83,27 @@ const Library: Component = () => {
   const [publicPage, setPublicPage] = createSignal(1);
   const [scope, setScope] = createSignal<SearchScope>('mine');
   const [searchQuery, setSearchQuery] = createSignal('');
+  const [sort, setSort] = createSignal<BookSortKey>('last_read');
+  const [order, setOrder] = createSignal<SortOrder>('desc');
+  const [format, setFormat] = createSignal<BookFormat | undefined>(undefined);
   const [uploadOpen, setUploadOpen] = createSignal(false);
 
   const [myBooks, { refetch: refetchMyBooks }] = createResource(
-    () => [page(), activeQuery(), scope()] as const,
+    () => [page(), activeQuery(), scope(), sort(), order(), format()] as const,
     key => {
-      const [p, q, s] = key;
+      const [p, q, s, sortKey, sortOrder, fmt] = key;
       return q
         ? bookApi.search(q, s, p, PAGE_SIZE)
-        : fetchBookList(p, PAGE_SIZE);
+        : fetchBookList(p, PAGE_SIZE, {
+            format: fmt,
+            order: sortOrder,
+            sort: sortKey,
+          });
     },
   );
+
+  // 搜索走独立 endpoint，排序/筛选不生效，此时禁用相关控件避免误导
+  const searching = () => activeQuery() !== '';
 
   const [recommended, { refetch: refetchRecommended }] = createResource(() =>
     bookApi.randomPublic(3),
@@ -66,6 +117,23 @@ const Library: Component = () => {
   const submitSearch = (event: KeyboardEvent) => {
     if (event.key !== 'Enter') return;
     setActiveQuery(searchQuery().trim());
+    setPage(1);
+  };
+
+  // 切换排序键时方向复位为降序（语义上最自然的默认），并回到第一页
+  const changeSort = (next: BookSortKey) => {
+    setSort(next);
+    setOrder('desc');
+    setPage(1);
+  };
+
+  const changeFormat = (next: BookFormat | undefined) => {
+    setFormat(next);
+    setPage(1);
+  };
+
+  const toggleOrder = () => {
+    setOrder(prev => (prev === 'desc' ? 'asc' : 'desc'));
     setPage(1);
   };
 
@@ -85,8 +153,9 @@ const Library: Component = () => {
 
   return (
     <div class="flex flex-col gap-6">
-      <div class="flex items-center gap-2">
-        <div class="relative flex-1">
+      {/* 窄屏可折行：搜索框保底宽度，排序/筛选控件整体换行不溢出 */}
+      <div class="flex flex-wrap items-center gap-2">
+        <div class="relative min-w-44 flex-1">
           <VsSearch class="text-muted absolute top-1/2 left-2.5 size-4 -translate-y-1/2" />
           <Input
             class="w-full pl-8"
@@ -96,6 +165,48 @@ const Library: Component = () => {
             value={searchQuery()}
           />
         </div>
+        <select
+          aria-label={t('sortBy')}
+          class="border-edge bg-surface text-ink focus:border-accent shrink-0 rounded border px-2 py-1.5 text-sm outline-none"
+          disabled={searching()}
+          onChange={event => {
+            const next = parseSortKey(event.currentTarget.value);
+            if (next) changeSort(next);
+          }}
+          value={sort()}
+        >
+          <For each={SORT_OPTIONS}>
+            {key => <option value={key}>{t(SORT_LABELS[key])}</option>}
+          </For>
+        </select>
+        <IconButton
+          aria-label={t(order() === 'desc' ? 'sortDesc' : 'sortAsc')}
+          disabled={searching()}
+          onClick={toggleOrder}
+        >
+          <Show
+            fallback={<VsArrowUp class="size-4" />}
+            when={order() === 'desc'}
+          >
+            <VsArrowDown class="size-4" />
+          </Show>
+        </IconButton>
+        <select
+          aria-label={t('formatFilter')}
+          class="border-edge bg-surface text-ink focus:border-accent shrink-0 rounded border px-2 py-1.5 text-sm outline-none"
+          disabled={searching()}
+          onChange={event => {
+            changeFormat(parseFormat(event.currentTarget.value));
+          }}
+          value={format() ?? ''}
+        >
+          <option value="">{t('all')}</option>
+          <For each={FORMAT_OPTIONS}>
+            {formatKey => (
+              <option value={formatKey}>{t(FORMAT_LABELS[formatKey])}</option>
+            )}
+          </For>
+        </select>
         <select
           class="border-edge bg-surface text-ink focus:border-accent shrink-0 rounded border px-2 py-1.5 text-sm outline-none"
           onChange={event => {

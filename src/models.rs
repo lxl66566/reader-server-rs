@@ -415,6 +415,9 @@ pub struct UpdateBookRequest {
     pub is_public: Option<bool>,
     /// 封面路径：字段保留但封面功能有意暂不实现（无上传/展示链路），见 review.md
     pub cover_path: Option<String>,
+    /// 简介：字段缺省 = 不修改；空/纯空白串 = 清空（NULL）；上限见
+    /// [`crate::limits::BOOK_DESCRIPTION_MAX_CHARS`]
+    pub description: Option<String>,
     #[serde(default)]
     pub chapter_pattern: PatternUpdate,
 }

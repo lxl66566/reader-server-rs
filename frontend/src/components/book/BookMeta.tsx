@@ -82,6 +82,16 @@ export const BookMeta: Component<{
         </div>
       </dl>
 
+      {/* 简介：多行截断；空/纯空白（服务端为 null）不渲染占位块 */}
+      <Show when={props.book.description?.trim()}>
+        <p
+          class="border-edge bg-page text-muted line-clamp-3 rounded border px-3 py-2 text-sm whitespace-pre-wrap"
+          title={props.book.description ?? undefined}
+        >
+          {props.book.description}
+        </p>
+      </Show>
+
       {props.children}
 
       <Button class="min-h-10 px-5" onClick={props.onRead}>

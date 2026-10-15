@@ -6,6 +6,7 @@ import type {
   Annotation,
   Book,
   BookDetail,
+  BookListQuery,
   Bookmark,
   ReadingSettings,
 } from '../api/types';
@@ -33,6 +34,22 @@ export interface DetailResult {
   detail: BookDetail;
   /** true = 网络不可达，详情取自本地缓存（等效离线态） */
   fromCache: boolean;
+}
+
+/** 书架列表缓存键：排序/筛选参数参与键，避免不同视图互相命中脏缓存 */
+export function bookListCacheKey(
+  page: number,
+  limit: number,
+  query?: BookListQuery,
+): string {
+  return [
+    'list',
+    page,
+    limit,
+    query?.sort ?? '',
+    query?.order ?? '',
+    query?.format ?? '',
+  ].join(':');
 }
 
 export async function fetchAnnotations(bookId: number): Promise<Annotation[]> {
@@ -63,14 +80,16 @@ export async function fetchBookFile(bookId: number): Promise<ArrayBuffer> {
 export async function fetchBookList(
   page: number,
   limit: number,
+  query?: BookListQuery,
 ): Promise<Page<Book>> {
+  const key = bookListCacheKey(page, limit, query);
   try {
-    const value = await bookApi.list(page, limit);
-    void kvPut(`list:${page}:${limit}`, value);
+    const value = await bookApi.list(page, limit, query);
+    void kvPut(key, value);
     return value;
   } catch (err) {
     if (!isNetworkError(err)) throw err;
-    const cached = await kvGet<Page<Book>>(`list:${page}:${limit}`);
+    const cached = await kvGet<Page<Book>>(key);
     if (cached) return cached;
     throw err;
   }

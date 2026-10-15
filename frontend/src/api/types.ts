@@ -99,6 +99,13 @@ export interface BookDetail extends Book {
 
 export type BookFormat = 'epub' | 'pdf' | 'txt';
 
+// GET /api/v1/books 列表参数；成员缺省时行为同后端默认
+export interface BookListQuery {
+  format?: BookFormat;
+  order?: SortOrder;
+  sort?: BookSortKey;
+}
+
 export interface Bookmark {
   book_id: number;
   created_at: string;
@@ -108,6 +115,9 @@ export interface Bookmark {
   percent: number;
   user_id: number;
 }
+
+// 书架排序键（?sort=），缺省 last_read
+export type BookSortKey = 'author' | 'created' | 'last_read' | 'title';
 
 export interface Chapter {
   chapter_id: number;
@@ -185,6 +195,9 @@ export interface ReadingStats {
 }
 
 export type SearchScope = 'all' | 'mine' | 'public';
+
+// 排序方向（?order=），缺省 desc
+export type SortOrder = 'asc' | 'desc';
 
 export type ThemeMode = 'dark' | 'light' | 'sepia' | 'system';
 

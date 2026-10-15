@@ -84,6 +84,15 @@ pub enum AppError {
     #[error("Invalid search scope; must be one of: mine, public, all")]
     InvalidSearchScope,
 
+    #[error("Invalid sort; must be one of: last_read, created, title, author")]
+    InvalidBookSort,
+
+    #[error("Invalid order; must be one of: asc, desc")]
+    InvalidSortOrder,
+
+    #[error("Invalid format filter; must be one of: txt, epub, pdf")]
+    InvalidFormatFilter,
+
     #[error("Username must be between 1 and 20 characters")]
     UsernameLengthInvalid,
 
@@ -311,7 +320,10 @@ impl IntoResponse for AppError {
             | AppError::FieldTooLarge(_)
             | AppError::TooManyDailyStatsEntries
             | AppError::FieldReadError(..)
-            | AppError::ImportPackageInvalid(_) => StatusCode::BAD_REQUEST,
+            | AppError::ImportPackageInvalid(_)
+            | AppError::InvalidBookSort
+            | AppError::InvalidSortOrder
+            | AppError::InvalidFormatFilter => StatusCode::BAD_REQUEST,
 
             AppError::Database(_) | AppError::Jwt(_) | AppError::Io(_) | AppError::Internal(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR

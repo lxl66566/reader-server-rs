@@ -18,6 +18,7 @@ use crate::{
     auth::AuthUser,
     config::Config,
     error::{ApiResponse, AppError},
+    limits::BOOK_DESCRIPTION_MAX_CHARS,
     models::{
         Book, BookContentResponse, BookDetailResponse, BookFormat, BookListItem, BookListResponse,
         BookTagsResponse, ChapterResponse, JumpToChapterResponse, PatternUpdate,
@@ -99,6 +100,88 @@ impl SearchScope {
             Some("all") => Ok(SearchScope::All),
             Some(_) => Err(AppError::InvalidSearchScope),
         }
+    }
+}
+
+// 书架列表查询参数：排序键/方向与格式筛选（独立 Query 提取器，风格随 SearchParams）
+#[derive(Debug, Deserialize, Default)]
+pub struct BookListParams {
+    pub sort: Option<String>,
+    pub order: Option<String>,
+    pub format: Option<String>,
+}
+
+// 书架排序键：last_read=最近阅读（默认，旧行为）；created=创建时间；title/author=元数据
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum BookSortKey {
+    #[default]
+    LastRead,
+    Created,
+    Title,
+    Author,
+}
+
+impl BookSortKey {
+    fn parse(s: Option<&str>) -> Result<Self, AppError> {
+        match s {
+            None | Some("" | "last_read") => Ok(BookSortKey::LastRead),
+            Some("created") => Ok(BookSortKey::Created),
+            Some("title") => Ok(BookSortKey::Title),
+            Some("author") => Ok(BookSortKey::Author),
+            Some(_) => Err(AppError::InvalidBookSort),
+        }
+    }
+
+    /// ORDER BY 片段：排序键 + `b.id` 兜底保证并列时顺序稳定（created_at 同精度
+    /// 内频繁并列，无兜底时顺序不定）。last_read 保持旧行为：未读（NULL）恒排
+    /// 最后，键后按创建时间排序。片段全部为编译期常量（match 全覆盖枚举分支），
+    /// 不含任何用户输入，无 SQL 注入面；与 QueryBuilder 的 push_bind 组合使用
+    fn order_by(self, desc: bool) -> &'static str {
+        match (self, desc) {
+            (BookSortKey::LastRead, true) => {
+                "rp.last_read_at DESC NULLS LAST, b.created_at DESC, b.id DESC"
+            },
+            (BookSortKey::LastRead, false) => {
+                "rp.last_read_at ASC NULLS LAST, b.created_at ASC, b.id ASC"
+            },
+            (BookSortKey::Created, true) => "b.created_at DESC, b.id DESC",
+            (BookSortKey::Created, false) => "b.created_at ASC, b.id ASC",
+            // COLLATE NOCASE：ASCII 大小写不敏感；中文排序精度不作要求。
+            // author 用 COALESCE 归一 NULL，避免 NULL 在 ASC/DESC 下落位不一致
+            (BookSortKey::Title, true) => "b.title COLLATE NOCASE DESC, b.id DESC",
+            (BookSortKey::Title, false) => "b.title COLLATE NOCASE ASC, b.id ASC",
+            (BookSortKey::Author, true) => "COALESCE(b.author, '') COLLATE NOCASE DESC, b.id DESC",
+            (BookSortKey::Author, false) => "COALESCE(b.author, '') COLLATE NOCASE ASC, b.id ASC",
+        }
+    }
+}
+
+// 排序方向：desc=默认（旧行为）
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum SortDirection {
+    Asc,
+    #[default]
+    Desc,
+}
+
+impl SortDirection {
+    fn parse(s: Option<&str>) -> Result<Self, AppError> {
+        match s {
+            None | Some("" | "desc") => Ok(SortDirection::Desc),
+            Some("asc") => Ok(SortDirection::Asc),
+            Some(_) => Err(AppError::InvalidSortOrder),
+        }
+    }
+}
+
+// 格式筛选：None = 不过滤
+fn parse_format_filter(s: Option<&str>) -> Result<Option<BookFormat>, AppError> {
+    match s {
+        None | Some("") => Ok(None),
+        Some("txt") => Ok(Some(BookFormat::Txt)),
+        Some("epub") => Ok(Some(BookFormat::Epub)),
+        Some("pdf") => Ok(Some(BookFormat::Pdf)),
+        Some(_) => Err(AppError::InvalidFormatFilter),
     }
 }
 
@@ -184,8 +267,20 @@ struct ParsedUpload {
     chapters: Vec<(String, i64)>,
     title: String,
     author: Option<String>,
+    /// 简介最终值：用户表单输入优先，其次格式内嵌元数据（epub）
+    description: Option<String>,
     content_hash: String,
 }
+
+/// 格式分支派生的元数据暂存：统计值、章节表、标题/作者/简介
+type ParsedMetadata = (
+    i64,
+    i64,
+    Vec<(String, i64)>,
+    String,
+    Option<String>,
+    Option<String>,
+);
 
 /// 同步解析上传文件：格式识别（全文 UTF-8 校验）、元数据派生、章节提取
 /// （逐行正则 / 全书 HTML 解析 / PDF 解析）与 sha256，均为 CPU 密集操作，
@@ -194,9 +289,21 @@ fn parse_upload_sync(
     content: &[u8],
     title: String,
     author: Option<String>,
+    description: Option<String>,
     chapter_pattern: Option<&str>,
     file_name: Option<&str>,
 ) -> Result<ParsedUpload, AppError> {
+    // 简介归一化：trim，纯空白 = 未提供；超限入库前拒绝
+    let description = description
+        .map(|d| d.trim().to_string())
+        .filter(|d| !d.is_empty());
+    if description
+        .as_ref()
+        .is_some_and(|d| d.chars().count() > BOOK_DESCRIPTION_MAX_CHARS)
+    {
+        return Err(AppError::FieldTooLarge("description"));
+    }
+
     // 检测格式（同时校验内容签名，拒绝未知/二进制格式）
     let format = detect_format(content)?;
 
@@ -207,56 +314,54 @@ fn parse_upload_sync(
     validate_chapter_pattern(chapter_pattern.unwrap_or(""))?;
 
     // 根据格式派生元数据 + 提取章节
-    let (total_chars, total_pages, chapters, title, author): (
-        i64,
-        i64,
-        Vec<(String, i64)>,
-        String,
-        Option<String>,
-    ) = match format {
-        BookFormat::Txt => {
-            let text = std::str::from_utf8(content).map_err(|_| AppError::FileInvalidUtf8)?;
-            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-            let tc = text.chars().count() as i64;
-            let chs = extract_chapters(text, chapter_pattern)?;
-            // txt 元数据全部来自用户输入
-            (tc, 0i64, chs, title, author)
-        },
-        BookFormat::Epub => {
-            let parsed = parse_epub(content)?;
-            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-            let tc = parsed.text_content.chars().count() as i64;
-            // 章节：用 spine_index 作为 position（前端按 spine 渲染）
-            let chs: Vec<(String, i64)> = parsed
-                .chapters
-                .iter()
-                .map(|c| (c.title.clone(), c.spine_index))
-                .collect();
-            // EPUB 解析出的 title/author 优先级低于用户上传时的显式输入
-            let title = if title.trim().is_empty() {
-                parsed.title.unwrap_or(title)
-            } else {
-                title
-            };
-            (tc, 0i64, chs, title, author.or(parsed.author))
-        },
-        BookFormat::Pdf => {
-            let parsed = parse_pdf(content)?;
-            // PDF 不做章节提取（暂不解析 outline），前端用页码导航
-            let title = if title.trim().is_empty() {
-                parsed.title.unwrap_or(title)
-            } else {
-                title
-            };
-            (
-                0i64,
-                parsed.num_pages,
-                Vec::new(),
-                title,
-                author.or(parsed.author),
-            )
-        },
-    };
+    let (total_chars, total_pages, chapters, title, author, description): ParsedMetadata =
+        match format {
+            BookFormat::Txt => {
+                let text = std::str::from_utf8(content).map_err(|_| AppError::FileInvalidUtf8)?;
+                #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+                let tc = text.chars().count() as i64;
+                let chs = extract_chapters(text, chapter_pattern)?;
+                // txt 元数据全部来自用户输入
+                (tc, 0i64, chs, title, author, description)
+            },
+            BookFormat::Epub => {
+                let parsed = parse_epub(content)?;
+                #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+                let tc = parsed.text_content.chars().count() as i64;
+                // 章节：用 spine_index 作为 position（前端按 spine 渲染）
+                let chs: Vec<(String, i64)> = parsed
+                    .chapters
+                    .iter()
+                    .map(|c| (c.title.clone(), c.spine_index))
+                    .collect();
+                // EPUB 解析出的 title/author/description 优先级低于用户上传时的显式输入
+                let title = if title.trim().is_empty() {
+                    parsed.title.unwrap_or(title)
+                } else {
+                    title
+                };
+                // 表单显式提供（归一化后非空）则覆盖元数据提取值
+                let description = description.or(parsed.description);
+                (tc, 0i64, chs, title, author.or(parsed.author), description)
+            },
+            BookFormat::Pdf => {
+                let parsed = parse_pdf(content)?;
+                // PDF 不做章节提取（暂不解析 outline），前端用页码导航
+                let title = if title.trim().is_empty() {
+                    parsed.title.unwrap_or(title)
+                } else {
+                    title
+                };
+                (
+                    0i64,
+                    parsed.num_pages,
+                    Vec::new(),
+                    title,
+                    author.or(parsed.author),
+                    description,
+                )
+            },
+        };
 
     // 标题兜底：用户输入（trim 非空）> 格式元数据（epub/pdf 已并入）
     // > 上传文件名（去扩展名）；全部为空则拒绝入库
@@ -280,6 +385,7 @@ fn parse_upload_sync(
         chapters,
         title,
         author,
+        description,
         content_hash: sha256_hex(content),
     })
 }
@@ -303,6 +409,8 @@ async fn upload_book(
         // 解析 multipart 表单字段；title 允许缺省（后续按 元数据/文件名 兜底）
         let mut title = None;
         let mut author = None;
+        // 可选简介（epub/pdf 缺省时回退内嵌元数据）
+        let mut description = None;
         // 上传文件名（用于标题兜底）
         let mut file_name: Option<String> = None;
         // 自定义章节切分正则（仅 txt 有意义）
@@ -326,6 +434,11 @@ async fn upload_book(
                 "author" => {
                     author = Some(field.text().await.map_err(|e| {
                         AppError::FieldReadError("author".to_string(), e.to_string())
+                    })?);
+                },
+                "description" => {
+                    description = Some(field.text().await.map_err(|e| {
+                        AppError::FieldReadError("description".to_string(), e.to_string())
                     })?);
                 },
                 "is_public" => {
@@ -384,6 +497,7 @@ async fn upload_book(
                 &content,
                 title.unwrap_or_default(),
                 author,
+                description,
                 pattern_for_task.as_deref(),
                 file_name.as_deref(),
             )
@@ -413,12 +527,13 @@ async fn upload_book(
         let mut tx = pool.begin().await?;
 
         let book_id = sqlx::query!(
-            "INSERT INTO books (user_id, title, author, file_path, is_public, total_chars, \
-             total_pages, format, content_hash, chapter_pattern) VALUES (?, ?, ?, ?, ?, ?, ?, ?, \
-             ?, ?)",
+            "INSERT INTO books (user_id, title, author, description, file_path, is_public, \
+             total_chars, total_pages, format, content_hash, chapter_pattern) VALUES (?, ?, ?, ?, \
+             ?, ?, ?, ?, ?, ?, ?)",
             auth.user_id,
             parsed.title,
             parsed.author,
+            parsed.description,
             file_path_string,
             is_public,
             parsed.total_chars,
@@ -504,36 +619,50 @@ async fn upload_book(
 async fn list_books(
     auth: AuthUser,
     State(pool): State<Pool<Sqlite>>,
-    Query(params): Query<PaginationParams>,
+    Query(pagination): Query<PaginationParams>,
+    Query(params): Query<BookListParams>,
 ) -> Result<Json<ApiResponse<BookListResponse>>, AppError> {
     // 归一化分页参数：page 最小为 1，limit 上限 50
-    let (limit, offset) = params.normalize(10, 50);
+    let (limit, offset) = pagination.normalize(10, 50);
+    let sort = BookSortKey::parse(params.sort.as_deref())?;
+    let direction = SortDirection::parse(params.order.as_deref())?;
+    let format = parse_format_filter(params.format.as_deref())?;
 
-    // 获取总数
-    let total = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM books WHERE user_id = ?")
-        .bind(auth.user_id)
-        .fetch_one(&pool)
-        .await?;
+    // total 必须与列表共用同一筛选条件：有格式过滤时统计过滤后的总数
+    let total = if format.is_some() {
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM books WHERE user_id = ? AND format = ?")
+            .bind(auth.user_id)
+            .bind(format)
+            .fetch_one(&pool)
+            .await?
+    } else {
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM books WHERE user_id = ?")
+            .bind(auth.user_id)
+            .fetch_one(&pool)
+            .await?
+    };
 
-    // 获取书籍列表
-    let books = sqlx::query!(
-        r#"
-        SELECT b.id, b.title, b.author, b.is_public, b.created_at,
-               b.total_chars, b.total_pages, b.description, b.format AS "format!: BookFormat",
-               rp.locator, rp.percent, rp.reading_time, rp.last_read_at
-        FROM books b
-        LEFT JOIN reading_progress rp ON b.id = rp.book_id AND rp.user_id = ?
-        WHERE b.user_id = ?
-        ORDER BY rp.last_read_at DESC NULLS LAST, b.created_at DESC
-        LIMIT ? OFFSET ?
-        "#,
-        auth.user_id,
-        auth.user_id,
-        limit,
-        offset
-    )
-    .fetch_all(&pool)
-    .await?;
+    // 动态排序键 + 可选格式筛选：外部输入一律 push_bind；ORDER BY 片段来自
+    // BookSortKey::order_by 的编译期常量映射（见其注释），非用户输入
+    let mut qb = sqlx::QueryBuilder::new(
+        "SELECT b.id, b.title, b.author, b.is_public, b.created_at, b.total_chars AS total_chars, \
+         b.total_pages AS total_pages, b.description AS description, b.format AS format, \
+         rp.locator AS locator, rp.percent AS percent, rp.reading_time AS reading_time, \
+         rp.last_read_at AS last_read_at FROM books b LEFT JOIN reading_progress rp ON b.id = \
+         rp.book_id AND rp.user_id = ",
+    );
+    qb.push_bind(auth.user_id)
+        .push(" WHERE b.user_id = ")
+        .push_bind(auth.user_id);
+    if let Some(format) = format {
+        qb.push(" AND b.format = ").push_bind(format);
+    }
+    qb.push(" ORDER BY ")
+        .push(sort.order_by(direction == SortDirection::Desc));
+    qb.push(" LIMIT ").push_bind(limit);
+    qb.push(" OFFSET ").push_bind(offset);
+
+    let books = qb.build_query_as::<BookListRow>().fetch_all(&pool).await?;
 
     // 构建响应
     let book_list: Vec<BookListItem> = books
@@ -689,10 +818,28 @@ async fn update_book(
         PatternUpdate::Unchanged => false,
     };
 
+    // 简介三态归一：字段缺省 = 不修改（None）；空/纯空白 = 清空（Some(None)）；
+    // 非空 = 更新（Some(Some(trimmed))）。超限拒绝（400）
+    let description_update = match req.description.as_deref() {
+        None => None,
+        Some(text) => {
+            if text.chars().count() > BOOK_DESCRIPTION_MAX_CHARS {
+                return Err(AppError::FieldTooLarge("description"));
+            }
+            let trimmed = text.trim();
+            Some(if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            })
+        },
+    };
+
     let has_update = req.title.is_some()
         || req.author.is_some()
         || req.is_public.is_some()
         || req.cover_path.is_some()
+        || description_update.is_some()
         || pattern_changed;
 
     if !has_update {
@@ -736,6 +883,18 @@ async fn update_book(
         req.cover_path.as_deref(),
     )
     .await?;
+
+    // 简介独立更新：apply_book_field_updates 与管理员编辑路径共用，签名不扩散；
+    // 绑定 Option<String>，None 即清空为 NULL
+    if let Some(value) = &description_update {
+        sqlx::query!(
+            "UPDATE books SET description = ? WHERE id = ?",
+            value,
+            book_id
+        )
+        .execute(&mut *tx)
+        .await?;
+    }
 
     if pattern_changed {
         // 恢复默认时写 NULL
@@ -1252,9 +1411,9 @@ pub(crate) fn escape_like(input: &str) -> String {
     out
 }
 
-// 搜索结果行（私用 FromRow 结构，避免在闭包里手动取列）
+// 列表/搜索共用的行结构（私用 FromRow，避免在闭包里手动取列）
 #[derive(sqlx::FromRow)]
-struct SearchRow {
+struct BookListRow {
     id: i64,
     title: String,
     author: Option<String>,
@@ -1312,7 +1471,7 @@ async fn search_books(
         .push_bind(limit);
     qb.push(" OFFSET ").push_bind(offset);
 
-    let rows = qb.build_query_as::<SearchRow>().fetch_all(&pool).await?;
+    let rows = qb.build_query_as::<BookListRow>().fetch_all(&pool).await?;
 
     let book_list: Vec<BookListItem> = rows
         .into_iter()
@@ -1472,6 +1631,7 @@ mod tests {
             String::new(),
             None,
             None,
+            None,
             Some("我的书.txt"),
         )
         .unwrap();
@@ -1490,10 +1650,50 @@ mod tests {
     }
 
     #[test]
+    fn parse_upload_sync_description_normalized() {
+        // trim + 纯空白视为未提供
+        let parsed = parse_upload_sync(
+            "内容\n".as_bytes(),
+            "书名".into(),
+            None,
+            Some("  简介  ".into()),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(parsed.description.as_deref(), Some("简介"));
+        let parsed = parse_upload_sync(
+            "内容\n".as_bytes(),
+            "书名".into(),
+            None,
+            Some("   ".into()),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(parsed.description, None);
+
+        // 超限拒绝（400 语义）
+        let over = "界".repeat(crate::limits::BOOK_DESCRIPTION_MAX_CHARS + 1);
+        assert!(matches!(
+            parse_upload_sync(
+                "内容\n".as_bytes(),
+                "书名".into(),
+                None,
+                Some(over),
+                None,
+                None
+            )
+            .err(),
+            Some(AppError::FieldTooLarge("description"))
+        ));
+    }
+
+    #[test]
     fn parse_upload_sync_title_empty_rejected() {
         // 用户输入与文件名兜底均为空：TitleEmpty
         assert!(matches!(
-            parse_upload_sync("内容\n".as_bytes(), "  ".into(), None, None, None).err(),
+            parse_upload_sync("内容\n".as_bytes(), "  ".into(), None, None, None, None).err(),
             Some(AppError::TitleEmpty)
         ));
     }
@@ -1502,7 +1702,7 @@ mod tests {
     fn parse_upload_sync_pattern_checked_before_parse() {
         // 非 txt 携带非空 chapter_pattern：在解析前即拒绝
         assert!(matches!(
-            parse_upload_sync(b"%PDF-1.4\n", "t".into(), None, Some("^第.章"), None).err(),
+            parse_upload_sync(b"%PDF-1.4\n", "t".into(), None, None, Some("^第.章"), None).err(),
             Some(AppError::ChapterPatternNotSupported)
         ));
     }
