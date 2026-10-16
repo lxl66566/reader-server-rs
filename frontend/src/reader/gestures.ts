@@ -56,8 +56,18 @@ export interface TapSwipeOptions {
     | undefined;
   onFlip: (dir: -1 | 1) => void;
   onTapCenter: () => void;
-  /** 是否翻页模式：滚动模式下 swipe 不翻页、tap 一律唤出 chrome */
+  /** 是否翻页模式：滚动模式下 swipe 不翻页、tap 走纵向分区（无 scroll 时中区开 chrome） */
   paginate: () => boolean;
+  /**
+   * 滚动模式纵向分区：上/下 1/3 触发章内翻页（贴边时切章），中区开 chrome。
+   * bounds 与横区一致，须与事件坐标处于同一坐标系（epub iframe 有平移偏移）。
+   */
+  scroll?:
+    | undefined
+    | {
+        bounds: () => null | { bottom: number; top: number };
+        onPageScroll: (dir: -1 | 1) => void;
+      };
 }
 
 export type TapZone = 'center' | 'left' | 'right';
@@ -139,8 +149,9 @@ export interface ScrollEdges {
 /**
  * 在 epub iframe 文档上挂 touch/click 手势（无跟手动画）：翻页模式下
  * 横向滑动超过阈值翻页、tap 按左右区翻页、中区开 chrome；滚动模式下
- * 滚动交给原生手势，任意 tap 唤出 chrome（iframe 内容高与宿主可视区
- * 的比例换算不可靠，分区翻页曾错位，故不在此分区）。返回解绑函数。
+ * 滚动交给原生手势，tap 按上/中/下分区章内翻页/唤出 chrome（提供 scroll
+ * 时；分区边界由调用方换算进 iframe 坐标系，否则 iframe 平移会使分区错位）。
+ * 返回解绑函数。
  */
 export function attachTapSwipeGestures(
   doc: Document,
@@ -176,12 +187,28 @@ export function attachTapSwipeGestures(
       // 必须在这里就地处理，不能依赖元素的 click 监听
       event.preventDefault();
       if (options.interceptTap?.(event.target, event)) return;
-      handleTap(t0.clientX);
+      handleTap(t0.clientX, t0.clientY);
     }
   };
 
-  const handleTap = (clientX: number) => {
+  const handleTap = (clientX: number, clientY: number): void => {
     if (!options.paginate()) {
+      if (options.scroll) {
+        const zone = tapZoneVertical(
+          clientY,
+          options.scroll.bounds() ?? { bottom: 0, top: 0 },
+        );
+        if (zone === 'top') {
+          options.scroll.onPageScroll(-1);
+          return;
+        }
+        if (zone === 'bottom') {
+          options.scroll.onPageScroll(1);
+          return;
+        }
+        options.onTapCenter();
+        return;
+      }
       // 滚动模式：任意 tap 唤出 chrome
       options.onTapCenter();
       return;
@@ -200,7 +227,7 @@ export function attachTapSwipeGestures(
 
   const onClick = (event: MouseEvent) => {
     if (options.interceptTap?.(event.target, event)) return;
-    handleTap(event.clientX);
+    handleTap(event.clientX, event.clientY);
   };
 
   doc.addEventListener('touchstart', onTouchStart, { passive: true });

@@ -1,3 +1,5 @@
+import { fileURLToPath } from 'node:url';
+
 // 离线阅读冒烟：在线缓存全本（txt / epub）→ 等待 SW 就绪 → 断网重载
 // → 页面外壳与内容均来自本地缓存，且可继续阅读。
 // 目标必须是构建产物实例（默认 :3000）；vite dev server 无 SW。
@@ -5,8 +7,10 @@ import { expect, test, type Page } from '@playwright/test';
 
 import { createUser, seedSession, uploadBook } from './helpers';
 
-const NOVEL_TXT = new URL('./assets/novel.txt', import.meta.url).pathname;
-const SAMPLE_EPUB = new URL('./assets/sample.epub', import.meta.url).pathname;
+const NOVEL_TXT = fileURLToPath(new URL('./assets/novel.txt', import.meta.url));
+const SAMPLE_EPUB = fileURLToPath(
+  new URL('./assets/sample.epub', import.meta.url),
+);
 
 test.beforeEach(async ({ request }) => {
   // 依赖构建产物实例的 Service Worker：vite dev 没有 /sw.js（或被 SPA

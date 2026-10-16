@@ -1,10 +1,12 @@
+import { fileURLToPath } from 'node:url';
+
 // 阅读设置冒烟：设置页修改字号 → 防抖同步到服务端 → 刷新后保留。
 import { expect, test, type Locator } from '@playwright/test';
 
 import { createUser, seedSession, uploadBook } from './helpers';
 
 // 测试书入库于 e2e/assets/（gen-assets.mjs 生成）
-const BOOK_PATH = new URL('./assets/novel.txt', import.meta.url).pathname;
+const BOOK_PATH = fileURLToPath(new URL('./assets/novel.txt', import.meta.url));
 
 /** 读取步进器当前值 */
 async function stepperValue(row: Locator): Promise<number> {

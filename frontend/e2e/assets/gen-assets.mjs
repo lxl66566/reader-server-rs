@@ -68,7 +68,9 @@ async function buildEpub() {
       `OEBPS/${href}`,
       `<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml">
-  <head><title>${title}</title></head>
+  <head><title>${title}</title>
+  <link href="style.css" rel="stylesheet" type="text/css"/>
+  </head>
   <body>
     <h1>${title}</h1>
     ${body}
@@ -76,6 +78,16 @@ async function buildEpub() {
 </html>`,
     );
   }
+
+  // 书源强制样式：真实书籍常以 !important 锁死黑字白底（如
+  // p { color:#000 !important }），阅读主题必须能压过它
+  zip.file(
+    'OEBPS/style.css',
+    `body { color: #000 !important; background: #fff !important; }
+p { color: #000 !important; }
+h1 { color: #000 !important; background: #f5f5f5 !important; }
+`,
+  );
 
   zip.file(
     'OEBPS/nav.xhtml',

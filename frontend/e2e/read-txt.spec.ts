@@ -1,6 +1,9 @@
+import { readFileSync, writeFileSync } from 'node:fs';
 // TXT 阅读冒烟：UI 上传 → 详情页进入阅读 → 分页翻页 → 切滚动模式 →
 // 滚动产生进度 → 刷新后进度保留（心跳落库 + 位置恢复）。
-import { readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { expect, test, type Page } from '@playwright/test';
 
@@ -16,7 +19,7 @@ import {
 
 // 测试书入库于 e2e/assets/（gen-assets.mjs 生成）；超长单章样本体积较大，
 // 由下方用例运行时生成
-const BOOK_PATH = new URL('./assets/novel.txt', import.meta.url).pathname;
+const BOOK_PATH = fileURLToPath(new URL('./assets/novel.txt', import.meta.url));
 const LOCATOR_TOLERANCE = 5000;
 
 /** 点击右缘遮罩层关闭 chrome（遮罩挡住内容区的滚轮/点击） */
@@ -275,7 +278,8 @@ test('超长单章增量加载期间视口位置不回退', async ({ page }) => 
     paragraphs.push(line);
     written += line.length + 1;
   }
-  const bookPath = '/tmp/reader-e2e-one-chapter.txt';
+  // 系统临时目录：硬编码 /tmp 在 Windows 上不存在
+  const bookPath = join(tmpdir(), 'reader-e2e-one-chapter.txt');
   writeFileSync(bookPath, paragraphs.join('\n'), 'utf8');
   const book = await uploadBook(request, user.token, bookPath);
 

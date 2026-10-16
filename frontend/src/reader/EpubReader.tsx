@@ -30,9 +30,15 @@ import {
 } from './epubProgress';
 import { sanitizeEpubArchive } from './epubSanitize';
 import {
+  type TapBounds,
+  animateScrollBy,
   bindScrollEdges,
+  scrollEdges,
   attachTapSwipeGestures,
   isTextEntryTarget,
+  PAGE_SCROLL_RATIO,
+  tapZone,
+  tapZoneVertical,
 } from './gestures';
 import PageHint from './PageHint';
 import { stripEpubParagraphIndent } from './paragraph';
@@ -44,10 +50,30 @@ const spineLengthOf = (b: Book): number =>
   (b.spine as Book['spine'] & { spineItems?: unknown[] }).spineItems?.length ??
   0;
 
+// 阅读主题强制覆盖的文本元素：书自带的直接规则（如 p { color:#000 !important }）
+// 会击败 body 上的颜色继承，必须以同等 !important 逐元素压制才能跟随用户主题
+const TEXT_COLOR_SELECTOR =
+  'body, p, li, dd, dt, blockquote, div, span, a, h1, h2, h3, h4, h5, h6, ' +
+  'td, th, pre, figcaption, strong, em, b, i, small, code, time';
+
+/** hex 颜色是否为暗色（加权亮度 < 0.5）；非 hex 格式按暗色处理 */
+function isDarkColor(hex: string): boolean {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex);
+  if (!m) return true;
+  const n = Number.parseInt(m[1] ?? '000000', 16);
+  const lum =
+    (0.299 * ((n >> 16) & 0xff) +
+      0.587 * ((n >> 8) & 0xff) +
+      0.114 * (n & 0xff)) /
+    255;
+  return lum < 0.5;
+}
+
 const EpubReader = (props: FormatReaderProps) => {
   const { settings } = useSettings();
   const navigate = useNavigate();
   let container: HTMLDivElement | undefined;
+  let rootRef: HTMLDivElement | undefined;
 
   let book: Book | null = null;
   let rendition: null | Rendition = null;
@@ -263,7 +289,6 @@ const EpubReader = (props: FormatReaderProps) => {
     rendition.themes.register('custom', {
       body: {
         background: 'transparent',
-        color: `${settings.text_color} !important`,
         'font-family': fontFamilyCss(settings.font_family) || 'inherit',
         padding: '0 16px',
         ...(scrolled
@@ -274,10 +299,26 @@ const EpubReader = (props: FormatReaderProps) => {
             }
           : {}),
       },
+      // 书籍自带样式常见 !important 黑字/白底（p{color:#000}、h3{background:#f5f5f5}），
+      // 与阅读主题叠加后在暗色背景下不可读：文字色逐元素压制、
+      // 背景色全量透明（img/image 除外），让正文完全跟随用户设置
+      'body *:not(img):not(image)': {
+        'background-color': 'transparent !important',
+      },
+      // iframe 文档 color-scheme 缺省为 light：html/body 透明时 Chrome 会
+      // 透出白色 root canvas，暗色阅读背景下表现为正文区域整块发白
+      html: {
+        'color-scheme': isDarkColor(settings.background_color)
+          ? 'dark'
+          : 'light',
+      },
       p: {
         'line-height': `${settings.line_height} !important`,
         'margin-bottom': `${settings.paragraph_spacing}em !important`,
         'text-indent': `${settings.text_indent}em !important`,
+      },
+      [TEXT_COLOR_SELECTOR]: {
+        color: `${settings.text_color} !important`,
       },
     });
     rendition.themes.select('custom');
@@ -389,7 +430,7 @@ const EpubReader = (props: FormatReaderProps) => {
   // --- gestures: swipe flips a page (paginate mode), tap zones flip/toggle ---
   function attachGestures(doc: Document): void {
     attachTapSwipeGestures(doc, {
-      bounds: () => container?.getBoundingClientRect() ?? null,
+      bounds: () => hostBoundsIn(doc),
       onFlip: dir => {
         void flip(dir);
       },
@@ -397,13 +438,89 @@ const EpubReader = (props: FormatReaderProps) => {
         props.onTapCenter();
       },
       paginate: () => settings.pagination_mode === 'paginate',
+      scroll:
+        settings.pagination_mode === 'scroll'
+          ? {
+              bounds: () => hostVerticalBoundsIn(doc),
+              onPageScroll: pageScroll,
+            }
+          : undefined,
     });
   }
 
-  // 滚动模式下 iframe 之外的宿主区域（短章下方、渲染间隙）没有 iframe
-  // 手势，点击同样唤出 chrome，避免出现"点了没反应"的死区
-  const onHostTap = () => {
-    if (settings.pagination_mode !== 'scroll') return;
+  // epub.js 会平移 iframe（分页模式翻列、滚动模式文档流），iframe 内事件的
+  // clientX/Y 处于 iframe 坐标系；分区判定前须把宿主边界换算进同一坐标系，
+  // 否则翻过一页后所有 tap 都会落入"右区"
+  function hostBoundsIn(doc: Document): null | TapBounds {
+    const host = container?.getBoundingClientRect();
+    if (!host) return null;
+    const frame = doc.defaultView?.frameElement?.getBoundingClientRect();
+    if (!frame) return { left: host.left, right: host.right };
+    return { left: host.left - frame.left, right: host.right - frame.left };
+  }
+
+  function hostVerticalBoundsIn(
+    doc: Document,
+  ): null | { bottom: number; top: number } {
+    const host = container?.getBoundingClientRect();
+    if (!host) return null;
+    const frame = doc.defaultView?.frameElement?.getBoundingClientRect();
+    if (!frame) return { bottom: host.bottom, top: host.top };
+    return { bottom: host.bottom - frame.top, top: host.top - frame.top };
+  }
+
+  // 滚动模式 tap 翻页：贴边即切章，否则章内滚动 90% 视口。
+  // - 贴边判定读容器实时状态而非 atEdge 信号——信号经 rAF 异步更新，
+  //   切章后立刻点击会读到旧值而把切章误判成零位移滚动；
+  // - 不用 hasPrev/NextChapter 门控——它依赖 relocated 维护的章节下标，
+  //   新章节渲染完到 relocated 触发之间有窗口期，期间 tap 会被误判成
+  //   章内滚动（零位移，点击无效）。spine 首尾的 next/prev 是 no-op，
+  //   章界由 epub.js 兜底
+  function pageScroll(dir: -1 | 1): void {
+    const el = scrolledContainer();
+    if (!el) return;
+    const edges = scrollEdges(el);
+    const edgeReached = dir > 0 ? edges.bottom : edges.top;
+    if (edgeReached) {
+      void flip(dir);
+      return;
+    }
+    animateScrollBy(el, dir * el.clientHeight * PAGE_SCROLL_RATIO);
+  }
+
+  // iframe 之外的宿主区域（页边距、短章上下方）没有 iframe 手势，点击走
+  // 同一套分区语义，避免出现"点了没反应"的死区
+  const onHostTap = (event: MouseEvent) => {
+    const rect = rootRef?.getBoundingClientRect();
+    if (!rect) return;
+    if (settings.pagination_mode === 'paginate') {
+      const zone = tapZone(event.clientX, {
+        left: rect.left,
+        right: rect.right,
+      });
+      if (zone === 'left') {
+        void flip(-1);
+        return;
+      }
+      if (zone === 'right') {
+        void flip(1);
+        return;
+      }
+      props.onTapCenter();
+      return;
+    }
+    const zone = tapZoneVertical(event.clientY, {
+      bottom: rect.bottom,
+      top: rect.top,
+    });
+    if (zone === 'top') {
+      pageScroll(-1);
+      return;
+    }
+    if (zone === 'bottom') {
+      pageScroll(1);
+      return;
+    }
     props.onTapCenter();
   };
 
@@ -423,6 +540,9 @@ const EpubReader = (props: FormatReaderProps) => {
     detachScrollEdge = null;
     const el = scrolledContainer();
     if (!el) return;
+    // epub.js 不约束横向溢出（书内宽元素/封面图），滚动容器会出现横向
+    // 滚动条；滚动模式只有纵向文档流，直接隐藏
+    el.style.overflowX = 'hidden';
     detachScrollEdge = bindScrollEdges(el, setAtEdge);
   }
 
@@ -469,11 +589,18 @@ const EpubReader = (props: FormatReaderProps) => {
   // desktop keyboard
   onMount(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (settings.pagination_mode !== 'paginate') return;
       // 弹窗输入框内的方向键不翻页
       if (isTextEntryTarget(event.target)) return;
-      if (event.key === 'ArrowLeft') void flip(-1);
-      if (event.key === 'ArrowRight') void flip(1);
+      if (settings.pagination_mode === 'paginate') {
+        if (event.key === 'ArrowLeft') void flip(-1);
+        if (event.key === 'ArrowRight') void flip(1);
+      } else if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        pageScroll(1);
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        pageScroll(-1);
+      }
     };
     window.addEventListener('keydown', onKey);
     onCleanup(() => {
@@ -495,10 +622,9 @@ const EpubReader = (props: FormatReaderProps) => {
   });
 
   return (
-    <div class="relative h-full w-full">
+    <div class="relative h-full w-full" onClick={onHostTap} ref={rootRef}>
       <div
         class="mx-auto h-full w-full"
-        onClick={onHostTap}
         ref={container}
         style={{
           // scrolled 模式滚动发生在容器内，全宽让滚动条贴屏幕右缘；
