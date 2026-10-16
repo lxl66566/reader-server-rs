@@ -9,7 +9,7 @@ export const TAP_MAX_MS = 250;
 export const TAP_MAX_MOVE_PX = 10;
 export const FLIP_THRESHOLD_PX = 60;
 /** 滚动模式点击分区翻页的视口滚动比例 */
-export const PAGE_SCROLL_RATIO = 0.8;
+export const PAGE_SCROLL_RATIO = 0.9;
 
 const SCROLL_CANCEL_EVENTS = ['wheel', 'touchstart'] as const;
 

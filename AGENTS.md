@@ -27,6 +27,7 @@ reader-server-rs 是一个读书服务端软件，用户可以向服务器上传
 - 前端代码必须同时考虑 PC 与移动端页面、i18n、light/dark theme、屏幕比例的兼容性
 - 你可以使用 solid-icons 图标库、solid-toast 提示库、kobalte 辅助组件开发
 - TS 侧的动态 import 仅允许字符串字面量路径（如路由/模态框的 `lazy(() => import('./Xxx'))`，类型完全静态可推导）；禁止变量路径的动态 import（类型会退化为 `Promise<any>`）
+- 阅读器滚动模式点击分区翻页滚动 90% 视口高度（`PAGE_SCROLL_RATIO`，`frontend/src/reader/gestures.ts`）
 
 ## E2E 测试（Playwright）
 
