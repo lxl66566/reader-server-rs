@@ -1189,8 +1189,26 @@ const ScrollView = (
     const next = jumpWindow(win(), chunk, chapterChunkBounds().maxEnd);
     if (next !== win()) setWin(next);
     await ensureWindow();
-    // 等 scrollTop 落定后再返回，让调用方（心跳挂起/恢复）拿到确定状态
-    await new Promise<void>(resolve => {
+    await settleLanding(at, land);
+    // 落点窗口内容不足一屏（章尾紧贴 chunk 边界、自定义正则切出的短章
+    // 等）时容器不可滚动、不产生 scroll 事件，onScroll 按滚动阈值触发的
+    // 增量加载永远不会执行：沿衔接阅读的方向主动扩窗，直到可滚动或抵达
+    // 本章边界（窗口不再变化 = 整章已渲染）
+    while (container && container.scrollHeight <= container.clientHeight) {
+      const before = win();
+      // 串行扩窗：每轮需等取数与落点定位完成后，依最新布局重新判断
+      // oxlint-disable-next-line no-await-in-loop
+      await (land === 'bottom' ? loadPrev() : loadNext());
+      if (win() === before) break;
+      // oxlint-disable-next-line no-await-in-loop
+      await settleLanding(at, land);
+    }
+  }
+
+  // 定位落点：bottom 落到章末衔接阅读顺序，top 落到目标段落顶。
+  // 等 scrollTop 落定后再返回，让调用方（心跳挂起/恢复）拿到确定状态
+  function settleLanding(at: number, land: 'bottom' | 'top'): Promise<void> {
+    return new Promise<void>(resolve => {
       requestAnimationFrame(() => {
         if (container) {
           // content-visibility: auto 把视口外段落折叠成单行占位，直接读
@@ -1198,7 +1216,6 @@ const ScrollView = (
           // 回退数页；scrollIntoView 会展开目标沿途段落并精确计算真实
           // 落点（跳转目标是 cv 元素时视为 relevant to the user）
           if (land === 'bottom') {
-            // 切到上一章时落到章末衔接阅读顺序
             const last = paragraphElsInOrder().at(-1);
             if (last) last.scrollIntoView({ block: 'end' });
             else container.scrollTop = container.scrollHeight;

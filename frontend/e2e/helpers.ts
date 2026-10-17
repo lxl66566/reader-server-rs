@@ -182,7 +182,11 @@ export async function uploadBook(
   request: APIRequestContext,
   token: string,
   filePath: string,
-  options: { isPublic?: boolean; title?: string } = {},
+  options: {
+    chapterPattern?: string;
+    isPublic?: boolean;
+    title?: string;
+  } = {},
 ): Promise<UploadedBook> {
   const name = filePath.split(/[/\\]/).at(-1) ?? 'book.txt';
   const mimeType = name.endsWith('.epub')
@@ -194,6 +198,7 @@ export async function uploadBook(
     request.post(`${API}/books/upload`, {
       headers: { authorization: `Bearer ${token}` },
       multipart: {
+        chapter_pattern: options.chapterPattern ?? '',
         file: {
           buffer: readFileSync(filePath),
           mimeType,

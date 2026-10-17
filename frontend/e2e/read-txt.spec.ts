@@ -362,3 +362,118 @@ test('分页模式 tap 按容器分区而非屏幕分区', async ({ page }) => {
   await page.mouse.click(container.left + container.width * 0.15, vh / 2);
   await expect(indicator).toHaveText(/^1 \/ \d+$/);
 });
+
+/** 窗口内已渲染段落的最小字符偏移（窗口向上扩展的观测量） */
+function minRenderedPos(page: Page): Promise<null | number> {
+  return page.evaluate(() => {
+    const els = [...document.querySelectorAll<HTMLElement>('[data-pos]')];
+    return els.length
+      ? Math.min(...els.map(el => Number(el.dataset.pos)))
+      : null;
+  });
+}
+
+test('返回上一章落在不足一屏的章末窗口时仍可向上加载', async ({ page }) => {
+  // 回归：滚动模式切章是硬切换，返回上一章落在章末。当上一章末尾落在
+  // chunk 边界后不久（或自定义正则切出的章尾本来就短）时，窗口内属于
+  // 本章的段落不足一屏：容器不可滚动 → 永远不产生 scroll 事件 →
+  // onScroll 里 scrollTop < 600 的 loadPrev 阈值永不触发，页面只剩
+  // 章末几个段落且无法向上滚动。
+  const user = await createUser(page.context().request, 'chapback');
+  seedSession(page, user.token);
+  const request = page.context().request;
+  await updateSettings(request, user.token, { pagination_mode: 'scroll' });
+
+  // 第一章 42004 字（跨 chunk 0..7），末行“尾声行”恰好起于 42000（chunk
+  // 7 首字符）：返回上一章时窗口只含 chunk 7 中属于本章的这一行
+  const lines: string[] = [];
+  let at = 0;
+  const push = (line: string): void => {
+    lines.push(line);
+    at += line.length + 1;
+  };
+  push('Part 1 开端');
+  let n = 1;
+  while (at + 50 <= 42000) {
+    push(
+      `第一章正文第${n}段，填充内容用于让章节跨越多个 chunk 边界。`.padEnd(
+        49,
+        '字',
+      ),
+    );
+    n++;
+  }
+  push('尾'.repeat(42000 - at - 1)); // 对齐：下一行起点恰为 42000
+  push('尾声行');
+  push('Part 2 转折'); // offset 42004：第二章起点
+  n = 1;
+  while (at < 68000) {
+    push(
+      `第二章正文第${n}段，填充内容用于让深链定位落在第二章中段。`.padEnd(
+        49,
+        '字',
+      ),
+    );
+    n++;
+  }
+  push('Part 3 结尾');
+  push('第三章正文。');
+
+  const bookPath = join(tmpdir(), 'reader-e2e-chapter-back.txt');
+  writeFileSync(bookPath, lines.join('\n'), 'utf8');
+  const book = await uploadBook(request, user.token, bookPath, {
+    chapterPattern: '^Part \\d+',
+  });
+
+  // 深链到第二章中段：窗口只含第二章所在 chunk
+  await page.goto(`/read/${book.book_id}?locator=50004`);
+  const scroller = page.locator('.overflow-y-auto');
+  await expect(scroller).toBeVisible();
+  await expect(scroller.locator('p').first()).toBeVisible();
+  await expect
+    .poll(() => minRenderedPos(page), { timeout: 15_000 })
+    .toBe(48000);
+
+  // 回到章首贴边，点上区返回上一章：落到第一章章末（尾声行 offset 42000）
+  await page.evaluate(() => {
+    const el = document.querySelector<HTMLElement>('.overflow-y-auto');
+    if (el) el.scrollTop = 0;
+  });
+  await page.waitForTimeout(200); // 贴边跟踪 rAF
+  const { vh, vw } = viewportSize(page);
+  await page.mouse.click(vw / 2, vh * 0.05);
+  // 章末行在窗口内：确已返回上一章
+  await expect
+    .poll(() =>
+      page.evaluate(() => !!document.querySelector('[data-pos="42000"]')),
+    )
+    .toBe(true);
+  // 修复点：落地窗口自动扩到可滚动。此前窗口只含章末一行（不足一屏、
+  // 无 scroll 事件），向上增量加载永不触发，页面卡死在章末几个段落
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const el = document.querySelector<HTMLElement>('.overflow-y-auto');
+          return el ? el.scrollHeight > el.clientHeight : false;
+        }),
+      { timeout: 10_000 },
+    )
+    .toBe(true);
+
+  // 向上滚动必须能一路加载到章首（offset 0 的章标题行渲染出来）。
+  // 修复前：容器不可滚动，scrollTop 恒 0，窗口永远停在 {7, 8}。
+  // 驱动保持在 loadPrev 阈值（<600px）上方递减，模拟真实用户的连续上滚
+  for (let i = 0; i < 60; i++) {
+    // oxlint-disable-next-line no-await-in-loop
+    if ((await minRenderedPos(page)) === 0) break;
+    // oxlint-disable-next-line no-await-in-loop
+    await page.evaluate(() => {
+      const el = document.querySelector<HTMLElement>('.overflow-y-auto');
+      if (el) el.scrollTop = Math.max(400, el.scrollTop - 1500);
+    });
+    // oxlint-disable-next-line no-await-in-loop
+    await page.waitForTimeout(120);
+  }
+  expect(await minRenderedPos(page)).toBe(0);
+});
