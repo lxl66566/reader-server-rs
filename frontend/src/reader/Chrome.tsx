@@ -19,6 +19,8 @@ import {
   createSignal,
   For,
   on,
+  onCleanup,
+  onMount,
   Show,
   type Resource,
 } from 'solid-js';
@@ -32,8 +34,10 @@ import { Button, EmptyState, Input, Modal, Spinner } from '../components/ui';
 import { useI18n } from '../i18n';
 import type { DictKey } from '../i18n/zh-CN';
 import { formatPercent } from '../utils/format';
+import { isTextEntryTarget } from './gestures';
 import { NoteEditorModal } from './NoteEditor';
 import OfflinePanel from './OfflinePanel';
+import { bookSupportsSearch, searchJumpTarget } from './searchJump';
 import SearchPanel from './SearchPanel';
 import type { ReaderNavigator } from './types';
 
@@ -73,6 +77,26 @@ const Chrome = (props: ChromeProps) => {
     if (nav) fn(nav);
     setPanel(null);
   };
+
+  // Ctrl/Cmd+F 唤出书内搜索（替代浏览器页内查找，pdf 无文本层不接管）；
+  // 焦点在输入框时放行原生行为。面板是独立 Modal，chrome 隐藏时也可唤出
+  onMount(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        (event.ctrlKey || event.metaKey) &&
+        event.key.toLowerCase() === 'f' &&
+        bookSupportsSearch(props.book.format) &&
+        !isTextEntryTarget(event.target)
+      ) {
+        event.preventDefault();
+        open('search');
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    onCleanup(() => {
+      window.removeEventListener('keydown', onKeyDown);
+    });
+  });
 
   return (
     <>
@@ -114,8 +138,8 @@ const Chrome = (props: ChromeProps) => {
             <div class="min-w-0 flex-1 truncate text-sm font-medium">
               {props.book.title}
             </div>
-            {/* 书内全文搜索：仅 txt 提供（epub/pdf 无 char 偏移坐标系） */}
-            <Show when={props.book.format === 'txt'}>
+            {/* 书内全文搜索：txt 精确到字符、epub 到章节；pdf 暂不支持 */}
+            <Show when={bookSupportsSearch(props.book.format)}>
               <button
                 aria-label={t('readerSearch')}
                 class="text-muted hover:bg-page hover:text-ink flex size-9 cursor-pointer items-center justify-center rounded"
@@ -213,13 +237,21 @@ const Chrome = (props: ChromeProps) => {
         onClose={() => setPanel(null)}
         open={panel() === 'offline'}
       />
-      {/* 命中跳转走 locator（纯数字串）→ 串行跳转链，永不 reject（R1 同款修法） */}
+      {/* 命中跳转：txt 走 locator（纯数字串）、epub 走章节，均入串行跳转链，
+          永不 reject（R1 同款修法） */}
       <SearchPanel
         book={props.book}
         onClose={() => setPanel(null)}
-        onJump={offset => {
+        onJump={match => {
+          // 先换算目标再入跳转链（避免在链内读取响应式 props）
+          const target = searchJumpTarget(props.book, match);
           jump(nav => {
-            void nav.jumpToLocator(String(offset));
+            if (!target) return;
+            if (target.kind === 'chapter') {
+              void nav.jumpToChapter(target.position);
+            } else {
+              void nav.jumpToLocator(target.locator);
+            }
           });
         }}
         open={panel() === 'search'}

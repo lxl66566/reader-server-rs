@@ -1,6 +1,6 @@
 // Book detail page: parallel metadata, owner management and content tabs.
 import { useNavigate, useParams } from '@solidjs/router';
-import { VsDownload, VsEdit, VsTrash } from 'solid-icons/vs';
+import { VsDownload, VsEdit, VsSearch, VsTrash } from 'solid-icons/vs';
 import { createResource, createSignal, Show, type Component } from 'solid-js';
 import toast from 'solid-toast';
 
@@ -19,6 +19,8 @@ import { LoadErrorPanel } from '../components/LoadErrorPanel';
 import { IconButton, Spinner } from '../components/ui';
 import { useI18n } from '../i18n';
 import { fetchAnnotations, fetchBookmarks, fetchDetail } from '../offline/api';
+import { bookSupportsSearch, searchJumpTarget } from '../reader/searchJump';
+import SearchPanel from '../reader/SearchPanel';
 import { saveResponseFile } from '../utils/download';
 import { toastError } from '../utils/toast';
 
@@ -141,6 +143,7 @@ function BookView(props: {
   const [editOpen, setEditOpen] = createSignal(false);
   const [deleteOpen, setDeleteOpen] = createSignal(false);
   const [readingTimeOpen, setReadingTimeOpen] = createSignal(false);
+  const [searchOpen, setSearchOpen] = createSignal(false);
   const [downloading, setDownloading] = createSignal(false);
 
   const downloadBook = async () => {
@@ -164,6 +167,16 @@ function BookView(props: {
       <BookMeta
         actions={
           <>
+            <Show when={bookSupportsSearch(props.book.format)}>
+              <IconButton
+                aria-label={t('readerSearch')}
+                onClick={() => {
+                  setSearchOpen(true);
+                }}
+              >
+                <VsSearch class="size-4" />
+              </IconButton>
+            </Show>
             <IconButton
               aria-label={t('downloadBook')}
               disabled={downloading()}
@@ -236,6 +249,22 @@ function BookView(props: {
         onClose={() => setDeleteOpen(false)}
         onConfirm={props.onBookDelete}
         open={deleteOpen()}
+      />
+      {/* 命中经深链进入阅读页：txt 带字符偏移 locator、epub 带章节 id */}
+      <SearchPanel
+        book={props.book}
+        onClose={() => setSearchOpen(false)}
+        onJump={match => {
+          const target = searchJumpTarget(props.book, match);
+          if (!target) return;
+          setSearchOpen(false);
+          navigate(
+            target.kind === 'chapter'
+              ? `/read/${props.book.book_id}?chapter=${target.chapterId}`
+              : `/read/${props.book.book_id}?locator=${encodeURIComponent(target.locator)}`,
+          );
+        }}
+        open={searchOpen()}
       />
     </div>
   );

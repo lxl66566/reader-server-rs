@@ -214,3 +214,70 @@ test('阅读主题覆盖书源强制黑字白底', async ({ page }) => {
     )
     .toBe('rgba(0, 0, 0, 0)');
 });
+
+/** 搜索/目录等面板 Modal 的遮罩容器（页面同时最多一个，面板按钮须收敛到其中，
+    避免命中遮罩后详情页章节列表等同名按钮） */
+function modalBox(page: Page) {
+  return page.locator('div.fixed.inset-0');
+}
+
+test('阅读页书内搜索命中按章节跳转，Ctrl+F 可唤出', async ({ page }) => {
+  const user = await createUser(page.context().request, 'epubfind');
+  seedSession(page, user.token);
+  const request = page.context().request;
+  const book = await uploadBook(request, user.token, SAMPLE_EPUB);
+
+  await page.goto(`/read/${book.book_id}`);
+  await expect(page.locator('iframe').first()).toBeVisible();
+  // 唤出 chrome，顶栏搜索入口（epub 也应显示）
+  await page.mouse.click(viewportSize(page).vw / 2, viewportSize(page).vh / 2);
+  await page.getByRole('button', { name: '搜索' }).click();
+  const input = modalBox(page).getByPlaceholder('搜索书内全文…');
+  await expect(input).toBeVisible();
+
+  // "编号0013" 每章 1 处：40 章共 40 条命中
+  await input.fill('编号0013');
+  await input.press('Enter');
+  await expect(modalBox(page).getByText('40 个匹配')).toBeVisible();
+
+  // 点第 3 章的命中 → 关面板并跳到对应章节（epub 为章节粒度）
+  await modalBox(page)
+    .getByRole('button')
+    .filter({ hasText: '第3章 样章' })
+    .first()
+    .click();
+  const frame = chapterFrame(page);
+  await expect(frame.locator('h1')).toContainText('第3章', {
+    timeout: 15_000,
+  });
+
+  // 面板已关：Ctrl+F 直接唤出（不依赖 chrome 可见）
+  await page.keyboard.press('Control+f');
+  await expect(modalBox(page).getByPlaceholder('搜索书内全文…')).toBeVisible();
+});
+
+test('详情页搜索入口命中后深链进入对应章节', async ({ page }) => {
+  const user = await createUser(page.context().request, 'epubdsrch');
+  seedSession(page, user.token);
+  const request = page.context().request;
+  const book = await uploadBook(request, user.token, SAMPLE_EPUB);
+
+  await page.goto(`/book/${book.book_id}`);
+  await page.getByRole('button', { name: '搜索' }).click();
+  const input = modalBox(page).getByPlaceholder('搜索书内全文…');
+  await expect(input).toBeVisible();
+  await input.fill('编号0007');
+  await input.press('Enter');
+  await expect(modalBox(page).getByText('40 个匹配')).toBeVisible();
+
+  // 点末章（第40章）的命中 → 跳转阅读页并落在该章
+  await modalBox(page)
+    .getByRole('button')
+    .filter({ hasText: '第40章 样章' })
+    .first()
+    .click();
+  await expect(page).toHaveURL(new RegExp(`/read/\\d+\\?chapter=\\d+`));
+  await expect(chapterFrame(page).locator('h1')).toContainText('第40章', {
+    timeout: 15_000,
+  });
+});

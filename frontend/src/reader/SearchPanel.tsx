@@ -1,5 +1,6 @@
-// In-book full-text search panel (txt only). Input + result list; a hit jumps
-// via the reader navigator's locator jump (serial chain, same as toc/bookmarks).
+// In-book full-text search panel (txt / epub). Input + result list; the jump
+// decision (locator vs chapter) lives in searchJump.ts and is wired by the
+// caller — reader navigator serial chain or detail-page deep link.
 
 import { VsSearch } from 'solid-icons/vs';
 import { createEffect, createSignal, For, Show } from 'solid-js';
@@ -22,7 +23,7 @@ type SearchStatus = 'done' | 'error' | 'idle' | 'loading';
 const SearchPanel = (panelProps: {
   book: BookDetail;
   onClose: () => void;
-  onJump: (charOffset: number) => void;
+  onJump: (match: BookSearchMatch) => void;
   open: boolean;
 }) => {
   const { t } = useI18n();
@@ -112,7 +113,7 @@ const SearchPanel = (panelProps: {
                   <button
                     class="hover:bg-page w-full cursor-pointer rounded px-2 py-2 text-left"
                     onClick={() => {
-                      panelProps.onJump(match.char_offset);
+                      panelProps.onJump(match);
                     }}
                     type="button"
                   >
