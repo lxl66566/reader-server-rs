@@ -49,6 +49,7 @@ NixOS 用户：请使用[我的 NUR](https://github.com/lxl66566/NUR)。
   "log": {
     "dir": "logs", // 日志目录
     "rotation": "never", // 轮转策略："hourly" | "daily" | "never"，never 时仅输出到 stderr
+    "level": "info", // 本服务日志等级："trace" | "debug" | "info" | "warn" | "error"；依赖库固定 warn，RUST_LOG 可整体覆盖
   },
   "rate_limit": {
     "per_second": 20, // 每 IP 每秒放行的请求数
