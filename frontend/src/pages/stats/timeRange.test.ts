@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   aggregate,
@@ -55,10 +55,49 @@ describe('todayKeyIn', () => {
 });
 
 describe('localeFirstWeekday', () => {
+  // Node 官方构建（含 v26）未启用 V8 的 intl locale-info，weekInfo 仅
+  // Chrome 99+ 可用，Windows / Linux 的单测宿主都缺数据；宿主缺失时打
+  // 最小 stub 对齐浏览器语义：en-* 周日起始，其余默认周一起始。
+  type WeekInfoLocale = Intl.Locale & { weekInfo?: { firstDay: number } };
+  const proto = Intl.Locale.prototype as WeekInfoLocale;
+  const hostDescriptor = Object.getOwnPropertyDescriptor(proto, 'weekInfo');
+  const stubWeekInfo = (): void => {
+    Object.defineProperty(proto, 'weekInfo', {
+      configurable: true,
+      get(this: WeekInfoLocale) {
+        return { firstDay: this.language === 'en' ? 7 : 1 };
+      },
+    });
+  };
+  // 置空而非 delete：保留属性槽即可让实现的 `?? 1` 走回退分支
+  const unsetWeekInfo = (): void => {
+    Object.defineProperty(proto, 'weekInfo', {
+      configurable: true,
+      value: undefined,
+    });
+  };
+
+  beforeEach(() => {
+    if (!hostDescriptor) stubWeekInfo();
+  });
+  afterEach(() => {
+    if (hostDescriptor) {
+      Object.defineProperty(proto, 'weekInfo', hostDescriptor);
+    } else {
+      stubWeekInfo();
+    }
+  });
+
   it('maps known locales', () => {
     // 周日开头（en-US）归一为 0；周一起始（zh-CN / ISO 默认）为 1
     expect(localeFirstWeekday('en-US')).toBe(0);
     expect(localeFirstWeekday('zh-CN')).toBe(1);
+  });
+
+  it('falls back to Monday when the host lacks weekInfo', () => {
+    if (hostDescriptor) return; // 宿主自带数据时回退分支不可达
+    unsetWeekInfo();
+    expect(localeFirstWeekday('en-US')).toBe(1);
   });
 });
 
