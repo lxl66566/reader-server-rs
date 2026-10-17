@@ -14,6 +14,8 @@ use crate::tests::{
 
 // e2e 夹具中的多章节 epub（按内容签名识别格式，元数据无简介）
 const SAMPLE_EPUB: &[u8] = include_bytes!("../../frontend/e2e/assets/sample.epub");
+// e2e 夹具中的 12 页 pdf（含 outline 书签，正文仅前端渲染）
+const SAMPLE_PDF: &[u8] = include_bytes!("../../frontend/e2e/assets/sample.pdf");
 
 async fn list_books(app: &Router, token: &str, query: &str) -> (StatusCode, serde_json::Value) {
     let resp = make_request(
@@ -471,12 +473,10 @@ async fn test_search_in_book_no_match_and_empty_query() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_search_in_book_rejects_epub_and_missing_file() -> Result<()> {
+async fn test_search_in_book_epub() -> Result<()> {
     let (app, _pool) = setup_test_app().await.unwrap();
     let token = register_and_login(&app, "booksearch3", "password1").await;
-
-    // epub：沿用 /content 的错误语义（400 ContentEndpointNotSupported）
-    let epub = upload_book_opts(
+    let book = upload_book_opts(
         &app,
         &token,
         "epub搜索",
@@ -485,8 +485,45 @@ async fn test_search_in_book_rejects_epub_and_missing_file() -> Result<()> {
         ("b.epub", SAMPLE_EPUB),
     )
     .await;
-    let epub_id = epub["book_id"].as_i64().unwrap();
-    let (status, json) = search_in_book(&app, &token, epub_id, "?q=x").await;
+    let book_id = book["book_id"].as_i64().unwrap();
+
+    // 夹具每章 14 段固定合成文本，"编号0007" 每章恰好 1 处：40 章各 1 条，
+    // 章节下标随命中递增，覆盖首尾章（chapter_index 与详情章节列表对齐）
+    let (status, json) = search_in_book(&app, &token, book_id, "?q=%E7%BC%96%E5%8F%B70007").await;
+    assert_eq!(status, StatusCode::OK, "search failed: {json:?}");
+    let matches = json["data"]["matches"].as_array().unwrap();
+    assert_eq!(matches.len(), 40);
+    assert_eq!(json["data"]["truncated"], false);
+    let indices: Vec<i64> = matches
+        .iter()
+        .map(|m| m["chapter_index"].as_i64().unwrap())
+        .collect();
+    assert_eq!(indices, Vec::from_iter(0i64..40));
+    assert!(matches[0]["excerpt"].as_str().unwrap().contains("编号0007"));
+
+    // "合成正文段落" 每章 14 处：共 560 条，超上限截断为 200
+    let (status, json) = search_in_book(
+        &app,
+        &token,
+        book_id,
+        "?q=%E5%90%88%E6%88%90%E6%AD%A3%E6%96%87%E6%AE%B5%E8%90%BD",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["data"]["matches"].as_array().unwrap().len(), 200);
+    assert_eq!(json["data"]["truncated"], true);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_search_in_book_rejects_pdf_and_checks_permission() -> Result<()> {
+    let (app, _pool) = setup_test_app().await.unwrap();
+    let token = register_and_login(&app, "booksearch4", "password1").await;
+
+    // pdf：无服务端文本层，沿用 /content 的错误语义（400 ContentEndpointNotSupported）
+    let pdf = upload_book_opts(&app, &token, "pdf搜索", None, None, ("b.pdf", SAMPLE_PDF)).await;
+    let pdf_id = pdf["book_id"].as_i64().unwrap();
+    let (status, json) = search_in_book(&app, &token, pdf_id, "?q=x").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(json["message"].as_str().unwrap().contains("txt"));
 
@@ -495,8 +532,8 @@ async fn test_search_in_book_rejects_epub_and_missing_file() -> Result<()> {
     assert_eq!(status, StatusCode::NOT_FOUND);
 
     // 他人私有书：403
-    let other = register_and_login(&app, "booksearch4", "password1").await;
-    let (status, _) = search_in_book(&app, &other, epub_id, "?q=x").await;
+    let other = register_and_login(&app, "booksearch5", "password1").await;
+    let (status, _) = search_in_book(&app, &other, pdf_id, "?q=x").await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     Ok(())
 }

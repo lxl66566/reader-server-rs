@@ -11,8 +11,7 @@ pub struct EpubChapter {
     pub title: String,
     /// spine 索引（0-based），与 epub.js reader.chapter(i) 对齐
     pub spine_index: i64,
-    /// 该章节首字符在全文拼接序列中的字符偏移（仅供搜索边界使用）
-    #[allow(dead_code)]
+    /// 该章节首字符在全文拼接序列中的字符偏移（供书内搜索定位章节）
     pub char_offset: i64,
 }
 

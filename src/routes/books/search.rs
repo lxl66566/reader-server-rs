@@ -1,7 +1,13 @@
+use std::{
+    num::NonZeroUsize,
+    sync::{Arc, LazyLock, Mutex, PoisonError},
+};
+
 use axum::{
     Json,
     extract::{Path, Query, State},
 };
+use lru::LruCache;
 use serde::Deserialize;
 use sqlx::{Pool, Sqlite};
 
@@ -14,6 +20,7 @@ use crate::{
     models::{
         BookFormat, BookListItem, BookListResponse, BookTextSearchMatch, BookTextSearchResponse,
     },
+    parser::epub::parse_epub,
 };
 
 // 搜索查询参数（分页复用 PaginationParams，由独立 Query 提取器解析；
@@ -149,7 +156,7 @@ fn push_scope_condition(qb: &mut sqlx::QueryBuilder<Sqlite>, scope: SearchScope,
     }
 }
 
-// ============ 书内全文搜索（仅 txt） ============
+// ============ 书内全文搜索（txt / epub） ============
 
 // 书内全文搜索查询参数（区别于书架元数据搜索的 SearchParams）
 #[derive(Debug, Deserialize)]
@@ -159,7 +166,7 @@ pub struct BookSearchParams {
 
 // 书内全文搜索：ASCII 大小写不敏感的字面匹配（不分词、不归一化）。
 // char_offset 为命中的全书字符偏移，与章节 position、/content 的 position、
-// 进度 locator 同一坐标系（chars().count() 语义），可直接用于内容切片定位
+// 进度 locator 同一坐标系（txt）或与解析全文对齐（epub），可直接定位
 pub(super) async fn search_in_book(
     auth: AuthUser,
     State(pool): State<Pool<Sqlite>>,
@@ -176,7 +183,7 @@ pub(super) async fn search_in_book(
     }
 
     let book = sqlx::query!(
-        r#"SELECT user_id, file_path, is_public, format AS "format!: BookFormat" FROM books WHERE id = ?"#,
+        r#"SELECT user_id, file_path, content_hash, is_public, format AS "format!: BookFormat" FROM books WHERE id = ?"#,
         book_id
     )
     .fetch_optional(&pool)
@@ -186,25 +193,32 @@ pub(super) async fn search_in_book(
     // 读权限与 content / jump_to_chapter 一致：所有者或公开书
     ensure_book_access(auth.user_id, book.user_id, book.is_public)?;
 
-    // 仅 txt；epub/pdf 沿用 content 端点的错误语义
-    if book.format != BookFormat::Txt {
-        return Err(AppError::ContentEndpointNotSupported);
-    }
-
-    // 章节归属表（position 升序；txt 的 position = 章节首字符偏移）
-    let chapters: Vec<(String, i64)> =
+    // 章节归属表（position 升序；txt 的 position = 章节首字符偏移）。
+    // epub 的章节定位走解析产物的 char_offset（与 DB 中 spine 顺序一致），无需读库
+    let chapters = if book.format == BookFormat::Txt {
         sqlx::query_as("SELECT title, position FROM chapters WHERE book_id = ? ORDER BY position")
             .bind(book_id)
             .fetch_all(&pool)
-            .await?;
+            .await?
+    } else {
+        Vec::new()
+    };
 
     // 全文扫描为 CPU 密集操作，移入阻塞线程池（参照 parse_upload_sync 的模式）；
     // 多扫一条（cap+1）仅为判断截断，超出部分不返回
     let file_path = book.file_path;
+    let format = book.format;
+    let content_hash = book.content_hash;
     let query = q.to_string();
     let scanned =
         tokio::task::spawn_blocking(move || -> Result<Vec<BookTextSearchMatch>, AppError> {
-            scan_book_file(&file_path, &query, &chapters, BOOK_SEARCH_MAX_MATCHES + 1)
+            let cap = BOOK_SEARCH_MAX_MATCHES + 1;
+            match format {
+                BookFormat::Txt => scan_book_file(&file_path, &query, &chapters, cap),
+                BookFormat::Epub => scan_epub_file(&file_path, &query, &content_hash, cap),
+                // pdf 无服务端文本层，沿用 content 端点的错误语义
+                BookFormat::Pdf => Err(AppError::ContentEndpointNotSupported),
+            }
         })
         .await
         .map_err(|e| AppError::Internal(format!("book search task failed: {e}")))??;
@@ -242,6 +256,61 @@ fn scan_book_file(
         ))
     })?;
     Ok(scan_matches(text, query, chapters, cap))
+}
+
+/// epub 解析产物中搜索所需的部分（解析一次，多次查询共享）
+struct EpubSearchText {
+    text: String,
+    /// (章节标题, 章节首字符在 text 中的偏移)，顺序 = spine 顺序，与 DB chapters 一致
+    chapters: Vec<(String, i64)>,
+}
+
+/// epub 全文解析缓存：按 content_hash 键控（书文件不可变，重传生成新 hash，
+/// 也天然隔离测试间同 id 的不同书）。容量 2 覆盖当前热门书；检查/插入持锁、
+/// 解析在锁外，避免慢解析阻塞其他书的并发查询
+static EPUB_TEXT_CACHE: LazyLock<Mutex<LruCache<String, Arc<EpubSearchText>>>> =
+    LazyLock::new(|| {
+        Mutex::new(LruCache::new(
+            NonZeroUsize::new(2).expect("non-zero cache capacity"),
+        ))
+    });
+
+/// 读入 epub 文件并解析出可搜索文本（带缓存；并发未命中会重复解析，可接受）
+fn cached_epub_text(path: &str, content_hash: &str) -> Result<Arc<EpubSearchText>, AppError> {
+    let mut cache = EPUB_TEXT_CACHE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if let Some(hit) = cache.get(content_hash) {
+        return Ok(Arc::clone(hit));
+    }
+    drop(cache);
+
+    let bytes = std::fs::read(path).map_err(AppError::Io)?;
+    let parsed = parse_epub(&bytes)?;
+    let entry = Arc::new(EpubSearchText {
+        text: parsed.text_content,
+        chapters: parsed
+            .chapters
+            .iter()
+            .map(|c| (c.title.clone(), c.char_offset))
+            .collect(),
+    });
+    EPUB_TEXT_CACHE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .put(content_hash.to_string(), Arc::clone(&entry));
+    Ok(entry)
+}
+
+/// epub 搜索：拼接全文（段落纯文本，仅 `<p>`，与 total_chars 同源）上做字面匹配
+fn scan_epub_file(
+    path: &str,
+    query: &str,
+    content_hash: &str,
+    cap: usize,
+) -> Result<Vec<BookTextSearchMatch>, AppError> {
+    let text = cached_epub_text(path, content_hash)?;
+    Ok(scan_matches(&text.text, query, &text.chapters, cap))
 }
 
 /// 在 `text` 中找出 `query` 的全部命中并换算为字符偏移、附上章节归属与摘录。

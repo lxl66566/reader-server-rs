@@ -242,19 +242,20 @@ pub struct JumpToChapterResponse {
     pub position: i64,
 }
 
-// 书内全文搜索单条命中（仅 txt 格式有意义）
+// 书内全文搜索单条命中
 #[derive(Debug, Serialize)]
 pub struct BookTextSearchMatch {
     /// 命中所在章节在按 position 升序的章节列表中的下标（0-based）
     pub chapter_index: i64,
     pub chapter_title: String,
-    /// 命中起始字符的全书偏移（与章节 position、/content 的 position 同一坐标系）
+    /// 命中起始字符的全书偏移（txt 与章节 position、/content 的 position 同一坐标系；
+    /// epub 为解析拼接全文中的偏移，仅用于 excerpt 定位，阅读端按章节粒度跳转）
     pub char_offset: i64,
     /// 命中前后各约 30 字符的纯文本上下文（含命中本身；前端按 offset 自行加粗）
     pub excerpt: String,
 }
 
-// 书内全文搜索响应（仅 txt 格式有意义）
+// 书内全文搜索响应
 #[derive(Debug, Serialize)]
 pub struct BookTextSearchResponse {
     pub matches: Vec<BookTextSearchMatch>,
