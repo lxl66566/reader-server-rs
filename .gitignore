@@ -7,3 +7,5 @@ sqlite
 /test*
 reader.db*
 /books
+/*.epub
+/*.txt
