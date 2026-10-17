@@ -212,6 +212,7 @@ const en: Dict = {
   readerSettings: 'Settings',
   readerSyncJump: 'Jumped to the latest position from another device',
   readerToc: 'Contents',
+  readerTocSearchPlaceholder: 'Search chapter titles…',
   readingTime: 'Reading time',
   readingTimeSeconds: 'Reading time (seconds)',
   recommendAnother: 'Shuffle',

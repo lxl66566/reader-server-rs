@@ -609,6 +609,7 @@ const EpubReader = (props: FormatReaderProps) => {
   });
 
   props.registerNavigator({
+    currentChapterPosition: () => sectionIndex(),
     jumpToChapter: position => {
       const section = book?.spine.get(position);
       return section ? displaySafe(section.href) : Promise.resolve(false);

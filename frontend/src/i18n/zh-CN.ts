@@ -204,6 +204,7 @@ const zhCN = {
   readerSettings: '设置',
   readerSyncJump: '已跳转到其他设备的最新进度',
   readerToc: '目录',
+  readerTocSearchPlaceholder: '搜索章节标题…',
   readingTime: '阅读时长',
   readingTimeSeconds: '阅读时长（秒）',
   recommendAnother: '换一批',

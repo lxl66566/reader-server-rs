@@ -164,6 +164,7 @@ const PdfReader = (props: FormatReaderProps) => {
   };
 
   props.registerNavigator({
+    currentChapterPosition: () => page(),
     // 后端 chapters 的 position 即 0-based 页码（书签 outline）
     jumpToChapter: position => jumpToPage(position),
     jumpToLocator: locator => {

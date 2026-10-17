@@ -31,6 +31,8 @@ export interface FormatReaderProps {
 }
 
 export interface ReaderNavigator {
+  /** 当前阅读位置，与 jumpToChapter 同坐标系（txt = 字符偏移，epub = spine 下标，pdf = 0-based 页码）；未就绪 = null */
+  currentChapterPosition: () => null | number;
   /** 跳转到章节位置（txt = 字符偏移，epub = spine 下标）；false = 无该章或失败 */
   jumpToChapter: (position: number) => Promise<boolean>;
   /** 跳转到任意 locator（书签/批注/跨设备同步）；false = locator 无效或跳转失败 */

@@ -13,11 +13,19 @@ import {
   VsSearch,
   VsSettingsGear,
 } from 'solid-icons/vs';
-import { createSignal, For, Show, type Resource } from 'solid-js';
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  For,
+  on,
+  Show,
+  type Resource,
+} from 'solid-js';
 import toast from 'solid-toast';
 
 import { markerApi } from '../api';
-import type { Annotation, BookDetail, Bookmark } from '../api/types';
+import type { Annotation, BookDetail, Bookmark, Chapter } from '../api/types';
 import { isOnline, OfflineBanner } from '../components/OfflineBanner';
 import { ReaderSettingRows } from '../components/settings/ReaderSettingRows';
 import { Button, EmptyState, Input, Modal, Spinner } from '../components/ui';
@@ -162,6 +170,9 @@ const Chrome = (props: ChromeProps) => {
 
       <TocPanel
         book={props.book}
+        currentChapterPosition={() =>
+          props.navigator()?.currentChapterPosition() ?? null
+        }
         onClose={() => setPanel(null)}
         onJump={position => {
           jump(nav => {
@@ -285,11 +296,56 @@ const BarButton = (buttonProps: {
 
 const TocPanel = (panelProps: {
   book: BookDetail;
+  currentChapterPosition: () => null | number;
   onClose: () => void;
   onJump: (position: number) => void;
   open: boolean;
 }) => {
   const { t } = useI18n();
+  const [query, setQuery] = createSignal('');
+  const keyword = () => query().trim().toLowerCase();
+  // 当前章 = 按 position 升序的章节里最后一个 position <= 阅读位置的章节。
+  // pdf outline 页码可能乱序，不做提前退出
+  const currentChapter = createMemo(() => {
+    const at = panelProps.currentChapterPosition();
+    if (at === null) return null;
+    let found: Chapter | null = null;
+    for (const chapter of panelProps.book.chapters) {
+      if (chapter.position <= at) found = chapter;
+    }
+    return found;
+  });
+  const filtered = () => {
+    const kw = keyword();
+    const chapters = panelProps.book.chapters;
+    if (kw.length === 0) return chapters;
+    return chapters.filter(chapter => chapter.title.toLowerCase().includes(kw));
+  };
+
+  // 关闭时清空搜索词（含跳转关闭路径——跳转不经过 onClose）：下次打开仍
+  // 以当前章节定位为主视图
+  createEffect(
+    on(
+      () => panelProps.open,
+      (open, prevOpen) => {
+        if (prevOpen && !open) setQuery('');
+      },
+    ),
+  );
+
+  // 打开面板时把当前章节滚到列表中部；搜索态下列表由关键词主导，不定位
+  let listEl: HTMLUListElement | undefined;
+  createEffect(() => {
+    if (!panelProps.open || keyword().length > 0) return;
+    const chapter = currentChapter();
+    const list = listEl;
+    if (chapter === null || list === undefined) return;
+    const item = list.children[panelProps.book.chapters.indexOf(chapter)];
+    if (!(item instanceof HTMLElement)) return;
+    list.scrollTop =
+      item.offsetTop - (list.clientHeight - item.offsetHeight) / 2;
+  });
+
   return (
     <Modal
       onClose={panelProps.onClose}
@@ -300,23 +356,35 @@ const TocPanel = (panelProps: {
         fallback={<EmptyState text={t('noChapters')} />}
         when={panelProps.book.chapters.length > 0}
       >
-        <ul class="max-h-[60vh] overflow-y-auto">
-          <For each={panelProps.book.chapters}>
-            {chapter => (
-              <li>
-                <button
-                  class="hover:bg-page w-full cursor-pointer rounded px-2 py-2.5 text-left text-sm"
-                  onClick={() => {
-                    panelProps.onJump(chapter.position);
-                  }}
-                  type="button"
-                >
-                  {chapter.title}
-                </button>
-              </li>
-            )}
-          </For>
-        </ul>
+        <div class="mb-2">
+          <Input
+            onInput={setQuery}
+            placeholder={t('readerTocSearchPlaceholder')}
+            value={query()}
+          />
+        </div>
+        <Show
+          fallback={<EmptyState text={t('readerSearchNoResults')} />}
+          when={filtered().length > 0}
+        >
+          <ul class="relative max-h-[60vh] overflow-y-auto" ref={listEl}>
+            <For each={filtered()}>
+              {chapter => (
+                <li>
+                  <button
+                    class={`hover:bg-page w-full cursor-pointer rounded px-2 py-2.5 text-left text-sm ${chapter === currentChapter() ? 'text-accent font-medium' : ''}`}
+                    onClick={() => {
+                      panelProps.onJump(chapter.position);
+                    }}
+                    type="button"
+                  >
+                    {chapter.title}
+                  </button>
+                </li>
+              )}
+            </For>
+          </ul>
+        </Show>
       </Show>
     </Modal>
   );

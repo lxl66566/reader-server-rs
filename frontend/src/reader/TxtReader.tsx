@@ -208,6 +208,7 @@ const TxtReader = (props: FormatReaderProps) => {
   };
 
   props.registerNavigator({
+    currentChapterPosition: () => offset(),
     jumpToChapter: position => jumpToOffset(position),
     jumpToLocator: locator => {
       // 高亮 locator 落到选区起点；书签/进度仍为纯数字偏移

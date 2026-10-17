@@ -136,7 +136,11 @@ const ReaderBody = (props: ReaderBodyProps) => {
     fetchAnnotations(props.book.book_id),
   );
 
-  let navigatorRef: null | ReaderNavigator = null;
+  // navigator 用 signal 而非普通 let：epub/pdf 的 reader 是 lazy 组件，
+  // 注册晚于 Chrome 首次渲染；响应式引用保证目录面板等消费方能感知注册完成
+  const [navigatorRef, setNavigatorRef] = createSignal<null | ReaderNavigator>(
+    null,
+  );
   let positionRef: null | { locator: string; percent: number } = null;
 
   // --- 本地进度持久化（离线续读） ---
@@ -167,7 +171,7 @@ const ReaderBody = (props: ReaderBodyProps) => {
   let lastSyncToastAt = 0;
 
   const syncJump = (locator: string): void => {
-    const nav = navigatorRef;
+    const nav = navigatorRef();
     if (!nav) return;
     const seq = ++syncJumpSeq;
     const prev = positionRef;
@@ -340,9 +344,7 @@ const ReaderBody = (props: ReaderBodyProps) => {
               onAnnotationsChanged={bumpAnnotations}
               onPosition={onPosition}
               onTapCenter={() => setChromeVisible(v => !v)}
-              registerNavigator={nav => {
-                navigatorRef = nav;
-              }}
+              registerNavigator={setNavigatorRef}
             />
           </Show>
           <Show when={props.book.format === 'epub'}>
@@ -354,9 +356,7 @@ const ReaderBody = (props: ReaderBodyProps) => {
               onActivity={markActivity}
               onPosition={onPosition}
               onTapCenter={() => setChromeVisible(v => !v)}
-              registerNavigator={nav => {
-                navigatorRef = nav;
-              }}
+              registerNavigator={setNavigatorRef}
             />
           </Show>
           <Show when={props.book.format === 'pdf'}>
@@ -368,9 +368,7 @@ const ReaderBody = (props: ReaderBodyProps) => {
               onAnnotationsChanged={bumpAnnotations}
               onPosition={onPosition}
               onTapCenter={() => setChromeVisible(v => !v)}
-              registerNavigator={nav => {
-                navigatorRef = nav;
-              }}
+              registerNavigator={setNavigatorRef}
             />
           </Show>
         </Suspense>
@@ -389,7 +387,7 @@ const ReaderBody = (props: ReaderBodyProps) => {
         book={props.book}
         bookmarks={bookmarks}
         currentPosition={() => positionRef}
-        navigator={() => navigatorRef}
+        navigator={navigatorRef}
         onRetryReconnect={() => {
           session.retry();
         }}
