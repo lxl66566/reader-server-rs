@@ -325,6 +325,14 @@ const ReaderBody = (props: ReaderBodyProps) => {
     });
   });
 
+  // 标签页标题为当前书名；离开阅读页恢复默认（默认值须与 index.html 一致）
+  createEffect(() => {
+    document.title = props.book.title;
+    onCleanup(() => {
+      document.title = 'Reader';
+    });
+  });
+
   return (
     <div class="fixed inset-0 h-dvh w-full" style={surfaceStyle()}>
       <div class="absolute inset-0">
