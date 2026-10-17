@@ -1,0 +1,2 @@
+# PDF 是字节流格式（xref 偏移对行尾敏感），禁止 git 做行尾转换
+*.pdf binary

@@ -17,6 +17,8 @@ export interface UploadedBook {
   book_id: number;
   format: string;
   title: string;
+  /** 仅 pdf 上传响应携带；其余格式为 0 */
+  total_pages?: number;
 }
 
 // 服务端统一响应包装
@@ -51,26 +53,40 @@ export async function createUser(
 ): Promise<TestUser> {
   const username = uniqueUsername(prefix);
   const password = `pw-${username}`;
-  const res = await request.post(`${API}/auth/register`, {
-    data: { password, username },
-  });
+  const res = await fetchWithRetry(() =>
+    request.post(`${API}/auth/register`, {
+      data: { password, username },
+    }),
+  );
   expect(res.ok(), `register ${username}: ${await res.text()}`).toBe(true);
   const { data } = (await res.json()) as ApiResponse<AuthData>;
   return { password, token: data.token, userId: data.user_id, username };
 }
 
-/** 读取书籍详情（用于轮询进度落库） */
+/** 读取书籍详情（用于轮询进度落库）；429 时退避重试（轮询高频场景） */
 export async function getBook(
   request: APIRequestContext,
   token: string,
   bookId: number,
 ): Promise<BookProgress> {
-  const res = await request.get(`${API}/books/${bookId}`, {
-    headers: { authorization: `Bearer ${token}` },
-  });
-  expect(res.ok(), `get book ${bookId}: ${await res.text()}`).toBe(true);
-  const { data } = (await res.json()) as ApiResponse<BookProgress>;
-  return data;
+  let lastText = '';
+  for (let attempt = 0; attempt < 5; attempt++) {
+    // oxlint-disable-next-line no-await-in-loop
+    const res = await request.get(`${API}/books/${bookId}`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (res.ok()) {
+      // oxlint-disable-next-line no-await-in-loop
+      const { data } = (await res.json()) as ApiResponse<BookProgress>;
+      return data;
+    }
+    // oxlint-disable-next-line no-await-in-loop
+    lastText = await res.text();
+    if (res.status() !== 429) break;
+    // oxlint-disable-next-line no-await-in-loop
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
+  throw new Error(`get book ${bookId}: ${lastText}`);
 }
 
 /** 读取当前阅读设置 */
@@ -78,9 +94,11 @@ export async function getSettings(
   request: APIRequestContext,
   token: string,
 ): Promise<Record<string, unknown>> {
-  const res = await request.get(`${API}/reading/settings`, {
-    headers: { authorization: `Bearer ${token}` },
-  });
+  const res = await fetchWithRetry(() =>
+    request.get(`${API}/reading/settings`, {
+      headers: { authorization: `Bearer ${token}` },
+    }),
+  );
   expect(res.ok(), `get settings: ${await res.text()}`).toBe(true);
   const { data } = (await res.json()) as ApiResponse<Record<string, unknown>>;
   return data;
@@ -150,10 +168,12 @@ export async function updateSettings(
     theme: string;
   }>,
 ): Promise<void> {
-  const res = await request.put(`${API}/reading/settings`, {
-    data: patch,
-    headers: { authorization: `Bearer ${token}` },
-  });
+  const res = await fetchWithRetry(() =>
+    request.put(`${API}/reading/settings`, {
+      data: patch,
+      headers: { authorization: `Bearer ${token}` },
+    }),
+  );
   expect(res.ok(), `update settings: ${await res.text()}`).toBe(true);
 }
 
@@ -164,21 +184,26 @@ export async function uploadBook(
   filePath: string,
   options: { isPublic?: boolean; title?: string } = {},
 ): Promise<UploadedBook> {
-  const name = filePath.split('/').at(-1) ?? 'book.txt';
-  const res = await request.post(`${API}/books/upload`, {
-    headers: { authorization: `Bearer ${token}` },
-    multipart: {
-      file: {
-        buffer: readFileSync(filePath),
-        mimeType: name.endsWith('.epub')
-          ? 'application/epub+zip'
-          : 'text/plain',
-        name,
+  const name = filePath.split(/[/\\]/).at(-1) ?? 'book.txt';
+  const mimeType = name.endsWith('.epub')
+    ? 'application/epub+zip'
+    : name.endsWith('.pdf')
+      ? 'application/pdf'
+      : 'text/plain';
+  const res = await fetchWithRetry(() =>
+    request.post(`${API}/books/upload`, {
+      headers: { authorization: `Bearer ${token}` },
+      multipart: {
+        file: {
+          buffer: readFileSync(filePath),
+          mimeType,
+          name,
+        },
+        is_public: String(options.isPublic ?? false),
+        title: options.title ?? '',
       },
-      is_public: String(options.isPublic ?? false),
-      title: options.title ?? '',
-    },
-  });
+    }),
+  );
   expect(res.ok(), `upload ${name}: ${await res.text()}`).toBe(true);
   const { data } = (await res.json()) as ApiResponse<UploadedBook>;
   return data;
@@ -204,6 +229,23 @@ export async function waitForSavedProgress(
     )
     .toBeGreaterThan(0);
   return saved;
+}
+
+/**
+ * 429 退避重试：服务端有全局 IP 限流（10 rps / burst 30），多 worker 同时
+ * 建号+上传+开页会瞬间超 burst。仅对幂等/被拒即无副作用的请求使用。
+ */
+async function fetchWithRetry(
+  call: () => Promise<import('@playwright/test').APIResponse>,
+): Promise<import('@playwright/test').APIResponse> {
+  let res = await call();
+  for (let attempt = 0; attempt < 5 && res.status() === 429; attempt++) {
+    // oxlint-disable-next-line no-await-in-loop
+    await new Promise(resolve => setTimeout(resolve, 500));
+    // oxlint-disable-next-line no-await-in-loop
+    res = await call();
+  }
+  return res;
 }
 
 /** 单次播种尝试：subscribe + 心跳重发至 updated=true（首跳设备让位不落库） */

@@ -1,6 +1,7 @@
 // 生成 e2e 采样书籍：node e2e/assets/gen-assets.mjs
 // - novel.txt：多章 UTF-8 文本，第一章长章覆盖深链 locator=8000 的场景
 // - sample.epub：EPUB3（nav + spine + 40 章 xhtml）
+// - sample.pdf：12 页标准字体文本页 + Info（UTF-16BE 标题）+ 两层 outline 书签
 // 正文为确定性合成文本：行首不含章节标题词、行长 > 30，不命中 txt 切章规则。
 import { writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -33,6 +34,11 @@ function paragraph(index) {
 }
 
 const EPUB_CHAPTERS = 40;
+
+// sample.pdf：无压缩手写 PDF（对象偏移在本函数内计算）。12 页 Helvetica
+// 文本；Info.Title 为 UTF-16BE（中文 PDF 的普遍写法，回归后端解码）；
+// outline 两层：第 0/5/11 页三个顶层条目，第 1 页一个子条目。
+const PDF_PAGES = 12;
 
 async function buildEpub() {
   const zip = new JSZip();
@@ -130,9 +136,121 @@ h1 { color: #000 !important; background: #f5f5f5 !important; }
   });
 }
 
+function buildPdf() {
+  // Node 无 utf16be 编码：按 utf16le 输出后逐对换字节序
+  const utf16beHex = text => {
+    const le = Buffer.from(`\uFEFF${text}`, 'utf16le');
+    for (let i = 0; i < le.length; i += 2) {
+      [le[i], le[i + 1]] = [le[i + 1], le[i]];
+    }
+    return le.toString('hex').toUpperCase();
+  };
+
+  // (标题, 目标页 0-based)；子条目挂在「中段」下。非 ASCII 标题写为
+  // UTF-16BE 十六进制串（中文 PDF 的普遍写法），ASCII 标题写为字面串
+  const chapters = [
+    { page: 0, parent: 'root', title: '开篇' },
+    { page: 5, parent: 'root', title: '中段' },
+    { page: 1, parent: '中段', title: '小节' },
+    { page: 11, parent: 'root', title: 'Appendix' },
+  ];
+
+  const objects = [];
+  const add = body => {
+    objects.push(body);
+    return objects.length; // 1-based obj number
+  };
+
+  const catalogId = add('');
+  const pagesId = add('');
+  const outlinesId = add('');
+  const fontId = add(
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
+  );
+  const pageIds = [];
+  const contentIds = [];
+  for (let i = 0; i < PDF_PAGES; i++) {
+    contentIds.push(
+      add(
+        `<< /Length ${`BT /F1 28 Tf 72 700 Td (Sample PDF page ${i + 1}) Tj ET`.length} >>\nstream\nBT /F1 28 Tf 72 700 Td (Sample PDF page ${i + 1}) Tj ET\nendstream`,
+      ),
+    );
+    pageIds.push(
+      add(
+        `<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 ${fontId} 0 R >> >> /Contents ${contentIds[i]} 0 R >>`,
+      ),
+    );
+  }
+
+  // outline 条目对象：先占位拿到编号再回填 First/Next/Prev 链
+  const itemIds = chapters.map(() => add(''));
+  const items = chapters.map((chapter, i) => {
+    const siblings = chapters
+      .map((c, j) => ({ c, j }))
+      .filter(({ c }) => c.parent === chapter.parent);
+    const pos = siblings.findIndex(({ j }) => j === i);
+    const title = /^[\x20-\x7e]*$/.test(chapter.title)
+      ? `(${chapter.title})`
+      : `<${utf16beHex(chapter.title)}>`;
+    const fields = [
+      `/Title ${title}`,
+      `/Parent ${chapter.parent === 'root' ? outlinesId : itemIds[chapters.findIndex(c => c.title === chapter.parent)]} 0 R`,
+      `/Dest [${pageIds[chapter.page]} 0 R /Fit]`,
+    ];
+    if (pos > 0) fields.push(`/Prev ${itemIds[siblings[pos - 1].j]} 0 R`);
+    if (pos < siblings.length - 1) {
+      fields.push(`/Next ${itemIds[siblings[pos + 1].j]} 0 R`);
+    }
+    if (chapter.parent === 'root') {
+      const children = chapters
+        .map((c, j) => ({ c, j }))
+        .filter(({ c }) => c.parent === chapter.title);
+      if (children.length > 0) {
+        fields.push(`/First ${itemIds[children[0].j]} 0 R`);
+        fields.push(`/Last ${itemIds[children.at(-1).j]} 0 R`);
+      }
+    }
+    return `<< ${fields.join(' ')} >>`;
+  });
+  items.forEach((body, i) => {
+    objects[itemIds[i] - 1] = body;
+  });
+
+  objects[catalogId - 1] =
+    `<< /Type /Catalog /Pages ${pagesId} 0 R /Outlines ${outlinesId} 0 R >>`;
+  objects[pagesId - 1] =
+    `<< /Type /Pages /Count ${PDF_PAGES} /Kids [${pageIds.map(id => `${id} 0 R`).join(' ')}] >>`;
+  const rootItems = chapters
+    .map((c, j) => ({ c, j }))
+    .filter(({ c }) => c.parent === 'root');
+  objects[outlinesId - 1] =
+    `<< /Type /Outlines /First ${itemIds[rootItems[0].j]} 0 R /Last ${itemIds[rootItems.at(-1).j]} 0 R /Count ${chapters.length} >>`;
+
+  const infoId = add(
+    `<< /Title <${utf16beHex('测试PDF样书')}> /Author (gen-assets) >>`,
+  );
+
+  // 拼装文件并记录 xref 偏移
+  let pdf = '%PDF-1.5\n';
+  const offsets = [0];
+  objects.forEach((body, i) => {
+    offsets.push(pdf.length);
+    pdf += `${i + 1} 0 obj\n${body}\nendobj\n`;
+  });
+  const xrefStart = pdf.length;
+  pdf += `xref\n0 ${objects.length + 1}\n`;
+  pdf += '0000000000 65535 f \r\n';
+  for (let i = 1; i <= objects.length; i++) {
+    pdf += `${String(offsets[i]).padStart(10, '0')} 00000 n \r\n`;
+  }
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root ${catalogId} 0 R /Info ${infoId} 0 R >>\nstartxref\n${xrefStart}\n%%EOF\n`;
+  return Buffer.from(pdf, 'latin1');
+}
+
 const novel = buildNovel();
 writeFileSync(join(outDir, 'novel.txt'), novel, 'utf8');
 writeFileSync(join(outDir, 'sample.epub'), await buildEpub());
+writeFileSync(join(outDir, 'sample.pdf'), buildPdf());
 console.log(
-  `novel.txt: ${novel.length} chars, sample.epub: ${EPUB_CHAPTERS} chapters`,
+  `novel.txt: ${novel.length} chars, sample.epub: ${EPUB_CHAPTERS} chapters, sample.pdf: ${PDF_PAGES} pages`,
 );

@@ -44,11 +44,11 @@ async function cacheWholeBook(
   await expect(page.getByText('缓存完成')).toBeVisible({ timeout: 30_000 });
 }
 
-/** 唤出阅读菜单：epub 手势只认 touch 事件，鼠标点击落在 iframe 下方的
- * 宿主区域（滚动模式短章必然留白）触发 onHostTap */
+/** 唤出阅读菜单：滚动模式下 tap 分区上/下 1/3 是章内滚动，只有中区
+ * （iframe 文档上的 click，经 attachTapSwipeGestures）才开 chrome */
 async function openChromeEpub(page: Page): Promise<void> {
   const { vh, vw } = viewportSize(page);
-  await page.mouse.click(vw / 2, vh * 0.9);
+  await page.mouse.click(vw / 2, vh / 2);
 }
 
 /** 唤出阅读菜单：txt 点击屏幕正中（tap 中央区） */
