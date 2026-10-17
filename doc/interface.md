@@ -58,7 +58,7 @@ type Book = {
 }
 type BookDetail = Book & { is_owner: boolean; chapter_pattern: string | null; chapters: { chapter_id: number; title: string; position: number }[] }
 // chapter_pattern：本书自定义章节切分正则（仅 txt 有意义）；null = 使用内置默认规则
-// position 字段：txt = 全文字符偏移；epub = spine 索引（0-based，与 epub.js 对齐）；pdf 通常无章节
+// position 字段：txt = 全文字符偏移；epub = spine 索引（0-based，与 epub.js 对齐）；pdf = 书签 outline 目标页（0-based，无书签则空）
 type PublicBook = {
   book_id: number; title: string; author: string | null; owner_username: string;
   format: BookFormat;
@@ -153,13 +153,13 @@ type Annotation = {
 
 | 方法 | URL | 权限 | 请求参数 | 响应 data |
 |---|---|---|---|---|
-| POST | /api/v1/books/upload | Auth | FormData: file (txt/epub/pdf), title?: string, author?: string, description?: string（≤2000 字符；txt 手填，epub/pdf 缺省时回退内嵌元数据，显式提供则覆盖）, is_public: boolean, chapter_pattern?: string（仅 txt 有效；自定义章节切分正则，空/缺省 = 内置默认规则） | { book_id: number; title: string; author: string \| null; format: BookFormat; total_chars: number; total_pages: number; chapters: { chapter_id: number; title: string; position: number }[] } |
+| POST | /api/v1/books/upload | Auth | FormData: file (txt/epub/pdf), title?: string, author?: string, description?: string（≤2000 字符；txt 手填，epub/pdf 缺省时回退内嵌元数据，显式提供则覆盖；pdf 元数据含 UTF-16BE(BOM) 编码解码，章节取自书签 outline）, is_public: boolean, chapter_pattern?: string（仅 txt 有效；自定义章节切分正则，空/缺省 = 内置默认规则） | { book_id: number; title: string; author: string \| null; format: BookFormat; total_chars: number; total_pages: number; chapters: { chapter_id: number; title: string; position: number }[] } |
 | GET | /api/v1/books?page=number&limit=number&sort=last_read\|created\|title\|author&order=desc\|asc&format=txt\|epub\|pdf | Auth | - | { total: number; books: Book[] }；sort 缺省 last_read（未读恒排最后，其后按创建时间），order 缺省 desc；title/author 按 NOCASE；各排序键并列时以 id 兜底保证结果稳定；非法参数 400 |
 | GET | /api/v1/books/search?q=string&scope=mine\|public\|all&page=number&limit=number | Auth | - | { total: number; books: Book[] } |
 | GET | /api/v1/books/:book_id | Auth | - | BookDetail |
 | GET | /api/v1/books/:book_id/file?download=boolean | Auth | Header: If-None-Match? | 200 + ETag：原文件字节流（Content-Type 按 format：text/plain; application/epub+zip; application/pdf）；ETag 命中返回 304。缺省 `Content-Disposition: inline`（pdf 内联预览），epub/pdf 客户端渲染时使用，txt 也可用；`download=true` 时为 `attachment`，文件名为「书名 - 作者」（作者缺省/空白时仅书名；RFC 5987 `filename*=UTF-8''…`，非 ASCII 的旧客户端回退 `book_{id}.{ext}`），用于保存到本地 |
 | GET | /api/v1/books/:book_id/content?position=number&length=number | Auth | Header: If-None-Match? | **仅 txt 格式可用**；epub/pdf 调用返回 400。200 + ETag：{ content: string; next_position: number }；ETag 命中返回 304 |
-| GET | /api/v1/books/:book_id/jump_to_chapter?chapter_id=number | Auth | - | { position: number }（txt=字符偏移；epub=spine 索引；pdf 通常无章节） |
+| GET | /api/v1/books/:book_id/jump_to_chapter?chapter_id=number | Auth | - | { position: number }（txt=字符偏移；epub=spine 索引；pdf=0-based 页码） |
 | GET | /api/v1/books/:book_id/search?q=string | Auth | - | **书内全文搜索，仅 txt 格式可用**；epub/pdf 调用返回 400（同 `/content` 语义）。q 必填（trim 后为空返回 400 `SearchQueryEmpty`），≤128 字符（超限 400）；ASCII 大小写不敏感的字面匹配（不分词/不归一化），重叠命中逐位置各计一条。返回 { matches: { chapter_index: number; chapter_title: string; char_offset: number; excerpt: string }[]; truncated: boolean }；`chapter_index` 为按 position 升序章节列表的 0-based 下标；`char_offset` 为命中的全书字符偏移（与章节 position、`/content` 的 position、进度 locator 同一坐标系，可直接用于内容切片定位）；`excerpt` 为命中前后各约 30 字符的纯文本上下文（含命中本身）；命中上限 200，超出截断且 `truncated=true`；查询词超长/为空/未鉴权（401）/无权限（403/404）语义同其他书籍读接口 |
 | PUT | /api/v1/books/:book_id | Auth | Body: { title?: string; author?: string; description?: string; is_public?: boolean; cover_path?: string; chapter_pattern?: string \| null }；description 空/纯空白 = 清空，缺省 = 不修改，≤2000 字符（超限 400）；chapter_pattern 仅 txt 可设置，null/空串 = 恢复内置默认规则，字段缺省 = 不修改，变更时从原文件重切本书全部章节 | {} |
 | DELETE | /api/v1/books/:book_id | Auth | - | {}；**软删除**（移入回收站）：写 books.deleted_at，书籍从书架/搜索/公开书库/推荐消失，直接访问详情/content/file/标签/批注/进度等一律 404；阅读进度与批注数据保留，可 restore 恢复；仅 owner 可操作（非 owner 403，书不存在或已在回收站 404） |
@@ -259,4 +259,4 @@ type Annotation = {
 |---|---|---|---|
 | `txt` | 后端 `/content` 分页拉取纯文本 | `position / total_chars` | `/jump_to_chapter` 返回字符偏移，前端用相同单位滚动 |
 | `epub` | 前端 fetch `/file` 后用 [epub.js](https://github.com/futurepress/epub.js) / [foliate-js](https://github.com/johnfactotum/foliate-js) 渲染 | 渲染器原生支持 EpubCFI，从中算出 `percent = cfi_index / total_cfi_steps` | 渲染器提供 TOC；后端预解析的章节列表用于离线展示 |
-| `pdf` | 前端 fetch `/file` 后用 [pdf.js](https://github.com/mozilla/pdf.js) 渲染 | `current_page / total_pages`，对应 locator `"page:N"` | pdf.js 提供 outline；如需后端 outline 后续可扩展 |
+| `pdf` | 前端 fetch `/file` 后用 [pdf.js](https://github.com/mozilla/pdf.js) 渲染 | `current_page / total_pages`，对应 locator `"page:N"` | outline 书签由后端解析为 chapters（position = 0-based 页码），前端目录/章节深链直接按页跳转 |

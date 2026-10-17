@@ -107,7 +107,8 @@ fn parse_upload_sync(
             },
             BookFormat::Pdf => {
                 let parsed = parse_pdf(content)?;
-                // PDF 不做章节提取（暂不解析 outline），前端用页码导航
+                // 章节：书签 outline 的 position 为 0-based 页码（前端按页跳转）
+                let chs = parsed.chapters;
                 let title = if title.trim().is_empty() {
                     parsed.title.unwrap_or(title)
                 } else {
@@ -116,7 +117,7 @@ fn parse_upload_sync(
                 (
                     0i64,
                     parsed.num_pages,
-                    Vec::new(),
+                    chs,
                     title,
                     author.or(parsed.author),
                     description,
