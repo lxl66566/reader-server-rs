@@ -87,8 +87,6 @@ pub fn create_app(db: Pool<Sqlite>, config: &Config) -> Router {
     let burst_size = state.config.rate_limit.burst_size.get();
 
     let api = Router::new()
-        // 前端静态资源兜底（release 嵌入，debug 提示 pnpm dev）
-        .fallback(frontend::fallback)
         // 认证路由
         .nest("/api/v1/auth", auth::routes())
         // 书籍路由
@@ -128,6 +126,10 @@ pub fn create_app(db: Pool<Sqlite>, config: &Config) -> Router {
         // 健康检查（不受限流影响，方便监控探活）
         .route("/health", get(|| async { "ok" }))
         .merge(api)
+        // 前端静态资源兜底（release 嵌入，debug 提示 pnpm dev）。挂在限流
+        // 之外：静态资源内容寻址不可变，限流只保护 API——被限流掐掉
+        // pdf.worker 等关键资源会让整个应用不可用
+        .fallback(frontend::fallback)
     // 其它中间件
     .layer(
         ServiceBuilder::new()
