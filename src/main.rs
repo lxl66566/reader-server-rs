@@ -121,10 +121,15 @@ async fn shutdown_signal() {
 fn init_tracing(
     config: &config::Config,
 ) -> Result<Option<tracing_appender::non_blocking::WorkerGuard>> {
-    // 注意：bin target 名为 reader-server，日志过滤的 crate 名应为 reader_server，
+    // 日志等级：RUST_LOG 优先整体覆盖；否则本 crate 用配置的 log.level，依赖库固定 warn。
+    // 注意：bin target 名为 reader-server，过滤的 crate 名应为 reader_server，
     // 否则本 crate（含启动日志、ws 日志）会被默认级别 ERROR 静默吞掉
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| "reader_server=debug,tower_http=debug,axum=debug".into());
+    let level = tracing::level_filters::LevelFilter::from(config.log.level);
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        tracing_subscriber::EnvFilter::new(format!(
+            "reader_server={level},tower_http=warn,axum=warn"
+        ))
+    });
 
     let rotation = config.log.rotation.trim().to_ascii_lowercase();
     if rotation == "never" {
@@ -133,7 +138,7 @@ fn init_tracing(
             .with(filter)
             .with(tracing_subscriber::fmt::layer())
             .init();
-        tracing::info!("日志仅输出到 stderr（rotation=never）");
+        tracing::info!(level = %level, "日志仅输出到 stderr（rotation=never）");
         return Ok(None);
     }
 
@@ -162,6 +167,7 @@ fn init_tracing(
     tracing::info!(
         dir = %config.log.dir.display(),
         rotation = %rotation,
+        level = %level,
         "日志文件已启用滚动"
     );
     Ok(Some(guard))

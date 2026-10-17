@@ -83,6 +83,7 @@ pub async fn setup_test_app_with_rate_limit(
         log: crate::config::LogConfig {
             dir: std::env::temp_dir().join("test_logs"),
             rotation: "never".to_string(),
+            level: crate::config::LogLevel::Info,
         },
         rate_limit,
     };
