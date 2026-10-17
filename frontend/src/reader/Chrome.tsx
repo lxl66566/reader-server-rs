@@ -157,7 +157,9 @@ const Chrome = (props: ChromeProps) => {
             >
               <VsCloudDownload class="size-5" />
             </button>
-            <div class="text-muted text-xs tabular-nums">
+            {/* 定宽右对齐：百分比位数变化（0.8% → 100.0%）时不抖动；
+                leading-none 消除不同机型字体行高度量差导致的垂直偏移 */}
+            <div class="text-muted min-w-12 pr-1 text-right text-xs leading-none tabular-nums">
               {t('progressPercent', {
                 percent: formatPercent(props.percent()),
               })}
