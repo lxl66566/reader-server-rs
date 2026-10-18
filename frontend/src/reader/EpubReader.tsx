@@ -288,7 +288,7 @@ const EpubReader = (props: FormatReaderProps) => {
     const scrolled = settings.pagination_mode === 'scroll';
     rendition.themes.register('custom', {
       body: {
-        background: 'transparent',
+        background: `${settings.background_color} !important`,
         'font-family': fontFamilyCss(settings.font_family) || 'inherit',
         padding: '0 16px',
         ...(scrolled
@@ -305,9 +305,12 @@ const EpubReader = (props: FormatReaderProps) => {
       'body *:not(img):not(image)': {
         'background-color': 'transparent !important',
       },
-      // iframe 文档 color-scheme 缺省为 light：html/body 透明时 Chrome 会
-      // 透出白色 root canvas，暗色阅读背景下表现为正文区域整块发白
+      // iframe 与宿主是两份文档，body 透明透不出宿主背景；根画布颜色由
+      // UA 决定（透明 + color-scheme 只能近似，Chrome light 恒为纯白，
+      // 部分内核不跟随 color-scheme 变暗），必须直接涂上用户背景色
       html: {
+        background: `${settings.background_color} !important`,
+        // color-scheme 让 iframe 内滚动条/表单控件跟随明暗
         'color-scheme': isDarkColor(settings.background_color)
           ? 'dark'
           : 'light',

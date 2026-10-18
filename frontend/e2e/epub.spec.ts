@@ -213,6 +213,23 @@ test('阅读主题覆盖书源强制黑字白底', async ({ page }) => {
         .evaluate(el => getComputedStyle(el).backgroundColor),
     )
     .toBe('rgba(0, 0, 0, 0)');
+  // 回归：iframe 与宿主是两份文档，body 透明透不出宿主背景，根画布由 UA
+  // 决定（Chrome light 恒白，浅色阅读背景下正文列发白）——html/body 必须
+  // 直接涂用户背景色
+  await expect
+    .poll(() =>
+      frame
+        .locator('html')
+        .evaluate(el => getComputedStyle(el).backgroundColor),
+    )
+    .toBe('rgb(16, 16, 16)');
+  await expect
+    .poll(() =>
+      frame
+        .locator('body')
+        .evaluate(el => getComputedStyle(el).backgroundColor),
+    )
+    .toBe('rgb(16, 16, 16)');
 });
 
 /** 搜索/目录等面板 Modal 的遮罩容器（页面同时最多一个，面板按钮须收敛到其中，
@@ -276,7 +293,7 @@ test('详情页搜索入口命中后深链进入对应章节', async ({ page }) 
     .filter({ hasText: '第40章 样章' })
     .first()
     .click();
-  await expect(page).toHaveURL(new RegExp(`/read/\\d+\\?chapter=\\d+`));
+  await expect(page).toHaveURL(/\/read\/\d+\?chapter=\d+/);
   await expect(chapterFrame(page).locator('h1')).toContainText('第40章', {
     timeout: 15_000,
   });
