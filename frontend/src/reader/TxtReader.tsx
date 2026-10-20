@@ -1204,6 +1204,12 @@ const ScrollView = (
       // oxlint-disable-next-line no-await-in-loop
       await settleLanding(at, land);
     }
+    // 落点不产生滚动（短章不足一屏、落点与当前滚动位置相同）时 onScroll
+    // 不会触发，位置信号停留在旧章：按落点视口直接上报
+    const landed = container
+      ? findParagraphElAtTop(container.scrollTop)
+      : undefined;
+    props.onOffsetChange(landed ? Number(landed.dataset.pos) : at);
   }
 
   // 定位落点：bottom 落到章末衔接阅读顺序，top 落到目标段落顶。
