@@ -35,11 +35,11 @@ import {
   bindScrollEdges,
   scrollEdges,
   attachTapSwipeGestures,
-  isTextEntryTarget,
   PAGE_SCROLL_RATIO,
   tapZone,
   tapZoneVertical,
 } from './gestures';
+import { bindReaderKeys } from './keyboard';
 import PageHint from './PageHint';
 import { stripEpubParagraphIndent } from './paragraph';
 import type { DeepLink, FormatReaderProps } from './types';
@@ -449,6 +449,7 @@ const EpubReader = (props: FormatReaderProps) => {
             }
           : undefined,
     });
+    bindReaderKeys(doc, { chapter: keyboardChapter, page: keyboardPage });
   }
 
   // epub.js 会平移 iframe（分页模式翻列、滚动模式文档流），iframe 内事件的
@@ -590,25 +591,30 @@ const EpubReader = (props: FormatReaderProps) => {
   );
 
   // desktop keyboard
+  // 键盘动作（宿主文档与 epub iframe 各绑一份——iframe 聚焦后 keydown
+  // 不再冒泡到宿主）：滚动模式 scrolled-doc 的 next/prev 即切章；分页模式
+  // 按 spine 下标跳到相邻章节开头
+  const keyboardPage = (dir: -1 | 1): void => {
+    if (settings.pagination_mode === 'paginate') void flip(dir);
+    else pageScroll(dir);
+  };
+
+  const keyboardChapter = (dir: -1 | 1): void => {
+    if (settings.pagination_mode === 'scroll') {
+      void flip(dir);
+      return;
+    }
+    const idx = sectionIndex();
+    const section = idx === null ? undefined : book?.spine.get(idx + dir);
+    if (section) void displaySafe(section.href);
+  };
+
   onMount(() => {
-    const onKey = (event: KeyboardEvent) => {
-      // 弹窗输入框内的方向键不翻页
-      if (isTextEntryTarget(event.target)) return;
-      if (settings.pagination_mode === 'paginate') {
-        if (event.key === 'ArrowLeft') void flip(-1);
-        if (event.key === 'ArrowRight') void flip(1);
-      } else if (event.key === 'ArrowDown') {
-        event.preventDefault();
-        pageScroll(1);
-      } else if (event.key === 'ArrowUp') {
-        event.preventDefault();
-        pageScroll(-1);
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    onCleanup(() => {
-      window.removeEventListener('keydown', onKey);
+    const detachKeys = bindReaderKeys(document, {
+      chapter: keyboardChapter,
+      page: keyboardPage,
     });
+    onCleanup(detachKeys);
   });
 
   props.registerNavigator({

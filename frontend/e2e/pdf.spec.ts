@@ -106,8 +106,8 @@ test('pdf 打开渲染非空白、翻页与进度落库恢复', async ({ page })
   await readerPainted(page);
   await expect(indicator(page)).toBeVisible();
 
-  // 键盘翻页 → 右区 tap 前进、左区回退
-  await page.keyboard.press('ArrowRight');
+  // 键盘翻页（page down 前进）→ 右区 tap 前进、左区回退
+  await page.keyboard.press('PageDown');
   await expect.poll(() => indicatorText(page)).toBe(`2 / ${TOTAL_PAGES}`);
   const { vh, vw } = viewportSize(page);
   await page.mouse.click(vw * 0.9, vh / 2);
@@ -167,7 +167,7 @@ test('pdf 目录（outline 书签）跳转与书签跳回', async ({ page }) => 
   await expect(page.getByText('已添加书签')).toBeVisible();
   await page.mouse.click(vw - 5, vh / 2); // 关弹窗
   await page.mouse.click(vw - 5, vh / 2); // 关 chrome
-  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('PageUp');
   await expect.poll(() => indicatorText(page)).toBe(`11 / ${TOTAL_PAGES}`);
 
   await page.mouse.click(vw / 2, vh / 2);

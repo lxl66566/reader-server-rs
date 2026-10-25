@@ -3,7 +3,7 @@
 // TxtReader 分页视图与 PdfReader 共用 useStripFlip；EpubReader 在 iframe 文档上
 // 通过 attachTapSwipeGestures 接入同一套 tap/swipe 语义。
 
-import { createSignal, onCleanup, onMount } from 'solid-js';
+import { createSignal } from 'solid-js';
 
 export const TAP_MAX_MS = 250;
 export const TAP_MAX_MOVE_PX = 10;
@@ -358,7 +358,7 @@ export function tapZoneVertical(
 /**
  * 三段式翻页手势：横向拖动跟手（首尾页有阻力），松手超过阈值翻页并播放
  * 位移动画，未超阈值回弹；tap 左/右区翻页、中区打开 chrome；桌面端支持
- * 点击分区与左右方向键。
+ * 点击分区（键盘见 keyboard.ts）。
  */
 export function useStripFlip(options: StripFlipOptions) {
   const [dx, setDx] = createSignal(0);
@@ -462,25 +462,11 @@ export function useStripFlip(options: StripFlipOptions) {
     else options.onTapCenter();
   };
 
-  // desktop: click zones + keyboard
+  // desktop: click zones
   const onClick = (event: MouseEvent) => {
     if (options.interceptTap?.(event.target, event)) return;
     handleTap(event.clientX);
   };
-
-  const onKeyDown = (event: KeyboardEvent) => {
-    // 弹窗输入框内的方向键不翻页
-    if (isTextEntryTarget(event.target)) return;
-    if (event.key === 'ArrowLeft') flip(-1);
-    if (event.key === 'ArrowRight') flip(1);
-  };
-
-  onMount(() => {
-    window.addEventListener('keydown', onKeyDown);
-    onCleanup(() => {
-      window.removeEventListener('keydown', onKeyDown);
-    });
-  });
 
   return {
     dx,

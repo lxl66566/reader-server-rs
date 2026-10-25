@@ -89,9 +89,11 @@ test('上传 txt 并保留阅读进度', async ({ page }) => {
   await expect(indicator).toBeVisible();
   await expect(indicator).toHaveText(/^1 \/ \d+$/);
 
-  // 键盘翻页
-  await page.keyboard.press('ArrowRight');
+  // 键盘翻页（space / page down 翻页，左右方向键切章，见 keyboard.spec）
+  await page.keyboard.press('PageDown');
   await expect(indicator).toHaveText(/^2 \/ \d+$/);
+  await page.keyboard.press('PageUp');
+  await expect(indicator).toHaveText(/^1 \/ \d+$/);
 
   // --- 唤出 chrome，切到滚动模式 ---
   await openChrome(page);

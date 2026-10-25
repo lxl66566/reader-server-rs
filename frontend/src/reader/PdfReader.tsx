@@ -17,6 +17,7 @@ import {
 } from 'solid-js';
 
 import { bookApi } from '../api';
+import type { Chapter } from '../api/types';
 import { LoadErrorPanel } from '../components/LoadErrorPanel';
 import { Spinner } from '../components/ui';
 import { useI18n } from '../i18n';
@@ -28,6 +29,7 @@ import {
   useStripFlip,
   useVerticalTapZones,
 } from './gestures';
+import { bindReaderKeys } from './keyboard';
 import type { FormatReaderProps } from './types';
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
@@ -218,6 +220,7 @@ const PdfReader = (props: FormatReaderProps) => {
             fallback={
               <ScrollView
                 canvasWidth={canvasWidth()}
+                chapters={props.book.chapters}
                 doc={loaded()}
                 initialPage={page()}
                 jumpRequest={jumpRequest}
@@ -237,6 +240,7 @@ const PdfReader = (props: FormatReaderProps) => {
           >
             <PaginateView
               canvasWidth={canvasWidth()}
+              chapters={props.book.chapters}
               doc={loaded()}
               onTapCenter={() => {
                 props.onTapCenter();
@@ -267,12 +271,26 @@ const SpinnerOverlay = () => (
   </div>
 );
 
+// outline 条目的页码可能乱序：当前章 = 列表顺序中最后一个 position <= 页码
+// 的条目（与目录面板的定位语义一致），不做提前退出
+const chapterIndexAtPage = (
+  chapters: readonly Chapter[],
+  page: number,
+): number => {
+  let found = -1;
+  for (const [index, chapter] of chapters.entries()) {
+    if (chapter.position <= page) found = index;
+  }
+  return found;
+};
+
 // ---------------------------------------------------------------------------
 // paginate mode: 3-page strip
 // ---------------------------------------------------------------------------
 
 const PaginateView = (viewProps: {
   canvasWidth: number;
+  chapters: Chapter[];
   doc: PDFDocumentProxy;
   onTapCenter: () => void;
   page: number;
@@ -298,6 +316,22 @@ const PaginateView = (viewProps: {
       goTo(viewProps.page + dir);
     },
     onTapCenter: viewProps.onTapCenter,
+  });
+
+  // outline 章节 position 即 0-based 页码：键盘切章跳到相邻章节起始页
+  const jumpChapter = (dir: -1 | 1): void => {
+    const next = chapterIndexAtPage(viewProps.chapters, viewProps.page) + dir;
+    if (next < 0) return;
+    const target = viewProps.chapters.at(next);
+    if (target) goTo(target.position);
+  };
+
+  onMount(() => {
+    const detachKeys = bindReaderKeys(document, {
+      chapter: jumpChapter,
+      page: gestures.flip,
+    });
+    onCleanup(detachKeys);
   });
 
   const stripPages = () => [
@@ -443,6 +477,7 @@ const PageSlot = (slotProps: {
 
 const ScrollView = (viewProps: {
   canvasWidth: number;
+  chapters: Chapter[];
   doc: PDFDocumentProxy;
   initialPage: number;
   jumpRequest: () => null | number;
@@ -547,6 +582,12 @@ const ScrollView = (viewProps: {
 
   onMount(() => {
     void enqueueJump(viewProps.initialPage);
+    // 键盘：空格/enter/上下键滚动视口，左右方向键切章
+    const detachKeys = bindReaderKeys(document, {
+      chapter: jumpChapter,
+      page: pageScroll,
+    });
+    onCleanup(detachKeys);
   });
 
   // jumps requested via the navigator (bookmark / chapter / cross-device sync)
@@ -557,17 +598,28 @@ const ScrollView = (viewProps: {
     }
   });
 
-  // 点击分区：上/下 1/3 滚动 PAGE_SCROLL_RATIO 视口（贴边自然停住），中区开 chrome
+  // 点击分区与键盘共用：滚动 PAGE_SCROLL_RATIO 视口（贴边自然停住）
+  const pageScroll = (dir: -1 | 1): void => {
+    if (container) {
+      animateScrollBy(
+        container,
+        dir * container.clientHeight * PAGE_SCROLL_RATIO,
+      );
+    }
+  };
+
+  // outline 章节 position 即 0-based 页码：键盘切章跳到相邻章节起始页
+  const jumpChapter = (dir: -1 | 1): void => {
+    const next = chapterIndexAtPage(viewProps.chapters, topPage()) + dir;
+    if (next < 0) return;
+    const target = viewProps.chapters.at(next);
+    if (target) void enqueueJump(target.position);
+  };
+
+  // 点击分区：上/下 1/3 章内滚动，中区开 chrome
   const tapZones = useVerticalTapZones({
     bounds: () => container?.getBoundingClientRect() ?? null,
-    onPageScroll: dir => {
-      if (container) {
-        animateScrollBy(
-          container,
-          dir * container.clientHeight * PAGE_SCROLL_RATIO,
-        );
-      }
-    },
+    onPageScroll: pageScroll,
     onTapCenter: viewProps.onTapCenter,
   });
 

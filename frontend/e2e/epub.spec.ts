@@ -65,7 +65,8 @@ test('epub 打开后进度上报并落库', async ({ page }) => {
 
   await page.goto(`/read/${book.book_id}`);
   await expect(page.locator('iframe').first()).toBeVisible();
-  // rendition 就绪前按键无效：边翻页边轮询，直到心跳把进度写到服务端
+  // rendition 就绪前按键无效：边切章边轮询，直到心跳把进度写到服务端
+  // （方向键语义为切章，见 reader/keyboard.ts）
   await expect
     .poll(
       async () => {
@@ -89,12 +90,13 @@ test('分页模式翻页后 tap 分区不偏移', async ({ page }) => {
 
   await page.goto(`/read/${book.book_id}`);
   await expect(page.locator('iframe').first()).toBeVisible();
-  // 章内翻到第 2 页（iframe 被平移，x < 0）；样章超过一屏，最多翻 3 次
+  // 章内翻到第 2 页（iframe 被平移，x < 0）；样章超过一屏，最多翻 3 次。
+  // page down 为章内翻页（方向键语义是切章，见 reader/keyboard.ts）
   await expect
     .poll(
       async () => {
         const x = await iframeX(page);
-        if (x >= 0) await page.keyboard.press('ArrowRight');
+        if (x >= 0) await page.keyboard.press('PageDown');
         return x;
       },
       { intervals: [500, 800], timeout: 15_000 },

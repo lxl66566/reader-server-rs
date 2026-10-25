@@ -48,6 +48,7 @@ import {
   type HighlightRange,
   type SplitParagraph,
 } from './highlights';
+import { bindReaderKeys } from './keyboard';
 import { measureCharsPerPage, type PageTypography } from './measure';
 import { NoteEditorModal } from './NoteEditor';
 import PageHint from './PageHint';
@@ -903,6 +904,22 @@ const PaginateView = (
     },
   });
 
+  // 键盘切章：相邻章节的起始位置（全书连续分页，章界只是 offset 标记）
+  const jumpChapter = (dir: -1 | 1): void => {
+    const next = chapterIndexAt(props.book.chapters, props.offset) + dir;
+    if (next < 0) return;
+    const target = props.book.chapters.at(next);
+    if (target) props.onOffsetChange(target.position);
+  };
+
+  onMount(() => {
+    const detachKeys = bindReaderKeys(document, {
+      chapter: jumpChapter,
+      page: gestures.flip,
+    });
+    onCleanup(detachKeys);
+  });
+
   const typo = () => props.typography();
 
   return (
@@ -1164,6 +1181,12 @@ const ScrollView = (
         cancelAnimationFrame(scrollRaf);
       });
     }
+    // 键盘：空格/enter/上下键章内滚动（贴边切章），左右方向键直接切章
+    const detachKeys = bindReaderKeys(document, {
+      chapter: switchChapter,
+      page: pageScroll,
+    });
+    onCleanup(detachKeys);
   });
 
   // jumps requested via the navigator (bookmark / chapter / cross-device sync)
