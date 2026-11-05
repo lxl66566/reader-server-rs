@@ -48,6 +48,8 @@ sqlx               = { version = "0.9", features = [
   "tls-rustls",
   "uuid"
 ] }
+# 替换全局分配器：归还 argon2 大分配的空闲页，降低常驻 RSS
+stoolap-jemalloc   = "0.1.5"
 thiserror          = "2.0"
 tokio              = { version = "1", features = [
   "fs",
@@ -76,10 +78,6 @@ tokio-tungstenite = "0.30"
 path-absolutize = "4"
 sqlx            = { version = "0.9", features = ["runtime-tokio", "sqlite"] }
 tokio           = { version = "1", features = ["rt"] }
-
-# Linux 下替换全局分配器：归还 argon2 大分配的空闲页，降低常驻 RSS
-[target.'cfg(target_os = "linux")'.dependencies]
-tikv-jemallocator = "0.7"
 
 [lints.clippy]
 all                     = { level = "warn", priority = -1 }

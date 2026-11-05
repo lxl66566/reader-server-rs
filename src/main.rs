@@ -17,11 +17,10 @@ mod ws;
 #[cfg(test)]
 mod tests;
 
-// Linux 下用 jemalloc：glibc malloc 为多线程各建 arena 且空闲页不归还 OS，
-// argon2 每次计算分配 ~19MB 会跨线程滞留；jemalloc 可将空闲页归还
-#[cfg(target_os = "linux")]
+// 用 jemalloc 替换默认分配器：空闲页不归还 OS，argon2 每次计算分配 ~19MB
+// 会跨线程滞留；jemalloc 可将空闲页归还
 #[global_allocator]
-static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+static GLOBAL: stoolap_jemalloc::Jemalloc = stoolap_jemalloc::Jemalloc::new();
 
 use std::{
     net::SocketAddr,
@@ -46,6 +45,9 @@ struct Args {
 async fn main() -> Result<()> {
     // 初始化错误处理
     color_eyre::install().map_err(|e| anyhow::anyhow!("Failed to install color_eyre: {e}"))?;
+
+    // 空闲时 decay 缺少分配活动驱动，需后台线程定时 purge 空闲页
+    stoolap_jemalloc::background::start();
 
     // 解析命令行参数，加载配置（先于日志初始化，因为日志路径来自配置）
     let args = Args::parse();
