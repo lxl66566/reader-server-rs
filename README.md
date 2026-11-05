@@ -19,7 +19,7 @@ reader-server-rs 是一个阅读服务器，用户可以向服务器上传 txt/e
 
 ## 安装与使用
 
-从 [Releases](https://github.com/lxl66566/reader-server-rs/releases) 下载 prebuilt binary，然后直接运行即可，默认运行在 localhost:3000，并写入默认配置到同路径的 `config.json` 里。
+从 [Releases](https://github.com/lxl66566/reader-server-rs/releases) 下载 prebuilt binary，然后直接运行即可，默认运行在 localhost:3000，并写入默认配置到同路径的 `config.json5` 里。
 
 首次运行请前往 `localhost:3000/admin` 创建管理员帐号，并生成邀请码（或者关闭注册必须使用邀请码的限制）。
 
@@ -27,39 +27,39 @@ NixOS 用户：请使用[我的 NUR](https://github.com/lxl66566/NUR)。
 
 ### 配置
 
-```jsonc
+```json5
 {
-  "server": {
-    "host": "0.0.0.0", // 监听地址
-    "port": 3000, // 监听端口
+  server: {
+    host: "0.0.0.0", // 监听地址
+    port: 3000, // 监听端口
   },
-  "db": {
-    "url": "sqlite:reader.db", // 数据库连接串，可被环境变量 DATABASE_URL 覆盖
-    "max_connections": 10, // 连接池最大连接数
+  db: {
+    url: "sqlite:reader.db", // 数据库连接串，可被环境变量 DATABASE_URL 覆盖
+    max_connections: 10, // 连接池最大连接数
   },
-  "storage": {
-    "book_dir": "books", // 书籍文件存放目录
-    "max_file_size": 52428800, // 上传文件大小上限（字节），默认 50MB
+  storage: {
+    book_dir: "books", // 书籍文件存放目录
+    max_file_size: 52428800, // 上传文件大小上限（字节），默认 50MB
   },
-  "jwt": {
-    "secret": "", // 留空则首次启动自动生成随机值并写回
-    "expiration": 2592000, // 用户 token 有效期（秒），默认 30 天
-    "admin_expiration": 604800, // 管理员 token 有效期（秒），默认 7 天
+  jwt: {
+    secret: "", // 留空则首次启动自动生成随机值并写回
+    expiration: 2592000, // 用户 token 有效期（秒），默认 30 天
+    admin_expiration: 604800, // 管理员 token 有效期（秒），默认 7 天
   },
-  "log": {
-    "dir": "logs", // 日志目录
-    "rotation": "never", // 轮转策略："hourly" | "daily" | "never"，never 时仅输出到 stderr
-    "level": "info", // 本服务日志等级："trace" | "debug" | "info" | "warn" | "error"；依赖库固定 warn，RUST_LOG 可整体覆盖
+  log: {
+    dir: "logs", // 日志目录
+    rotation: "never", // 轮转策略："hourly" | "daily" | "never"，never 时仅输出到 stderr
+    level: "info", // 本服务日志等级："trace" | "debug" | "info" | "warn" | "error"；依赖库固定 warn，RUST_LOG 可整体覆盖
   },
-  "rate_limit": {
-    "per_second": 20, // 每 IP 每秒放行的请求数
-    "burst_size": 70, // 令牌桶最大突发容量
-    "trust_proxy_headers": false, // 是否信任反代改写的 X-Forwarded-For 等头，仅在反代之后部署时开启
+  rate_limit: {
+    per_second: 20, // 每 IP 每秒放行的请求数
+    burst_size: 70, // 令牌桶最大突发容量
+    trust_proxy_headers: false, // 是否信任反代改写的 X-Forwarded-For 等头，仅在反代之后部署时开启
   },
 }
 ```
 
-`config.json` 中未写出的段或字段一律回退默认值。
+`config.json5` 中未写出的段或字段一律回退默认值。
 
 ### 开发
 

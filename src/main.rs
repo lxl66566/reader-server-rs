@@ -37,7 +37,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 #[command(version, about = env!("CARGO_PKG_DESCRIPTION"))]
 struct Args {
     /// Path to the config file
-    #[arg(short, long, default_value = "config.json")]
+    #[arg(short, long, default_value = "config.json5")]
     config: PathBuf,
 }
 

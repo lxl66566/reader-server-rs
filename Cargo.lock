@@ -1084,10 +1084,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "fast-float2"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c6e8948ce679d00a02a94739ea185595dca7118ed04feb991127e443bd3d761f"
+
+[[package]]
 name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
+
+[[package]]
+name = "fearless_simd"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "629c9d6b6f30b5604089e0980f4d924a013aacb1654a6cdf5d3d852224f68651"
 
 [[package]]
 name = "ff"
@@ -2697,6 +2709,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.1",
+ "simd-json5",
  "sqlx",
  "stoolap-jemalloc",
  "thiserror 2.0.21",
@@ -3134,6 +3147,23 @@ name = "simd-adler32"
 version = "0.3.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
+
+[[package]]
+name = "simd-json5"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae545d3868be9f75cdb26f1e2dc77a386dbcaf2d817a3a35587e63f1453ee8f4"
+dependencies = [
+ "fast-float2",
+ "fearless_simd",
+ "indexmap",
+ "itoa",
+ "memchr",
+ "serde",
+ "simdutf8",
+ "thiserror 2.0.21",
+ "zmij",
+]
 
 [[package]]
 name = "simdutf8"

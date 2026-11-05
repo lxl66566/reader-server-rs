@@ -102,7 +102,7 @@ type Annotation = {
 > 用户名规则：1-20 个字符（按字符计），仅限中英文/字母/数字/`_`/`-`；注册、管理员 setup 与新增管理员均校验，不满足返回 400。
 
 > 全局按客户端 IP 维度限流，默认 20 rps / burst 70；超限返回 429。
-> 限流 key 默认取 TCP 连接的对端地址（直连部署）；部署在反向代理之后时需在 config.json 开启 `rate_limit.trust_proxy_headers`，此时改用 `X-Forwarded-For` / `X-Real-IP` / `Forwarded` 头（务必确保反代会正确改写这些头，否则可被伪造绕过）。
+> 限流 key 默认取 TCP 连接的对端地址（直连部署）；部署在反向代理之后时需在 config.json5 开启 `rate_limit.trust_proxy_headers`，此时改用 `X-Forwarded-For` / `X-Real-IP` / `Forwarded` 头（务必确保反代会正确改写这些头，否则可被伪造绕过）。
 > `/health` 不受限流；带 If-None-Match 命中的请求不消耗带宽。
 | POST | /api/v1/auth/login | - | Body: { username: string; password: string } | { user_id: number; username: string; token: string } |
 | GET | /api/v1/auth/user_info | Auth | - | { user_id: number; username: string; total_reading_time: number; book_count: number; status: 'active' \| 'banned' } |
@@ -143,7 +143,7 @@ type Annotation = {
 
 ### 书籍管理
 
-> 文件大小上限默认 50MB（可在 config.json 的 `storage.max_file_size` 调整）；超过请求体上限返回 413，超过文件大小校验返回 400；0 字节文件返回 400。
+> 文件大小上限默认 50MB（可在 config.json5 的 `storage.max_file_size` 调整）；超过请求体上限返回 413，超过文件大小校验返回 400；0 字节文件返回 400。
 > 上传时服务端基于内容签名（`%PDF-`、zip magic、UTF-8 解码）自动识别格式，不依赖客户端扩展名；内容损坏（epub/pdf 无法解析）返回 400 而非 500。
 > txt 仅支持 UTF-8 编码：非 UTF-8（常见为 GBK/GB18030）返回 400，请转换编码后重新上传。
 > 标题兜底链：用户输入（trim 非空）> epub/pdf 内嵌元数据 > 上传文件名（去扩展名）；全部为空返回 400。

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use tokio::fs;
 use uuid::Uuid;
 
-/// 支持部分配置：config.json 中未声明的段/字段一律回退 Default 值（容器级 serde(default)）
+/// 支持部分配置：config.json5 中未声明的段/字段一律回退 Default 值（容器级 serde(default)）
 /// 新增字段只需在对应 Default impl 中给出默认值，漏写会编译报错
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -207,11 +207,11 @@ const LEGACY_DEFAULT_SECRET: &str = "super_secret_key_change_me_in_production";
 
 /// 加载配置：文件不存在则按默认值生成（含随机 JWT secret）并收紧为 0600 后写入；
 /// 文件存在但未提供有效 jwt secret 时自动生成并写回，已提供有效 secret 则不修改文件。
-/// `path` 由命令行 -c/--config 指定，默认 config.json
+/// `path` 由命令行 -c/--config 指定，默认 config.json5
 pub async fn load_config(path: &Path) -> Result<Config> {
     if path.exists() {
         let config_str = fs::read_to_string(path).await?;
-        let mut config: Config = serde_json::from_str(&config_str)?;
+        let mut config: Config = simd_json5::typed::from_str(&config_str)?;
 
         // 缺 secret 或仍为旧版默认值时自动生成写回，省去部署后手改配置这一步
         if config.jwt.secret.is_empty() || config.jwt.secret == LEGACY_DEFAULT_SECRET {
@@ -225,7 +225,7 @@ pub async fn load_config(path: &Path) -> Result<Config> {
 
         Ok(config)
     } else {
-        // 首次运行：生成随机 secret 并写入 config.json
+        // 首次运行：生成随机 secret 并写入 config.json5
         let mut config = Config::default();
         config.jwt.secret = Uuid::new_v4().to_string();
 
@@ -242,7 +242,7 @@ async fn write_config_file(path: &Path, config: &Config) -> Result<()> {
             fs::create_dir_all(parent).await?;
         }
     }
-    fs::write(path, serde_json::to_string_pretty(config)?).await?;
+    fs::write(path, simd_json5::typed::to_string_pretty(config)?).await?;
     restrict_config_permissions(path).await?;
     Ok(())
 }
@@ -279,6 +279,15 @@ mod tests {
         let config: LogConfig = serde_json::from_str(r#"{"level":"debug"}"#).unwrap();
         assert_eq!(config.level, LogLevel::Debug);
         assert!(serde_json::from_str::<LogConfig>(r#"{"level":"verbose"}"#).is_err());
+    }
+
+    /// json5 语法（注释 / 尾逗号 / 无引号 key）可正常解析
+    #[test]
+    fn json5_syntax_accepted() {
+        let config: Config =
+            simd_json5::typed::from_str("{/* v */ server: {host: '127.0.0.1', port: 3100,},}")
+                .unwrap();
+        assert_eq!(config.server.port, 3100);
     }
 
     /// 部分 config：未声明的段与字段一律回退默认值
