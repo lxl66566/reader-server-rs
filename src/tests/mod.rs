@@ -1,5 +1,6 @@
 pub mod test_admin_books;
 pub mod test_admin_users;
+pub mod test_book_locations;
 pub mod test_books;
 pub mod test_epub_entry;
 pub mod test_integration;

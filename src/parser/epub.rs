@@ -67,8 +67,9 @@ pub(crate) fn strip_external_font_face(content: &str) -> Cow<'_, str> {
 /// 归一化 zip 内路径：去 `.` 段、折叠 `..` 段
 ///
 /// epub crate 按 OPF 目录直接拼接 href 不做归一化；资源在 OPF 上层时
-/// （如 `OPS/../titlepage.xhtml`）按原样查 zip 条目会取不到
-fn normalize_zip_path(path: &str) -> String {
+/// （如 `OPS/../titlepage.xhtml`）按原样查 zip 条目会取不到。
+/// 上传解析与 locations 预生成共用
+pub(crate) fn normalize_zip_path(path: &str) -> String {
     let mut parts: Vec<&str> = Vec::new();
     for seg in path.split('/') {
         match seg {

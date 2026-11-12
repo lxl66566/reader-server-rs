@@ -102,6 +102,10 @@ export const bookApi = {
       onDownloadProgress: onProgress,
       signal,
     }),
+  // 服务端预生成的全书 locations（epub.js 兼容 CFI 数组）：打开书后免逐章
+  // 拉取即可计算 percent；失败/为空时调用方回退 epub.js 原生逐章生成
+  fetchLocations: (bookId: number) =>
+    api.get<string[]>(`/api/v1/books/${bookId}/locations`, { cache: true }),
   fileUrl: (bookId: number) => `/api/v1/books/${bookId}/file`,
   jumpToChapter: (bookId: number, chapterId: number) =>
     api.get<{ position: number }>(`/api/v1/books/${bookId}/jump_to_chapter`, {

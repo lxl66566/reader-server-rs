@@ -241,33 +241,62 @@ const EpubReader = (props: FormatReaderProps) => {
   }
 
   /**
-   * locations 生成（带超时降级）。一次性判定：超时/失败即转入 spine
-   * 估算且本会话不再升级回精确换算，避免 percent 中途跳变；期间
-   * rendition 重建（book 实例更换）则本次结果作废。
+   * locations 优先注入服务端预生成数组（懒加载与本地整本两模式统一，
+   * 免逐章拉取且两模式间 percent 一致）；失败/为空回退 epub.js 原生逐章
+   * 生成（带超时降级）。一次性判定：超时/失败即转入 spine 估算且本会话
+   * 不再升级回精确换算，避免 percent 中途跳变；期间 rendition 重建
+   * （book 实例更换）则本次结果作废。
    */
   function generateLocationsWithFallback(
     target: Book,
     honorBarePercent: boolean,
   ): void {
-    void settlesWithin(
-      target.locations.generate(1600),
-      LOCATIONS_TIMEOUT_MS,
-    ).then(ok => {
+    void injectServerLocations(target).then(injected => {
       if (book !== target) return;
-      if (ok) {
+      if (injected) {
         locationsReady = true;
         // honor a bare percent progress when no cfi was saved
         if (honorBarePercent && props.book.percent > 0) {
           const cfi = target.locations.cfiFromPercentage(props.book.percent);
           void displaySafe(cfi);
         }
-      } else {
-        // 生成超时/失败：降级为 spine 估算，心跳不中断（精度退化到章级）；
-        // 无法换算 cfi，honorBarePercent 的按 percent 落位只能放弃
-        percentFallback = true;
+        reportPosition();
+        return;
       }
-      reportPosition();
+      // 服务端预生成不可用（断网/书损坏）：原生逐章生成兜底
+      void settlesWithin(
+        target.locations.generate(1600),
+        LOCATIONS_TIMEOUT_MS,
+      ).then(ok => {
+        if (book !== target) return;
+        if (ok) {
+          locationsReady = true;
+          if (honorBarePercent && props.book.percent > 0) {
+            const cfi = target.locations.cfiFromPercentage(props.book.percent);
+            void displaySafe(cfi);
+          }
+        } else {
+          // 生成超时/失败：降级为 spine 估算，心跳不中断（精度退化到章级）；
+          // 无法换算 cfi，honorBarePercent 的按 percent 落位只能放弃
+          percentFallback = true;
+        }
+        reportPosition();
+      });
     });
+  }
+
+  /** 注入服务端预生成 locations；结果无效（请求失败/空数组）返回 false */
+  async function injectServerLocations(target: Book): Promise<boolean> {
+    try {
+      const locations = await bookApi.fetchLocations(props.book.book_id);
+      // 空数组注入后 total 为 -1，percent 换算会产生负值，必须回退。
+      // load 的类型声明只收 JSON 字符串（运行时同样收数组），按声明传串
+      if (book !== target || locations.length === 0) return false;
+      target.locations.load(JSON.stringify(locations));
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async function displaySafe(target: string): Promise<boolean> {

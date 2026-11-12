@@ -1,6 +1,7 @@
 /// 书籍文件解析：格式检测与各格式（txt/epub/pdf）的元数据、章节提取
 pub mod chapter;
 pub mod epub;
+pub mod epub_locations;
 pub mod format;
 pub mod pdf;
 

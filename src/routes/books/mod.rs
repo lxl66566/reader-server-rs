@@ -3,6 +3,7 @@ mod detail;
 mod epub;
 mod helpers;
 mod list;
+mod locations;
 mod search;
 mod tags;
 mod trash;
@@ -48,6 +49,8 @@ pub fn routes() -> Router<crate::app::AppState> {
             "/{book_id}/epub/{token}/{*entry}",
             get(epub::serve_epub_entry),
         )
+        // EPUB 全书 locations 预生成（epub.js 兼容），前端免逐章拉取
+        .route("/{book_id}/locations", get(locations::get_book_locations))
         // 内容切片：仅 txt 有意义；epub/pdf 走 /file
         .route("/{book_id}/content", get(content::get_book_content))
         .route("/{book_id}/jump_to_chapter", get(content::jump_to_chapter))

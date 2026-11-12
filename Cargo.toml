@@ -33,6 +33,8 @@ lopdf              = { version = "0.45", default-features = false, features = ["
 lru                = "0.19"
 percent-encoding   = "2"
 rand               = "0.10"
+# epub locations 预生成需要 XML 语义的 DOM 树（与浏览器 DOMParser 行为对齐）
+roxmltree          = "0.20"
 rust-embed         = { version = "8", features = ["compression", "mime-guess"] }
 scraper            = "0.27"
 serde              = { version = "1.0", features = ["derive"] }

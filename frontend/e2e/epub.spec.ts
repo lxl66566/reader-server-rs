@@ -275,6 +275,83 @@ test('阅读页书内搜索命中按章节跳转，Ctrl+F 可唤出', async ({ p
   await expect(modalBox(page).getByPlaceholder('搜索书内全文…')).toBeVisible();
 });
 
+test('服务端 locations 免逐章拉取，percent 与原生生成一致', async ({ page }) => {
+  // 对拍：同一本书同一位置（第 1 章末），懒加载 + 服务端预生成注入的
+  // percent 与拦截 /locations 后 epub.js 原生逐章生成的 percent 相差 < 5%，
+  // 验证 Rust 复刻的分块/CFI 规则与浏览器一致
+  const user = await createUser(page.context().request, 'epubloc');
+  seedSession(page, user.token);
+  const request = page.context().request;
+  await updateSettings(request, user.token, { pagination_mode: 'scroll' });
+  const book = await uploadBook(request, user.token, SAMPLE_EPUB);
+
+  let entryReqs = 0;
+  let locationsReqs = 0;
+  page.on('request', req => {
+    const url = req.url();
+    if (url.includes('/epub/')) entryReqs++;
+    if (url.includes('/locations')) locationsReqs++;
+  });
+
+  // A. 服务端注入：打开 → 滚到第 1 章末 → percent 落库
+  await page.goto(`/read/${book.book_id}`);
+  await expect(page.locator('iframe').first()).toBeVisible();
+  const { vh, vw } = viewportSize(page);
+  await expect
+    .poll(
+      async () => {
+        const atBottom = await page.evaluate(() => {
+          const el = document.querySelector('.epub-container');
+          return !!el && el.scrollTop >= el.scrollHeight - el.clientHeight - 2;
+        });
+        if (!atBottom) await page.mouse.click(vw / 2, vh * 0.9);
+        return atBottom;
+      },
+      { intervals: [400, 700], timeout: 10_000 },
+    )
+    .toBe(true);
+  await expect
+    .poll(
+      () => getBook(request, user.token, book.book_id).then(b => b.percent),
+      { timeout: 15_000 },
+    )
+    .toBeGreaterThan(0);
+  const percentServer = (
+    await getBook(request, user.token, book.book_id)
+  ).percent;
+
+  // 打开即注入：locations 恰 1 个请求，之后无逐章拉取增量（原生 generate
+  // 若在跑，此处早该出现密集 /epub/ 请求）
+  expect(locationsReqs).toBe(1);
+  const entryBaseline = entryReqs;
+  await page.waitForTimeout(4000);
+  expect(entryReqs).toBe(entryBaseline);
+
+  // B. 拦截 /locations：前端回退 epub.js 原生逐章生成
+  let blocked = 0;
+  await page.route('**/locations', route => {
+    blocked++;
+    void route.abort();
+  });
+  await page.reload();
+  await expect(page.locator('iframe').first()).toBeVisible();
+
+  // 原生 generate 串行逐章拉取（40 章）：以条目请求增量作为完成信号
+  await expect
+    .poll(() => entryReqs - entryBaseline, { timeout: 30_000 })
+    .toBeGreaterThanOrEqual(30);
+  // generate 完成后再滚动一次触发 relocated 上报当前章末 percent
+  await page.waitForTimeout(1500);
+  await page.mouse.click(vw / 2, vh * 0.9);
+  await page.waitForTimeout(1000);
+
+  const percentNative = (
+    await getBook(request, user.token, book.book_id)
+  ).percent;
+  expect(blocked).toBeGreaterThan(0);
+  expect(Math.abs(percentNative - percentServer)).toBeLessThan(0.05);
+});
+
 test('详情页搜索入口命中后深链进入对应章节', async ({ page }) => {
   const user = await createUser(page.context().request, 'epubdsrch');
   seedSession(page, user.token);
