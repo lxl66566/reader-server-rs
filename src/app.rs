@@ -151,12 +151,17 @@ fn compression_layer() -> CompressionLayer<impl Predicate> {
 }
 
 /// WS 鉴权 token 走 query 参数（浏览器 WebSocket 无法设置请求头），
-/// 默认 TraceLayer 会把完整 uri（含 token）写入滚动日志；
-/// 日志泄露即会话劫持，故该路由仅记录 path、剥离 query。
+/// EPUB 懒加载资源的 token 走路径段（iframe 子资源无法携带 Authorization 头）；
+/// 默认 TraceLayer 会把完整 uri（含 token）写入滚动日志，
+/// 日志泄露即会话劫持，故这两类路由仅记录脱敏后的 path。
 /// 其余路由保留完整 uri（分页等 query 有调试价值）
 fn make_trace_span<B>(request: &axum::http::Request<B>) -> tracing::Span {
-    let uri = if request.uri().path() == "/api/v1/reading/ws" {
-        request.uri().path().to_string()
+    let path = request.uri().path().to_string();
+    let uri = if path == "/api/v1/reading/ws" {
+        path
+    } else if let Some(prefix) = epub_entry_prefix(&path) {
+        // 只记录到 token 段之前：/api/v1/books/{id}/epub/…
+        prefix
     } else {
         request.uri().to_string()
     };
@@ -166,4 +171,13 @@ fn make_trace_span<B>(request: &axum::http::Request<B>) -> tracing::Span {
         uri = %uri,
         version = ?request.version(),
     )
+}
+
+/// EPUB 懒加载资源路由：token 段位于 /api/v1/books/{id}/epub/ 之后。
+/// 命中时返回不含 token 的路径前缀，否则返回 None
+fn epub_entry_prefix(path: &str) -> Option<String> {
+    let rest = path.strip_prefix("/api/v1/books/")?;
+    let (id, rest) = rest.split_once('/')?;
+    rest.strip_prefix("epub/")?;
+    Some(format!("/api/v1/books/{id}/epub/"))
 }

@@ -131,6 +131,16 @@ export async function fileBytes(bookId: number): Promise<null | number> {
 
 // --- 书籍详情 ---
 
+/** 已缓存整本文件及指纹；未缓存返回 null（供懒加载模式判断本地副本可用） */
+export async function fileEntryGet(bookId: number): Promise<CachedFile | null> {
+  try {
+    return (await (await db()).get('files', cacheKey('f', bookId))) ?? null;
+  } catch (err) {
+    console.warn('offline file read failed', err);
+    return null;
+  }
+}
+
 export async function fileGet(bookId: number): Promise<ArrayBuffer | null> {
   try {
     const cached = await (await db()).get('files', cacheKey('f', bookId));

@@ -1,5 +1,6 @@
 mod content;
 mod detail;
+mod epub;
 mod helpers;
 mod list;
 mod search;
@@ -41,6 +42,12 @@ pub fn routes() -> Router<crate::app::AppState> {
         .route("/{book_id}/purge", delete(trash::purge_book))
         // 原文件下载：epub / pdf 客户端渲染时使用；txt 也可用
         .route("/{book_id}/file", get(content::download_book_file))
+        // EPUB 懒加载：按 zip 条目路径取单个解压条目，token 走路径段
+        // （iframe 子资源无法携带 Authorization 头）
+        .route(
+            "/{book_id}/epub/{token}/{*entry}",
+            get(epub::serve_epub_entry),
+        )
         // 内容切片：仅 txt 有意义；epub/pdf 走 /file
         .route("/{book_id}/content", get(content::get_book_content))
         .route("/{book_id}/jump_to_chapter", get(content::jump_to_chapter))

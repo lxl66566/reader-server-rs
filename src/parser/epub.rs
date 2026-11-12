@@ -26,8 +26,9 @@ pub struct EpubParseResult {
     pub description: Option<String>,
 }
 
-/// EPUB 单个 zip 条目（章节 HTML 等）解压后的字节数上限，防御 zip 炸弹
-const MAX_EPUB_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
+/// EPUB 单个 zip 条目（章节 HTML 等）解压后的字节数上限，防御 zip 炸弹；
+/// 上传校验与懒加载资源端点（/epub/...）读取共用同一上限
+pub(crate) const MAX_EPUB_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
 
 /// EPUB 解析后拼接全文的字符数上限（20M 字符，远超正常书籍体量）
 const MAX_EPUB_TOTAL_CHARS: usize = 20_000_000;
@@ -43,8 +44,24 @@ static SELF_CLOSED_RAW_TEXT_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// 把自闭合的 raw-text 标签展开成空标签对，恢复其 HTML 语义
-fn expand_self_closed_raw_text(content: &str) -> Cow<'_, str> {
+/// 把自闭合的 raw-text 标签展开成空标签对，恢复其 HTML 语义。
+/// 上传解析与懒加载资源端点（/epub/... 的 xhtml 条目）共用
+pub(crate) fn expand_self_closed_raw_text(content: &str) -> Cow<'_, str> {
     SELF_CLOSED_RAW_TEXT_RE.replace_all(content, "<$1$2></$1>")
+}
+
+/// 引用外部资源的 @font-face 规则（file:/res:/http(s): 等非相对 url）。
+/// epub.js 无法解析这类 src，会在 console 持续刷错误；书内嵌字体走
+/// 相对路径或 data: URI，不受影响
+static EXTERNAL_FONT_FACE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?i)@font-face\s*\{[^}]*?url\(\s*(?:['"]\s*)?(?:file:|res:|https?:)[^}]*\}"#)
+        .expect("invalid external font-face regex")
+});
+
+/// 剥离 css 条目中引用非相对 url 的 @font-face 规则，
+/// 供懒加载资源端点对 .css 条目输出前清洗
+pub(crate) fn strip_external_font_face(content: &str) -> Cow<'_, str> {
+    EXTERNAL_FONT_FACE_RE.replace_all(content, "")
 }
 
 /// 归一化 zip 内路径：去 `.` 段、折叠 `..` 段

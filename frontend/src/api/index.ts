@@ -1,4 +1,4 @@
-import { api } from './client';
+import { api, getToken } from './client';
 import type {
   AdminBookItem,
   AdminItem,
@@ -79,6 +79,11 @@ export const bookApi = {
       query: { download: true },
       raw: true,
     }),
+  // EPUB 懒加载目录基址：token 置于路径段——iframe 子资源（css/img/font）
+  // 无法携带 Authorization 头，经 <base> 相对解析继承同一路径鉴权。
+  // 末尾斜杠保证 epub.js 按目录语义解析相对路径时保留 token 段
+  epubDirUrl: (bookId: number) =>
+    `/api/v1/books/${bookId}/epub/${getToken('user') ?? ''}/`,
   fetchFile: (bookId: number) =>
     api.get<ArrayBuffer>(`/api/v1/books/${bookId}/file`, {
       // 服务端对文件按内容 hash 返回 ETag：304 时复用缓存，

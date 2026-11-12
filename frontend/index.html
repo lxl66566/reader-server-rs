@@ -2,6 +2,10 @@
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
+    <!-- 跨源请求不带 Referer（srcdoc 阅读器 iframe 继承本策略）：
+         epub 懒加载 token 在 URL 路径段，旧 UA 默认策略会把含 token 的
+         完整 URL 发给书内引用的第三方源；本应用所有 API 请求均同源，无副作用 -->
+    <meta name="referrer" content="same-origin" />
     <meta
       name="viewport"
       content="width=device-width, initial-scale=1, viewport-fit=cover"

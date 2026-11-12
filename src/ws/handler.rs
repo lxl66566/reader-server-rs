@@ -27,9 +27,8 @@ use tracing::{info, warn};
 use crate::{
     access::{check_book_access, check_user_token},
     app::AppState,
-    auth::verify_token,
+    auth::auth_user_by_token,
     error::AppError,
-    models::UserRole,
     routes::reading::process_heartbeat_logic,
     ws::{
         manager::{ConnToken, ConnectionRegistry, OUTBOUND_CAPACITY},
@@ -65,16 +64,10 @@ pub async fn ws_handler(
         .or(query.token)
         .ok_or(AppError::TokenNotProvided)?;
 
-    let claims = verify_token(&token, &state.config)?;
-    if claims.role != UserRole::User.as_str() {
-        return Err(AppError::InvalidTokenRole);
-    }
-    let user_id: i64 = claims.sub.parse().map_err(|_| AppError::InvalidUserId)?;
+    // 复用 AuthUser 的鉴权链（签名、角色、存在性、token 版本、封禁）
+    let (auth, token_version) = auth_user_by_token(&state.db, &state.config, &token).await?;
 
-    // 复用 AuthUser 的鉴权逻辑：验证用户存在、token 版本号、封禁状态
-    check_user_token(&state.db, user_id, claims.ver).await?;
-
-    Ok(ws.on_upgrade(move |socket| handle_socket(socket, user_id, claims.ver, state)))
+    Ok(ws.on_upgrade(move |socket| handle_socket(socket, auth.user_id, token_version, state)))
 }
 
 /// 单个连接的会话状态：本连接持有的所有订阅 key

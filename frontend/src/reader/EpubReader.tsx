@@ -15,7 +15,7 @@ import {
 import { bookApi } from '../api';
 import { LoadErrorPanel } from '../components/LoadErrorPanel';
 import { Spinner } from '../components/ui';
-import { fetchBookFile } from '../offline/api';
+import { bookRev, fileEntryGet } from '../offline/db';
 import { fontFamilyCss, useSettings } from '../stores/settings';
 import {
   type ConvertDirection,
@@ -23,6 +23,7 @@ import {
   convertDirection,
   loadChineseConverter,
 } from '../utils/opencc';
+import { openLazyEpub } from './epubLazy';
 import {
   estimatePercent,
   LOCATIONS_TIMEOUT_MS,
@@ -77,8 +78,8 @@ const EpubReader = (props: FormatReaderProps) => {
 
   let book: Book | null = null;
   let rendition: null | Rendition = null;
-  // 缓存首次下载的书籍文件：切换翻页模式重建 rendition 时复用，
-  // 避免每次切换都重新下载整本 epub（可达几十 MB）
+  // 本地副本模式下清洗后的整本文件：切换翻页模式重建 rendition 时复用，
+  // 避免每次切换都重新解压/下载整本 epub
   let cachedData: ArrayBuffer | null = null;
   const [ready, setReady] = createSignal(false);
   const [error, setError] = createSignal(false);
@@ -143,17 +144,39 @@ const EpubReader = (props: FormatReaderProps) => {
     }
   }
 
+  /**
+   * 打开策略：
+   * - 显式缓存过全本且指纹未变：直接用本地文件（离线可用、零网络）
+   * - 其余情况懒加载：仅按需拉 OPF/目录/当前章，不再整本下载
+   */
+  async function openBook(): Promise<Book> {
+    const cached = await fileEntryGet(props.book.book_id);
+    if (cached && cached.rev === bookRev(props.book)) {
+      // 修复部分电子书（XHTML 允许、HTML 解析器不认）自闭合的 raw-text
+      // 标签，否则章节正文会被 script 标签吞掉，整章渲染为空白
+      cachedData ??= await sanitizeEpubArchive(cached.data);
+      // 每次重建都切一份副本给 epub.js，避免其实例污染共享缓存
+      return ePub(cachedData.slice(0));
+    }
+    return openLazyEpub(props.book.book_id);
+  }
+
   async function setup(startAt?: string): Promise<void> {
     if (!container) return;
-    // 修复部分电子书（XHTML 允许、HTML 解析器不认）自闭合的 raw-text 标签，
-    // 否则章节正文会被 script 标签吞掉，整章渲染为空白
-    cachedData ??= await sanitizeEpubArchive(
-      // 断网时回退显式缓存的整本文件
-      await fetchBookFile(props.book.book_id),
-    );
-    // 每次重建都切一份副本给 epub.js，避免其实例污染共享缓存
-    book = ePub(cachedData.slice(0));
-    await book.ready;
+    book = await openBook();
+    try {
+      await book.ready;
+    } catch (err) {
+      // 懒加载元数据拉取失败（断网/服务不可达）：回退本地缓存副本，
+      // 指纹过期也优于完全不可读；无缓存则原样报错
+      const cached = await fileEntryGet(props.book.book_id);
+      if (!cached) throw err;
+      book.destroy();
+      book = null;
+      cachedData ??= await sanitizeEpubArchive(cached.data);
+      book = ePub(cachedData.slice(0));
+      await book.ready;
+    }
 
     // 首次加载消费深链（章节/定位），优先于保存的进度
     let start = startAt ?? null;

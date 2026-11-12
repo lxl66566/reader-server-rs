@@ -118,6 +118,27 @@ where
     }
 }
 
+/// 通过裸 token 鉴权用户，校验链与 [`AuthUser`] 相同。
+/// 用于无法携带 Authorization 头的场景：WS 握手的 query 参数、
+/// EPUB 懒加载资源路径中的 token 段。
+/// 返回的 token 版本号供 WS 周期性重验复用
+pub async fn auth_user_by_token(
+    pool: &Pool<Sqlite>,
+    config: &Config,
+    token: &str,
+) -> Result<(AuthUser, i64), AppError> {
+    let claims = verify_token(token, config)?;
+
+    if claims.role != UserRole::User.as_str() {
+        return Err(AppError::InvalidTokenRole);
+    }
+
+    let user_id: i64 = claims.sub.parse().map_err(|_| AppError::InvalidUserId)?;
+    crate::access::check_user_token(pool, user_id, claims.ver).await?;
+
+    Ok((AuthUser { user_id }, claims.ver))
+}
+
 // 提取管理员的认证中间件
 pub struct AuthAdmin {
     pub admin_id: i64,
